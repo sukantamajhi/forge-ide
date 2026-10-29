@@ -87,7 +87,7 @@ impl Settings {
     /// JSON yields all defaults.
     pub fn parse(text: &str) -> Self {
         let mut s = Self::default();
-        let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&strip_json_comments(text)) else { return s };
+        let Ok(Value::Object(map)) = crate::jsonc::parse(text) else { return s };
         if let Some(v) = map.get("editor.fontSize").and_then(Value::as_f64) {
             s.font_size = (v as f32).clamp(8.0, 40.0);
         }
@@ -134,8 +134,13 @@ impl Settings {
     }
 }
 
-/// Where user configuration lives: `%APPDATA%\Forge` on Windows, `~/.config/forge` elsewhere.
+/// Where user configuration lives: `%APPDATA%\Forge` on Windows, `~/.config/forge` elsewhere
+/// (or `FORGE_CONFIG_DIR`).
 pub fn config_dir() -> PathBuf {
+    // `FORGE_CONFIG_DIR` relocates everything (tests, portable installs).
+    if let Some(dir) = std::env::var_os("FORGE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
@@ -172,6 +177,8 @@ mod tests {
     #[test]
     fn invalid_or_wrongly_typed_input_keeps_defaults() {
         assert_eq!(Settings::parse("{ not json"), Settings::default());
+        // Trailing commas are fine in VS Code settings files.
+        assert_eq!(Settings::parse(r#"{ "editor.tabSize": 2, }"#).tab_size, 2);
         assert_eq!(Settings::parse("[1,2]"), Settings::default());
         let s = Settings::parse(r#"{ "editor.tabSize": "four", "editor.fontSize": null }"#);
         assert_eq!(s, Settings::default());

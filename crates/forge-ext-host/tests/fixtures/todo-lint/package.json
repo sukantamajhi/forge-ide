@@ -1,0 +1,22 @@
+{
+  "name": "todo-lint",
+  "publisher": "forge-tests",
+  "displayName": "Todo Lint",
+  "version": "0.1.0",
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:plaintext", "onCommand:todoLint.hello"],
+  "contributes": {
+    "commands": [
+      { "command": "todoLint.hello", "title": "Todo Lint: Say Hello" },
+      { "command": "todoLint.count", "title": "Todo Lint: Count TODOs" },
+      { "command": "todoLint.fix", "title": "Todo Lint: Replace TODO with DONE" }
+    ],
+    "configuration": {
+      "title": "Todo Lint",
+      "properties": {
+        "todoLint.word": { "type": "string", "default": "TODO" },
+        "todoLint.fixWith": { "type": "string", "default": "DONE" }
+      }
+    }
+  }
+}

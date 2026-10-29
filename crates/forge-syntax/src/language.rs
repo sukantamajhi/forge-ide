@@ -138,6 +138,46 @@ impl Language {
         })
     }
 
+    /// The language a Markdown fence or a `<script lang>` names ("rust", "ts", "py", "sh"...).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "rust" | "rs" => Self::Rust,
+            "json" | "jsonc" | "json5" => Self::Json,
+            "javascript" | "js" | "mjs" | "cjs" | "node" => Self::JavaScript,
+            "jsx" => Self::JavaScriptReact,
+            "typescript" | "ts" => Self::TypeScript,
+            "tsx" => Self::TypeScriptReact,
+            "python" | "py" => Self::Python,
+            "toml" => Self::Toml,
+            "html" | "htm" => Self::Html,
+            "css" | "scss" | "less" => Self::Css,
+            "xml" | "svg" | "xsd" | "xslt" | "plist" => Self::Xml,
+            "yaml" | "yml" => Self::Yaml,
+            "markdown" | "md" => Self::Markdown,
+            "bash" | "sh" | "shell" | "zsh" | "console" | "shellscript" => Self::Shell,
+            "go" | "golang" => Self::Go,
+            "c" => Self::C,
+            "cpp" | "c++" | "cc" | "cxx" => Self::Cpp,
+            "java" => Self::Java,
+            "csharp" | "cs" | "c#" => Self::CSharp,
+            "php" => Self::Php,
+            "ruby" | "rb" => Self::Ruby,
+            "lua" => Self::Lua,
+            "sql" => Self::Sql,
+            "diff" | "patch" => Self::Diff,
+            "env" | "dotenv" => Self::Env,
+            "ini" | "conf" | "properties" => Self::Ini,
+            "dockerfile" | "docker" => Self::Dockerfile,
+            "makefile" | "make" => Self::Makefile,
+            _ => return None,
+        })
+    }
+
+    /// Highlighted line by line instead of by a syntax tree.
+    pub fn is_line_based(self) -> bool {
+        matches!(self, Self::Env | Self::Ini | Self::Dockerfile | Self::Makefile | Self::Ignore | Self::Diff)
+    }
+
     /// The id VS Code uses for this language (what a server expects in `didOpen`).
     pub fn language_id(self) -> &'static str {
         match self {

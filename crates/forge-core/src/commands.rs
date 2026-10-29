@@ -168,6 +168,11 @@ commands! {
     GitLog, "git.viewHistory", "Git: View History", [];
     GitBlame, "git.blame", "Git: Show Blame for Current Line", [];
     LanguageServers, "forge.languageServers", "Language Servers: Manage and Install...", [];
+    ExtensionsInstall, "forge.extensions.install", "Extensions: Install from Open VSX...", [];
+    ExtensionsVsix, "forge.extensions.vsix", "Extensions: Install from VSIX...", [];
+    ExtensionsManage, "forge.extensions.manage", "Extensions: Manage Installed...", [];
+    InsertSnippet, "editor.action.insertSnippet", "Insert Snippet...", [];
+    ExtensionsRestartHost, "forge.extensions.restartHost", "Extensions: Restart Extension Host", [];
 }
 
 impl Command {

@@ -202,10 +202,11 @@ pub fn parse_progress(params: &Value) -> Option<Progress> {
 /// unknown methods get a null result rather than silence.
 pub fn answer_server_request(method: &str, params: &Value) -> Value {
     match method {
-        // One (null) setting per requested item.
+        // One setting object per requested item. Empty, like an editor with nothing configured:
+        // some servers (CSS) fail to validate when given null instead of an object.
         "workspace/configuration" => {
             let count = params.get("items").and_then(Value::as_array).map_or(0, Vec::len);
-            Value::Array(vec![Value::Null; count])
+            Value::Array(vec![json!({}); count])
         }
         // Forge applies edits from its own requests; it declines ones a server pushes.
         "workspace/applyEdit" => json!({ "applied": false }),
@@ -514,7 +515,7 @@ mod tests {
         assert_eq!(parse_progress(&json!({ "token": 7, "value": {"kind": "end"} })).unwrap().token, "7");
 
         let cfg = answer_server_request("workspace/configuration", &json!({ "items": [{}, {}, {}] }));
-        assert_eq!(cfg, json!([null, null, null]));
+        assert_eq!(cfg, json!([{}, {}, {}]));
         assert_eq!(answer_server_request("client/registerCapability", &json!({})), Value::Null);
         assert_eq!(answer_server_request("workspace/applyEdit", &json!({})), json!({ "applied": false }));
     }

@@ -269,7 +269,10 @@ impl Workspace {
                 s
             });
             doc.revision += 1;
-            doc.diagnostics.clear();
+            if let Some(tm) = doc.tm.as_mut() {
+                tm.reset();
+            }
+            doc.set_lsp_diagnostics(Vec::new());
             doc.lsp_open = false;
             if let (Some(language), true) = (language, was_open) {
                 self.lsp.did_close(language, &path);

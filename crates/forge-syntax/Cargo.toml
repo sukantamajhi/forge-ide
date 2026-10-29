@@ -30,3 +30,4 @@ tree-sitter-php = "0.25"
 tree-sitter-ruby = "0.23"
 tree-sitter-lua = "0.5"
 tree-sitter-sequel = "0.3"
+irosashi = { version = "0.3", default-features = false }

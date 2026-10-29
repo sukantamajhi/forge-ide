@@ -14,7 +14,6 @@ use forge_core::input::{LineInput, Outcome};
 use forge_core::project_search::{self, Hit};
 use forge_core::quick::{file_entries, palette_entries, parse_go_to_line};
 use forge_core::terminal::{key_bytes, Terminal};
-use forge_core::theme::THEME_NAMES;
 use forge_text::columns::col_at_cell;
 use forge_text::search::Finder;
 use forge_text::words::word_range_at;
@@ -146,6 +145,9 @@ impl Workspace {
             }
         }
         if k.key == "escape" && plain {
+            if self.snippet_session.take().is_some() {
+                return true;
+            }
             if self.signature.take().is_some() || self.hover.take().is_some() {
                 return true;
             }
@@ -367,6 +369,11 @@ impl Workspace {
             OverlayKind::GitCreateBranch => "New branch name",
             OverlayKind::GitHistory => "Select a commit to view its changes",
             OverlayKind::LanguageServers => "Filter language servers (Enter installs the selected one)",
+            OverlayKind::ExtSearch => "Search Open VSX, or type publisher.name",
+            OverlayKind::ExtVsix => "Path of a .vsix file",
+            OverlayKind::ExtResults => "Filter the results (Enter installs the selected extension)",
+            OverlayKind::ExtInstalled => "Filter installed extensions (Enter uninstalls the selected one)",
+            OverlayKind::Snippets => "Select a snippet to insert",
         }
         .to_owned();
         if kind == OverlayKind::QuickOpen {
@@ -443,11 +450,7 @@ impl Workspace {
                 }
                 self.symbol_items(&text)
             }
-            OverlayKind::Theme => THEME_NAMES
-                .iter()
-                .filter(|n| text.is_empty() || n.to_lowercase().contains(&text.to_lowercase()))
-                .map(|n| Item { label: (*n).to_owned(), detail: if *n == self.theme.name { "current".to_owned() } else { String::new() }, positions: Vec::new(), action: ItemAction::Theme((*n).to_owned()) })
-                .collect(),
+            OverlayKind::Theme => self.theme_items(&text),
             OverlayKind::CodeActions => {
                 if self.code_actions.is_empty() {
                     overlay.note = Some("Looking for code actions...".to_owned());
@@ -499,6 +502,28 @@ impl Workspace {
                 overlay.note = Some("Servers install into Forge's own folder; nothing global is changed. Add your own under \"languageServers\" in settings.json.".to_owned());
                 self.server_items(&text)
             }
+            OverlayKind::ExtSearch => {
+                overlay.note = Some("Press Enter to search Open VSX (open-vsx.org). Themes install and apply; grammars, snippets and language settings are read too. Extension code is not run yet.".to_owned());
+                Vec::new()
+            }
+            OverlayKind::ExtVsix => {
+                overlay.note = Some("Type or paste the full path of a .vsix file, then press Enter".to_owned());
+                Vec::new()
+            }
+            OverlayKind::ExtResults => self.ext_result_items(&text),
+            OverlayKind::Snippets => {
+                let items = self.snippet_items(&text);
+                if items.is_empty() {
+                    overlay.note = Some("No snippets for this language. Add some in a snippets folder next to settings.json (<language>.json) or install an extension that has them.".to_owned());
+                }
+                items
+            }
+            OverlayKind::ExtInstalled => {
+                if self.extensions.is_empty() {
+                    overlay.note = Some("No extensions installed. Use \"Extensions: Install from Open VSX...\"".to_owned());
+                }
+                self.ext_installed_items(&text)
+            }
             OverlayKind::GitCheckout => {
                 if self.branches.is_empty() {
                     overlay.note = Some("Loading branches...".to_owned());
@@ -533,10 +558,19 @@ impl Workspace {
     }
 
     fn palette_items(&self, query: &str) -> Vec<Item> {
-        palette_entries(query, &self.keymap, &self.recent_commands, 60)
+        let mut items: Vec<Item> = palette_entries(query, &self.keymap, &self.recent_commands, 60)
             .into_iter()
             .map(|e| Item { label: e.command.title().to_owned(), detail: e.shortcut.unwrap_or_default(), positions: e.positions, action: ItemAction::Command(e.command) })
-            .collect()
+            .collect();
+        // A typed query that appears verbatim in an extension command's title is a strong match,
+        // so those lead; with nothing typed they follow the built-ins.
+        let ext = self.ext_command_items(query);
+        if query.is_empty() {
+            items.extend(ext);
+            items
+        } else {
+            ext.into_iter().chain(items).collect()
+        }
     }
 
     fn symbol_items(&self, query: &str) -> Vec<Item> {
@@ -653,6 +687,16 @@ impl Workspace {
             OverlayKind::RenameEntry(path) => self.finish_rename_entry(&path, &text),
             OverlayKind::ConfirmDelete(path) => self.finish_delete_entry(&path, cx),
             OverlayKind::ConfirmDiscard { rel, untracked } => self.finish_discard(&rel, untracked),
+            OverlayKind::ExtSearch => {
+                if !text.is_empty() {
+                    self.start_ext_search(text);
+                }
+            }
+            OverlayKind::ExtVsix => {
+                if !text.is_empty() {
+                    self.start_vsix_install(text);
+                }
+            }
             OverlayKind::GitCreateBranch => {
                 let name = text.clone();
                 self.git_job("branch", move |r| forge_core::git::create_branch(r, &name).map(|_| format!("Created and switched to {name}")));
@@ -666,7 +710,7 @@ impl Workspace {
             ItemAction::Command(c) => self.run_command(c, false, cx),
             ItemAction::File(path) => self.open_file(&path, None, cx),
             ItemAction::Theme(name) => {
-                self.theme = forge_core::theme::Theme::by_name(&name);
+                self.theme = crate::ext_support::resolve_theme(&self.extensions, &name);
                 self.settings.theme = name;
             }
             ItemAction::CodeAction(i) => {
@@ -685,6 +729,9 @@ impl Workspace {
             }
             ItemAction::GitCommit(i) => self.git_show_commit(i),
             action @ (ItemAction::Server(_) | ItemAction::ServersInstallAll) => self.perform_server_item(action),
+            action @ (ItemAction::ExtListing(_) | ItemAction::ExtInstalled(_)) => self.perform_ext_item(action),
+            ItemAction::Snippet(i) => self.insert_snippet_entry(i, cx),
+            ItemAction::ExtCommand(id) => self.run_ext_command(&id, cx),
         }
     }
 
@@ -934,6 +981,7 @@ impl Workspace {
             }
         }
         changed |= self.poll_install();
+        changed |= self.poll_ext();
         // A shell that exited closes its terminal.
         let before = self.terminals.len();
         self.terminals.retain_mut(Terminal::is_alive);

@@ -3,7 +3,7 @@ use forge_syntax::HighlightClass;
 /// Every color the UI uses, as 0xRRGGBB.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
-    pub name: &'static str,
+    pub name: String,
     pub bg: u32,
     pub sidebar: u32,
     pub tab_active: u32,
@@ -40,7 +40,7 @@ impl Theme {
 
     pub fn dark() -> Self {
         Self {
-            name: "Forge Dark",
+            name: "Forge Dark".to_owned(),
             bg: 0x14161b,
             sidebar: 0x1a1d24,
             tab_active: 0x20242c,
@@ -70,7 +70,7 @@ impl Theme {
 
     pub fn light() -> Self {
         Self {
-            name: "Forge Light",
+            name: "Forge Light".to_owned(),
             bg: 0xfafafa,
             sidebar: 0xeeeff2,
             tab_active: 0xfafafa,
@@ -100,7 +100,7 @@ impl Theme {
 
     pub fn high_contrast() -> Self {
         Self {
-            name: "Forge High Contrast",
+            name: "Forge High Contrast".to_owned(),
             bg: 0x000000,
             sidebar: 0x000000,
             tab_active: 0x1a1a1a,
@@ -129,8 +129,16 @@ impl Theme {
     }
 
     pub fn syntax_color(&self, class: HighlightClass) -> u32 {
+        self.syntax[Self::syntax_index(class)]
+    }
+
+    pub fn set_syntax_color(&mut self, class: HighlightClass, color: u32) {
+        self.syntax[Self::syntax_index(class)] = color;
+    }
+
+    fn syntax_index(class: HighlightClass) -> usize {
         use HighlightClass::*;
-        let index = match class {
+        match class {
             Keyword => 0,
             Function => 1,
             Type => 2,
@@ -145,8 +153,7 @@ impl Theme {
             Punctuation => 11,
             Variable => 12,
             Tag => 13,
-        };
-        self.syntax[index]
+        }
     }
 }
 

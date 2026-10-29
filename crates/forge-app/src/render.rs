@@ -200,7 +200,11 @@ impl Workspace {
         };
         let (Some(&first), Some(&last)) = (lines.first(), lines.last()) else { return Vec::new() };
         let focused = g == self.focused_group;
-        let spans = doc.syntax.as_ref().map(|s| s.highlight_lines(doc.buffer.rope(), first..last + 1)).unwrap_or_default();
+        let spans = match (doc.syntax.as_ref(), doc.tm.as_ref()) {
+            (Some(s), _) => s.highlight_lines(doc.buffer.rope(), first..last + 1),
+            (None, Some(t)) => t.highlight_lines(doc.buffer.rope(), first..last + 1),
+            (None, None) => Vec::new(),
+        };
         let caret = view.selections.primary().head;
         let bracket = if focused { matching_bracket(doc.buffer.rope(), caret) } else { None };
         let (matches, current_match) = if focused && self.find.open && self.find_revision.0 == view.doc {
@@ -1224,6 +1228,16 @@ impl Workspace {
 
     // ---- status bar ----
 
+    /// One status bar item an extension contributed; it runs its command when clicked.
+    fn render_ext_status(&self, id: &str, item: &crate::host_support::ExtStatus, cx: &mut Context<Self>) -> impl IntoElement {
+        let command = item.command.clone();
+        let mut element = div().id(gpui::SharedString::from(format!("ext-status-{id}"))).flex_none().whitespace_nowrap().text_color(rgb(self.theme.text)).child(item.text.clone());
+        if let Some(command) = command {
+            element = element.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| this.run_ext_command(&command, cx)));
+        }
+        element
+    }
+
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let doc = self.active_doc();
@@ -1259,7 +1273,7 @@ impl Workspace {
             parts.push(if self.settings.insert_spaces { format!("Spaces: {}", self.settings.tab_size) } else { "Tab Size: ".to_owned() + &self.settings.tab_size.to_string() });
             parts.push("UTF-8".to_owned());
             parts.push(if doc.buffer.eol() == "\r\n" { "CRLF" } else { "LF" }.to_owned());
-            parts.push(doc.syntax.as_ref().map_or("Plain Text", |s| s.language().name()).to_owned());
+            parts.push(doc.syntax.as_ref().map(|s| s.language().name().to_owned()).or_else(|| doc.ext_lang.as_ref().map(|l| l.name.clone())).unwrap_or_else(|| "Plain Text".to_owned()));
         }
         div()
             .flex()
@@ -1308,9 +1322,19 @@ impl Workspace {
                             }))
                             .child(format!("✖ {errors}  ⚠ {warnings}")),
                     )
-                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(color)).child(message)),
+                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(color)).child(message))
+                    .children(self.ext_status_items(1).into_iter().map(|(id, item)| self.render_ext_status(id, item, cx))),
             )
-            .child(div().flex_none().whitespace_nowrap().child(parts.join("    ")))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_none()
+                    .gap_4()
+                    .whitespace_nowrap()
+                    .children(self.ext_status_items(2).into_iter().map(|(id, item)| self.render_ext_status(id, item, cx)))
+                    .child(parts.join("    ")),
+            )
     }
 }
 

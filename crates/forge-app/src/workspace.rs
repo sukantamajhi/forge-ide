@@ -68,7 +68,10 @@ pub(crate) struct Doc {
     pub language: Option<Language>,
     pub lsp_open: bool,
     pub lsp_version: i32,
+    /// Language-server and extension diagnostics together, which is what everything reads.
     pub diagnostics: Vec<Diagnostic>,
+    pub lsp_diagnostics: Vec<Diagnostic>,
+    pub ext_diagnostics: Vec<Diagnostic>,
     /// Bumped on every edit; caches compare against it.
     pub revision: u64,
     /// Generated content (a diff, a commit) that cannot be edited or saved.
@@ -83,6 +86,10 @@ pub(crate) struct Doc {
     /// The file began with a UTF-8 byte-order mark. It is kept out of the text (language
     /// servers choke on it) and written back on save.
     pub bom: bool,
+    /// Set for files of a language an extension contributes (no tree-sitter grammar).
+    pub ext_lang: Option<forge_core::ext_lang::ExtLanguage>,
+    /// That language's TextMate tokenizer, when its extension ships a grammar.
+    pub tm: Option<forge_syntax::TextMateSyntax>,
 }
 
 /// Decode file contents, splitting a leading UTF-8 byte-order mark off the text.
@@ -112,6 +119,8 @@ impl Doc {
             lsp_open: false,
             lsp_version: 1,
             diagnostics: Vec::new(),
+            lsp_diagnostics: Vec::new(),
+            ext_diagnostics: Vec::new(),
             revision: 0,
             readonly: false,
             title: None,
@@ -119,7 +128,15 @@ impl Doc {
             gutter: Vec::new(),
             gutter_key: (u64::MAX, 0),
             bom: false,
+            ext_lang: None,
+            tm: None,
         }
+    }
+
+    /// Use an extension's language for this file: its name, comment tokens and grammar.
+    pub fn use_ext_language(&mut self, lang: &forge_core::ext_lang::ExtLanguage, registry: &forge_syntax::TextMateRegistry) {
+        self.tm = lang.grammar.as_deref().and_then(|g| registry.syntax(g));
+        self.ext_lang = Some(lang.clone());
     }
 
     /// A read-only generated document (a diff or commit). Never gets syntax or a server.
@@ -128,6 +145,8 @@ impl Doc {
         doc.path = path;
         doc.language = None;
         doc.syntax = None;
+        doc.ext_lang = None;
+        doc.tm = None;
         doc.readonly = true;
         doc.title = Some(title.to_owned());
         doc.diff = diff;
@@ -145,7 +164,19 @@ impl Doc {
         if let (Some(syntax), false) = (self.syntax.as_mut(), edits.is_empty()) {
             syntax.parse(self.buffer.rope(), &edits);
         }
+        if let (Some(tm), false) = (self.tm.as_mut(), edits.is_empty()) {
+            tm.parse(self.buffer.rope(), &edits);
+        }
         edits
+    }
+
+    pub fn set_lsp_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
+        self.lsp_diagnostics = diagnostics;
+        self.rebuild_diagnostics();
+    }
+
+    pub fn rebuild_diagnostics(&mut self) {
+        self.diagnostics = self.lsp_diagnostics.iter().chain(self.ext_diagnostics.iter()).cloned().collect();
     }
 
     pub fn diagnostics_on(&self, line: usize) -> impl Iterator<Item = &Diagnostic> {
@@ -233,6 +264,13 @@ pub(crate) enum OverlayKind {
     GitHistory,
     ConfirmDiscard { rel: String, untracked: bool },
     LanguageServers,
+    /// Search text for Open VSX.
+    ExtSearch,
+    /// Path of a .vsix file.
+    ExtVsix,
+    ExtResults,
+    ExtInstalled,
+    Snippets,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -246,6 +284,10 @@ pub(crate) enum ItemAction {
     GitCommit(usize),
     Server(usize),
     ServersInstallAll,
+    ExtListing(usize),
+    ExtInstalled(usize),
+    Snippet(usize),
+    ExtCommand(String),
 }
 
 #[derive(Clone, Debug)]
@@ -385,6 +427,19 @@ pub(crate) struct Workspace {
     pub history_path: Option<String>,
     /// Result of a language-server install running in the background.
     pub install_rx: Option<Receiver<Result<String, String>>>,
+    /// Installed extensions, and the background search or install in flight.
+    pub extensions: Vec<forge_ext_host::Extension>,
+    pub ext_rx: Option<Receiver<crate::ext_support::ExtEvent>>,
+    pub ext_listings: Vec<forge_ext_host::openvsx::Listing>,
+    /// Languages and grammars the installed extensions contribute.
+    pub ext_langs: Vec<forge_core::ext_lang::ExtLanguage>,
+    pub tm: forge_syntax::TextMateRegistry,
+    /// Snippets from extensions and the user's snippets folder, and the expansion in progress.
+    pub snippets: Vec<crate::snippet_support::SnippetEntry>,
+    pub snippet_session: Option<crate::snippet_support::SnippetSession>,
+    /// The Node extension host and what it has told us.
+    pub host: Option<forge_ext_host::host::ExtHost>,
+    pub host_state: crate::host_support::HostState,
 }
 
 impl Focusable for Workspace {
@@ -404,7 +459,10 @@ impl Workspace {
                 status = format!("keybindings.json: {first}");
             }
         }
-        let theme = Theme::by_name(&settings.theme);
+        let extensions = crate::ext_support::load_extensions();
+        let (ext_langs, tm, _warnings) = crate::ext_support::build_ext_languages(&extensions);
+        let snippets = crate::snippet_support::load_snippets(&extensions);
+        let theme = crate::ext_support::resolve_theme(&extensions, &settings.theme);
         let (git_tx, git_rx) = mpsc::channel();
         let mut workspace = Self {
             lsp: LspManager::new(root.clone()),
@@ -476,6 +534,15 @@ impl Workspace {
             history: Vec::new(),
             history_path: None,
             install_rx: None,
+            extensions,
+            ext_rx: None,
+            ext_listings: Vec::new(),
+            snippets,
+            snippet_session: None,
+            host: None,
+            host_state: Default::default(),
+            ext_langs,
+            tm,
         };
         workspace.lsp.set_overrides(workspace.settings.language_servers.clone());
         workspace.init_git();
@@ -489,6 +556,7 @@ impl Workspace {
             }
         })
         .detach();
+        workspace.activate_for(forge_ext_host::host::ActivationEvent::Startup);
         if let Ok(script) = std::env::var("FORGE_REPLAY") {
             workspace.start_replay(script, cx);
         }
@@ -581,7 +649,11 @@ impl Workspace {
                 Ok((text, bom)) => {
                     let mut new_doc = Doc::new(path.to_path_buf(), &text);
                     new_doc.bom = bom;
+                    self.attach_ext_language(&mut new_doc);
                     self.docs.push(new_doc);
+                    let new_ix = self.docs.len() - 1;
+                    self.refresh_ext_diagnostics(new_ix);
+                    self.activate_for_doc(new_ix);
                     let doc = self.docs.len() - 1;
                     self.groups[group].views.push(View::new(doc));
                     self.groups[group].active = self.groups[group].views.len() - 1;
@@ -685,13 +757,14 @@ impl Workspace {
         if same_path(path, &config_dir().join("settings.json")) {
             if let Ok(text) = std::fs::read_to_string(path) {
                 self.settings = Settings::parse(&text);
-                self.theme = Theme::by_name(&self.settings.theme);
+                self.theme = crate::ext_support::resolve_theme(&self.extensions, &self.settings.theme);
                 self.lsp.set_overrides(self.settings.language_servers.clone());
                 for ix in 0..self.docs.len() {
                     if !self.docs[ix].lsp_open {
                         self.attach_lsp(ix);
                     }
                 }
+                self.host_config_changed();
                 self.set_status("Settings reloaded");
             }
         } else if same_path(path, &config_dir().join("keybindings.json")) {
@@ -787,6 +860,7 @@ impl Workspace {
                 view.folds.apply_edit(e.start_point.0, e.old_end_point.0, e.new_end_point.0);
             }
         }
+        self.snippet_follow(doc_ix, edits);
         self.send_changes(doc_ix, edits);
         self.hover = None;
         self.hover_request = None;
@@ -911,6 +985,7 @@ impl Workspace {
             changed |= terminal.pump();
         }
         changed |= self.poll_background();
+        changed |= self.poll_host(cx);
         changed |= self.check_hover_dwell();
         changed |= self.git_tick(cx);
         if changed {
@@ -930,7 +1005,7 @@ impl Workspace {
             }
             Event::Diagnostics { path, diagnostics } => {
                 if let Some(ix) = self.doc_index(&path) {
-                    self.docs[ix].diagnostics = diagnostics;
+                    self.docs[ix].set_lsp_diagnostics(diagnostics);
                 }
             }
             Event::Progress { title, text } => {
@@ -943,7 +1018,7 @@ impl Workspace {
                 self.completion = None;
                 for doc in self.docs.iter_mut().filter(|d| d.language.and_then(|l| self.lsp.key_for(l)).as_deref() == Some(key.as_str())) {
                     doc.lsp_open = false;
-                    doc.diagnostics.clear();
+                    doc.set_lsp_diagnostics(Vec::new());
                 }
             }
             Event::Response { tag, result } => self.handle_response(tag, result, cx),

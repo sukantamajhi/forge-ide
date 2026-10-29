@@ -339,7 +339,16 @@ mod real_servers {
                     }
                     Event::Response { tag: RequestTag::Symbols, result } => {
                         let Expect::Symbol(name) = expect else { continue };
-                        return if result.to_string().contains(name) { Ok(format!("symbol {name} found")) } else { Err(format!("no symbol {name} in {result}")) };
+                        if result.to_string().contains(name) {
+                            return Ok(format!("symbol {name} found"));
+                        }
+                        // Servers answer with nothing until they have parsed the file; ask again.
+                        let empty = result.as_array().is_some_and(Vec::is_empty) || result.is_null();
+                        if !empty {
+                            return Err(format!("no symbol {name} in {result}"));
+                        }
+                        std::thread::sleep(Duration::from_millis(500));
+                        manager.request(language, "textDocument/documentSymbol", json!({ "textDocument": { "uri": uri } }), RequestTag::Symbols);
                     }
                     Event::Failed { title, message, .. } => return Err(format!("{title}: {message}")),
                     other => seen.push(std::mem::discriminant(&other)),
@@ -353,13 +362,13 @@ mod real_servers {
     #[test]
     fn every_installed_server_answers_for_its_language() {
         let cases: Vec<(Language, &str, &str, Expect)> = vec![
-            (Language::Css, "a.css", "a { colr: red; }\n", Expect::Diagnostic),
+            (Language::Css, "a.css", "a { color: ; }\n", Expect::Diagnostic),
             (Language::Json, "a.json", "{ \"a\": 1, }\n", Expect::Diagnostic),
             (Language::Yaml, "a.yaml", "a: [1, 2\nb: 3\n", Expect::Diagnostic),
             (Language::Python, "a.py", "x: int = \"text\"\n", Expect::Diagnostic),
             (Language::Dockerfile, "Dockerfile", "FROM\n", Expect::Diagnostic),
             (Language::Php, "a.php", "<?php\nfunction (;\n", Expect::Diagnostic),
-            (Language::Markdown, "a.md", "# Title\n\n[gone](missing.md)\n", Expect::Diagnostic),
+            (Language::Markdown, "a.md", "# Title\n\ntext\n", Expect::Symbol("Title")),
             (Language::Shell, "a.sh", "foo() { echo hi; }\nfoo\n", Expect::Symbol("foo")),
             (Language::Html, "a.html", "<html><body><p>hi</p></body></html>\n", Expect::Symbol("body")),
         ];

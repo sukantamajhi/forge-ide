@@ -4,11 +4,15 @@
 //! [`forge_text::TextEdit`]), and highlights are computed only for the lines
 //! asked for, so cost tracks the viewport rather than the file.
 
+mod inject;
 mod language;
 mod lines;
+mod textmate;
 
 pub use language::{HighlightClass, Language};
+pub use textmate::{class_for_scopes, TextMateRegistry, TextMateSyntax, MAX_TEXTMATE_BYTES};
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use forge_text::TextEdit;
@@ -28,30 +32,81 @@ pub struct Span {
     pub class: HighlightClass,
 }
 
+/// A tree-sitter parser with its highlight query, ready to run.
+struct Engine {
+    parser: Parser,
+    query: Query,
+    /// Highlight class per query capture index; `None` captures are ignored.
+    classes: Vec<Option<HighlightClass>>,
+}
+
+impl Engine {
+    /// `None` if the grammar and its bundled query cannot be loaded together.
+    fn load(language: Language) -> Option<Self> {
+        let Grammar::Tree(ts_language, queries) = language.grammar() else { return None };
+        let mut parser = Parser::new();
+        parser.set_language(&ts_language).ok()?;
+        // Combined queries can name nodes a grammar variant lacks; fall back to a simpler one.
+        let query = queries.iter().find_map(|q| Query::new(&ts_language, q).ok())?;
+        let classes = query.capture_names().iter().map(|name| HighlightClass::from_capture(name)).collect();
+        Some(Self { parser, query, classes })
+    }
+}
+
+/// Code in another language inside the document: a `<script>`, a Markdown fence.
+struct Layer {
+    language: Language,
+    /// Absent for line-highlighted languages.
+    tree: Option<Tree>,
+    range: tree_sitter::Range,
+    /// 1 for a region of the document itself, 2 for one inside such a region.
+    depth: usize,
+}
+
+impl Layer {
+    /// The rows holding the region's text (a closing fence's row is not part of it).
+    fn rows(&self) -> (usize, usize) {
+        let first = self.range.start_point.row;
+        let mut last = self.range.end_point.row;
+        if self.range.end_point.column == 0 && last > first {
+            last -= 1;
+        }
+        (first, last)
+    }
+}
+
+/// How deep embedded code may nest (Markdown > HTML > JavaScript).
+const MAX_NESTING: usize = 2;
+/// Candidates from embedded code outrank the host's, a nested layer outranks its parent.
+const LAYER_PRIORITY: usize = 1_000_000;
+
 pub struct Syntax {
     language: Language,
     /// Absent for line-highlighted formats (`.env`, INI, Dockerfile, ...).
-    parser: Option<Parser>,
-    query: Option<Query>,
-    /// Highlight class per query capture index; `None` captures are ignored.
-    classes: Vec<Option<HighlightClass>>,
+    engine: Option<Engine>,
     tree: Option<Tree>,
+    /// Parsers for embedded languages, loaded on first use.
+    embedded: HashMap<Language, Option<Engine>>,
+    layers: Vec<Layer>,
+}
+
+fn parse_rope(parser: &mut Parser, rope: &Rope, old: Option<&Tree>) -> Option<Tree> {
+    let total = rope.len_bytes();
+    let mut read = |byte: usize, _: Point| -> &[u8] {
+        if byte >= total {
+            return &[];
+        }
+        let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte);
+        &chunk.as_bytes()[byte - chunk_start..]
+    };
+    parser.parse_with_options(&mut read, old, None)
 }
 
 impl Syntax {
     /// `None` if the grammar and its bundled query cannot be loaded together.
     pub fn new(language: Language) -> Option<Self> {
-        match language.grammar() {
-            Grammar::Lines => Some(Self { language, parser: None, query: None, classes: Vec::new(), tree: None }),
-            Grammar::Tree(ts_language, queries) => {
-                let mut parser = Parser::new();
-                parser.set_language(&ts_language).ok()?;
-                // Combined queries can name nodes a grammar variant lacks; fall back to a simpler one.
-                let query = queries.iter().find_map(|q| Query::new(&ts_language, q).ok())?;
-                let classes = query.capture_names().iter().map(|name| HighlightClass::from_capture(name)).collect();
-                Some(Self { language, parser: Some(parser), query: Some(query), classes, tree: None })
-            }
-        }
+        let engine = if language.is_line_based() { None } else { Some(Engine::load(language)?) };
+        Some(Self { language, engine, tree: None, embedded: HashMap::new(), layers: Vec::new() })
     }
 
     pub fn language(&self) -> Language {
@@ -61,9 +116,10 @@ impl Syntax {
     /// Bring the tree up to date. `edits` are those applied to `rope` since the last
     /// call; pass an empty slice for the initial parse.
     pub fn parse(&mut self, rope: &Rope, edits: &[TextEdit]) {
-        let Some(parser) = self.parser.as_mut() else { return };
+        let Some(engine) = self.engine.as_mut() else { return };
         if rope.len_bytes() > MAX_HIGHLIGHT_BYTES {
             self.tree = None;
+            self.layers.clear();
             return;
         }
         if let Some(tree) = self.tree.as_mut() {
@@ -78,17 +134,40 @@ impl Syntax {
                 });
             }
         }
-        let total = rope.len_bytes();
-        let mut read = |byte: usize, _: Point| -> &[u8] {
-            if byte >= total {
-                return &[];
-            }
-            let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte);
-            &chunk.as_bytes()[byte - chunk_start..]
-        };
         // On a cancelled/failed parse keep the previous tree: stale colors beat none.
-        if let Some(tree) = parser.parse_with_options(&mut read, self.tree.as_ref(), None) {
+        if let Some(tree) = parse_rope(&mut engine.parser, rope, self.tree.as_ref()) {
             self.tree = Some(tree);
+        }
+        self.rebuild_layers(rope);
+    }
+
+    /// Re-find and re-parse the embedded regions. They are small next to the document, so
+    /// they are parsed afresh rather than incrementally.
+    fn rebuild_layers(&mut self, rope: &Rope) {
+        self.layers.clear();
+        let Some(tree) = self.tree.clone() else { return };
+        let mut work = vec![(self.language, tree, 1usize)];
+        while let Some((host, tree, depth)) = work.pop() {
+            for region in inject::find_regions(host, &tree, rope) {
+                if region.range.end_byte - region.range.start_byte > inject::MAX_REGION_BYTES {
+                    continue;
+                }
+                let language = region.language;
+                let parsed = if language.is_line_based() {
+                    None
+                } else {
+                    let Some(engine) = self.embedded.entry(language).or_insert_with(|| Engine::load(language)) else { continue };
+                    if engine.parser.set_included_ranges(&[region.range]).is_err() {
+                        continue;
+                    }
+                    let Some(parsed) = parse_rope(&mut engine.parser, rope, None) else { continue };
+                    Some(parsed)
+                };
+                if let (Some(parsed), true) = (&parsed, depth < MAX_NESTING) {
+                    work.push((language, parsed.clone(), depth + 1));
+                }
+                self.layers.push(Layer { language, tree: parsed, range: region.range, depth });
+            }
         }
     }
 
@@ -140,37 +219,76 @@ impl Syntax {
     pub fn highlight_lines(&self, rope: &Rope, lines: Range<usize>) -> Vec<Vec<Span>> {
         let end = lines.end.min(rope.len_lines());
         let start = lines.start.min(end);
-        if self.parser.is_none() {
+        let Some(engine) = &self.engine else {
             // Line-highlighted format: no tree, and large files are still cheap per line.
             if rope.len_bytes() > MAX_HIGHLIGHT_BYTES {
                 return vec![Vec::new(); end - start];
             }
             return (start..end).map(|l| lines::highlight_line(self.language, &rope.line(l).to_string())).collect();
-        }
+        };
         let mut candidates: Vec<Vec<Candidate>> = vec![Vec::new(); end - start];
-        let (Some(tree), Some(query)) = (&self.tree, &self.query) else { return vec![Vec::new(); end - start] };
+        let Some(tree) = &self.tree else { return vec![Vec::new(); end - start] };
         if start == end {
             return Vec::new();
         }
 
         let byte_start = rope.line_to_byte(start);
         let byte_end = if end >= rope.len_lines() { rope.len_bytes() } else { rope.line_to_byte(end) };
-        let mut cursor = QueryCursor::new();
-        cursor.set_byte_range(byte_start..byte_end);
-        let mut captures = cursor.captures(query, tree.root_node(), RopeText(rope));
-        while let Some((m, index)) = captures.next() {
-            let capture = m.captures()[*index];
-            let Some(class) = self.classes[capture.index as usize] else { continue };
-            let node = capture.node;
-            let first = node.start_position().row.max(start);
-            let last = node.end_position().row.min(end - 1);
-            for row in first..=last {
-                if let Some((from, to)) = columns_in_row(rope, node, row) {
-                    candidates[row - start].push(Candidate { from, to, class, priority: m.pattern_index });
+        collect_captures(rope, tree, engine, byte_start..byte_end, (start, end), 0, &mut candidates);
+
+        for layer in &self.layers {
+            let (first, last) = layer.rows();
+            if last < start || first >= end {
+                continue;
+            }
+            let base = layer.depth * LAYER_PRIORITY;
+            let rows = first.max(start)..=last.min(end - 1);
+            // The embedded language owns its columns: hide whatever the host drew there.
+            for row in rows.clone() {
+                if let Some((from, to)) = columns_in_bytes(rope, layer.range.start_byte, layer.range.end_byte, row) {
+                    candidates[row - start].retain(|c| !(c.from >= from && c.to <= to && c.priority < base));
+                }
+            }
+            match &layer.tree {
+                Some(layer_tree) => {
+                    let Some(Some(embedded)) = self.embedded.get(&layer.language) else { continue };
+                    let from = byte_start.max(layer.range.start_byte);
+                    let to = byte_end.min(layer.range.end_byte);
+                    if from < to {
+                        collect_captures(rope, layer_tree, embedded, from..to, (start, end), base, &mut candidates);
+                    }
+                }
+                None => {
+                    for row in rows {
+                        for span in lines::highlight_line(layer.language, &rope.line(row).to_string()) {
+                            candidates[row - start].push(Candidate { from: span.start_col, to: span.end_col, class: span.class, priority: base });
+                        }
+                    }
                 }
             }
         }
         candidates.into_iter().map(resolve_overlaps).collect()
+    }
+}
+
+/// Add the captures of `engine`'s query over `bytes` to the per-row `candidates`
+/// (rows `rows.0..rows.1`).
+fn collect_captures(rope: &Rope, tree: &Tree, engine: &Engine, bytes: Range<usize>, rows: (usize, usize), base: usize, candidates: &mut [Vec<Candidate>]) {
+    let (start, end) = rows;
+    let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(bytes);
+    let mut captures = cursor.captures(&engine.query, tree.root_node(), RopeText(rope));
+    while let Some((m, index)) = captures.next() {
+        let capture = m.captures()[*index];
+        let Some(class) = engine.classes[capture.index as usize] else { continue };
+        let node = capture.node;
+        let first = node.start_position().row.max(start);
+        let last = node.end_position().row.min(end - 1);
+        for row in first..=last {
+            if let Some((from, to)) = columns_in_bytes(rope, node.start_byte(), node.end_byte(), row) {
+                candidates[row - start].push(Candidate { from, to, class, priority: base + m.pattern_index });
+            }
+        }
     }
 }
 
@@ -197,8 +315,8 @@ struct Candidate {
     priority: usize,
 }
 
-/// Char-column range of `node` within `row`, excluding the line terminator.
-fn columns_in_row(rope: &Rope, node: Node, row: usize) -> Option<(usize, usize)> {
+/// Char-column range of the byte range within `row`, excluding the line terminator.
+fn columns_in_bytes(rope: &Rope, start_byte: usize, end_byte: usize, row: usize) -> Option<(usize, usize)> {
     let line_start_byte = rope.line_to_byte(row);
     let line = rope.line(row);
     let mut line_chars = line.len_chars();
@@ -208,8 +326,8 @@ fn columns_in_row(rope: &Rope, node: Node, row: usize) -> Option<(usize, usize)>
     let line_start_char = rope.line_to_char(row);
     let line_end_byte = rope.char_to_byte(line_start_char + line_chars);
 
-    let from = node.start_byte().max(line_start_byte);
-    let to = node.end_byte().min(line_end_byte);
+    let from = start_byte.max(line_start_byte);
+    let to = end_byte.min(line_end_byte);
     if from >= to {
         return None;
     }
@@ -354,6 +472,80 @@ mod tests {
             highlight(Language::Rust, &buffer.text()),
             "after undo"
         );
+    }
+
+    fn rows_class_at(lines: &[Vec<Span>], row: usize, col: usize) -> Option<HighlightClass> {
+        class_at(&lines[row], col)
+    }
+
+    #[test]
+    fn html_script_and_style_are_highlighted_as_javascript_and_css() {
+        let src = "<script>\nconst x = 1;\n</script>\n<style>\na { color: red; }\n</style>\n<p>text</p>\n";
+        let lines = highlight(Language::Html, src);
+        assert_eq!(rows_class_at(&lines, 1, 0), Some(HighlightClass::Keyword), "const");
+        assert_eq!(rows_class_at(&lines, 1, 10), Some(HighlightClass::Number), "1");
+        assert_eq!(rows_class_at(&lines, 4, 4), Some(HighlightClass::Property), "color");
+        // The surrounding markup is still HTML.
+        assert_eq!(rows_class_at(&lines, 0, 1), Some(HighlightClass::Tag), "script");
+        assert_eq!(rows_class_at(&lines, 6, 1), Some(HighlightClass::Tag), "p");
+    }
+
+    #[test]
+    fn html_script_on_one_line_and_typed_scripts() {
+        let lines = highlight(Language::Html, "<script>let a = 2;</script>\n<script lang=\"ts\">let b: number = 3;</script>\n<script type=\"application/json\">{\"k\": 1}</script>\n<script type=\"text/template\">let c</script>\n");
+        assert_eq!(rows_class_at(&lines, 0, 8), Some(HighlightClass::Keyword), "let in a plain script");
+        assert_eq!(rows_class_at(&lines, 1, 25), Some(HighlightClass::Type), "number in a TypeScript script");
+        assert_eq!(rows_class_at(&lines, 2, 28), Some(HighlightClass::String), "json key");
+        assert_ne!(rows_class_at(&lines, 3, 31), Some(HighlightClass::Keyword), "templates are not code");
+    }
+
+    #[test]
+    fn markdown_fences_use_the_language_they_name() {
+        let src = "# Title\n\n```rust\nfn main() {}\n```\n\n```js\nconst a = 1;\n```\n\n```diff\n+added\n-removed\n```\n\n```nonsense\nfn main() {}\n```\n";
+        let lines = highlight(Language::Markdown, src);
+        assert_eq!(rows_class_at(&lines, 3, 0), Some(HighlightClass::Keyword), "fn in a rust fence");
+        assert_eq!(rows_class_at(&lines, 3, 3), Some(HighlightClass::Function), "main");
+        assert_eq!(rows_class_at(&lines, 7, 0), Some(HighlightClass::Keyword), "const in a js fence");
+        assert_eq!(rows_class_at(&lines, 11, 1), Some(HighlightClass::String), "diff addition");
+        assert_eq!(rows_class_at(&lines, 12, 1), Some(HighlightClass::Tag), "diff removal");
+        assert_ne!(rows_class_at(&lines, 16, 0), Some(HighlightClass::Keyword), "unknown languages stay plain");
+        assert_eq!(rows_class_at(&lines, 0, 2), Some(HighlightClass::Type), "the heading is still Markdown");
+    }
+
+    #[test]
+    fn embedded_languages_nest() {
+        let src = "```html\n<script>let a = 1;</script>\n```\n";
+        let lines = highlight(Language::Markdown, src);
+        assert_eq!(rows_class_at(&lines, 1, 1), Some(HighlightClass::Tag), "script tag");
+        assert_eq!(rows_class_at(&lines, 1, 8), Some(HighlightClass::Keyword), "let, two layers deep");
+    }
+
+    #[test]
+    fn embedded_regions_follow_edits_like_a_fresh_parse() {
+        let mut buffer = Buffer::new("<p>a</p>\n<script>\nlet a = 1;\n</script>\n");
+        let mut syntax = Syntax::new(Language::Html).unwrap();
+        syntax.parse(buffer.rope(), &[]);
+        let steps: Vec<(Vec<usize>, &str)> = vec![
+            (vec![20], "const "), // inside the script
+            (vec![3], "<style>b{c:d}</style>"), // a new region appears
+            (vec![0], "<!-- "), // markup before the regions shifts them
+        ];
+        for (carets, text) in steps {
+            let set = SelectionSet::new(carets.into_iter().map(Selection::caret).collect());
+            buffer.insert(&set, text);
+            let edits = buffer.take_edits();
+            syntax.parse(buffer.rope(), &edits);
+            assert_eq!(syntax.highlight_lines(buffer.rope(), 0..buffer.len_lines()), highlight(Language::Html, &buffer.text()), "after inserting {text:?}");
+        }
+    }
+
+    #[test]
+    fn big_embedded_regions_are_left_alone_and_other_languages_have_none() {
+        let big = format!("<script>{}</script>", "let a = 1;\n".repeat(60_000));
+        let lines = highlight(Language::Html, &big);
+        assert!(lines[1].iter().all(|s| s.class != HighlightClass::Keyword), "a 660 KB script is not parsed");
+        let rust = highlight(Language::Rust, "let s = \"```js\\nconst a\";\n");
+        assert!(rust[0].iter().any(|s| s.class == HighlightClass::String));
     }
 
     #[test]

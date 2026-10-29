@@ -23,6 +23,7 @@ impl Workspace {
         let style = self.indent_style();
         let auto_close = self.settings.auto_closing_brackets;
         let language = self.active_doc().and_then(|d| d.language);
+        let ext_config = self.active_doc().and_then(|d| d.ext_lang.as_ref()).map(|l| l.config.clone());
         use Command::*;
         match command {
             // ---- movement ----
@@ -66,8 +67,21 @@ impl Workspace {
                 self.completion = None;
                 self.signature = None;
             }
-            InsertTab => self.mutate(cx, move |b, s| b.insert_tab(s, style)),
-            OutdentTab | OutdentLines => self.mutate(cx, move |b, s| b.outdent_lines(s, style)),
+            InsertTab => {
+                if !self.snippet_tab(false, cx) {
+                    self.mutate(cx, move |b, s| b.insert_tab(s, style));
+                }
+            }
+            InsertSnippet => self.open_overlay(OverlayKind::Snippets, ""),
+            ExtensionsRestartHost => {
+                self.restart_host();
+                self.set_status("Extension host restarted");
+            }
+            OutdentTab | OutdentLines => {
+                if !(command == OutdentTab && self.snippet_tab(true, cx)) {
+                    self.mutate(cx, move |b, s| b.outdent_lines(s, style));
+                }
+            }
             IndentLines => self.mutate(cx, move |b, s| b.indent_lines(s, style)),
             MoveLinesUp => self.mutate(cx, |b, s| b.move_lines(s, true)),
             MoveLinesDown => self.mutate(cx, |b, s| b.move_lines(s, false)),
@@ -77,12 +91,12 @@ impl Workspace {
             InsertLineBelow => self.mutate(cx, |b, s| b.insert_line(s, false)),
             InsertLineAbove => self.mutate(cx, |b, s| b.insert_line(s, true)),
             JoinLines => self.mutate(cx, |b, s| b.join_lines(s)),
-            ToggleLineComment => match language.and_then(|l| l.line_comment()) {
-                Some(token) => self.mutate(cx, move |b, s| b.toggle_line_comment(s, token)),
+            ToggleLineComment => match language.and_then(|l| l.line_comment()).map(str::to_owned).or_else(|| ext_config.as_ref().and_then(|c| c.line_comment.clone())) {
+                Some(token) => self.mutate(cx, move |b, s| b.toggle_line_comment(s, &token)),
                 None => self.set_status("This language has no line comment"),
             },
-            ToggleBlockComment => match language.and_then(|l| l.block_comment()) {
-                Some((open, close)) => self.mutate(cx, move |b, s| b.toggle_block_comment(s, open, close)),
+            ToggleBlockComment => match language.and_then(|l| l.block_comment()).map(|(o, c)| (o.to_owned(), c.to_owned())).or_else(|| ext_config.as_ref().and_then(|c| c.block_comment.clone())) {
+                Some((open, close)) => self.mutate(cx, move |b, s| b.toggle_block_comment(s, &open, &close)),
                 None => self.set_status("This language has no block comment"),
             },
             TransformUppercase => self.mutate(cx, |b, s| b.transform_selection(s, |t| t.to_uppercase())),
@@ -195,6 +209,9 @@ impl Workspace {
             | GitCommit | GitCommitAll | GitCheckout | GitCreateBranch | GitPull | GitPush | GitFetch | GitStash | GitStashPop
             | GitFileHistory | GitLog | GitBlame => self.run_git_command(command, cx),
             LanguageServers => self.open_overlay(OverlayKind::LanguageServers, ""),
+            ExtensionsInstall => self.open_overlay(OverlayKind::ExtSearch, ""),
+            ExtensionsVsix => self.open_overlay(OverlayKind::ExtVsix, ""),
+            ExtensionsManage => self.open_overlay(OverlayKind::ExtInstalled, ""),
 
             // ---- folding ----
             Fold => self.fold_command(|f, line| f.fold_at(line).is_some()),
