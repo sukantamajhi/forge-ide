@@ -25,4 +25,6 @@ pub mod terminal;
 pub mod textarea;
 pub mod theme;
 pub mod ui_state;
+pub mod icon_theme;
+pub mod product_icons;
 pub mod vscode_theme;

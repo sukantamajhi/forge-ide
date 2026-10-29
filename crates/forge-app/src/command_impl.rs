@@ -217,6 +217,8 @@ impl Workspace {
                 cx,
             ),
             ChangeTheme => self.open_overlay(OverlayKind::Theme, ""),
+            ChangeIconTheme => self.open_overlay(OverlayKind::IconTheme, ""),
+            ChangeProductIconTheme => self.open_overlay(OverlayKind::ProductIconTheme, ""),
 
             // ---- language features ----
             GoToDefinition => self.request_at("textDocument/definition", RequestTag::Definition),
@@ -235,6 +237,7 @@ impl Workspace {
             AiSetKey => self.open_overlay(OverlayKind::AiKey, ""),
             AiForgetKey => self.forget_ai_key(),
             LanguageServers => self.open_overlay(OverlayKind::LanguageServers, ""),
+            ShowExtensions => self.open_extensions_view(),
             ExtensionsInstall => self.open_overlay(OverlayKind::ExtSearch, ""),
             ExtensionsVsix => self.open_overlay(OverlayKind::ExtVsix, ""),
             ExtensionsManage => self.open_overlay(OverlayKind::ExtInstalled, ""),

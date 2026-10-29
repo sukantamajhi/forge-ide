@@ -66,6 +66,20 @@ cargo build --release -p forge-app            # LTO; slow first build
 Every command has a VS Code id and is listed in the Command Palette with its shortcut. Syntax
 highlighting covers Rust, JSON, JavaScript, Python and TOML.
 
+## Installer
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build.ps1     # writes dist\Forge-Setup-0.1.0.exe
+```
+
+Needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The setup installs for the
+current user only (no admin prompt) to `%LOCALAPPDATA%\Programs\Forge`, adds a Start menu entry, and offers optional tasks:
+**Open with Forge** in the right-click menu of files, of folders, and of the empty space in a folder window; a desktop icon;
+and adding Forge to `PATH` (so `forge .` works in a terminal). Forge also appears in Windows' "Open with" list. Uninstall it
+from Settings > Apps; that removes the files, menu entries and `PATH` entry (settings in `%APPDATA%\Forge` are kept).
+On Windows 11 the entry is under **Show more options** (Shift+F10). The setup is unsigned, so SmartScreen may warn.
+The release build is a GUI program, so no console window opens.
+
 ## Configuration
 
 `%APPDATA%\Forge\settings.json` (Ctrl+,) and `keybindings.json` (Ctrl+K Ctrl+S); both reload when saved.
@@ -142,13 +156,15 @@ Forge installs VS Code extensions from **Open VSX** (open-vsx.org, the registry 
 Microsoft's products) or from a `.vsix` file. It uses what they *declare* (themes, grammars, snippets, languages)
 and, if Node.js is on `PATH`, **runs their code** in an extension host: a separate Node process with Forge's own
 implementation of the `vscode` API. Running extension code is new and only a part of that API exists (see below);
-an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
+an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". The **Extensions** tab beside Source Control (Ctrl+Shift+X) searches Open VSX as you press Enter, lists what is installed, and has Install and Uninstall buttons. Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
 **Extensions: Install from VSIX...** (a file path), **Extensions: Manage Installed...** (Enter uninstalls),
 **Preferences: Color Theme**, **Insert Snippet...**. Extensions live in `%APPDATA%\Forge\extensions`
 (`FORGE_CONFIG_DIR` moves everything, which is how the tests stay out of your real settings).
 
 | An extension's contribution | In Forge |
 | --- | --- |
+| Product icon themes | Used: replaces Forge's interface icons (activity bar, tab bar, Git, debug buttons) with the theme's font. Pick one with **Product Icon Theme** or `workbench.productIconTheme`. Fonts must be TTF, OTF or WOFF; themes that ship only WOFF2 are refused with a message. Icons the theme does not define keep the Codicons. |
+| File icon themes | Used: image icons (SVG/PNG) for files and folders, picked with **File Icon Theme** or `workbench.iconTheme` (for example Material Icon Theme). Themes built on icon fonts, and light/high-contrast variants, are not read. Without one, Forge draws its own letter badges. |
 | Color themes | Used: workbench colors and token rules are mapped onto Forge's colors and token classes. Pick one in the theme list or set `workbench.colorTheme`. Semantic colors, font styles and descendant selectors (`a b`) are ignored. |
 | Languages | Used for languages Forge does not bundle: file detection by extension, name or glob, the status-bar name, comment toggling from `language-configuration.json`. Bracket and auto-closing pairs are read but not yet used. First-line (shebang) detection is not. |
 | TextMate grammars | Used for those languages, through a pure-Rust port of vscode-textmate (`irosashi`): colors follow the active theme. JSON grammars only (`.tmLanguage.json`); plist and YAML grammars are skipped. Files over 1 MiB stay plain. Embedded languages and injection grammars are ignored. |

@@ -57,6 +57,12 @@ impl LspClient {
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // A server started from a program with no console must not open one.
+            cmd.creation_flags(0x0800_0000);
+        }
         let mut child = cmd
             .args(args)
             .stdin(Stdio::piped())

@@ -94,6 +94,7 @@ impl Workspace {
             Focus::Find => self.find_key(k, &pressed, cx),
             Focus::Search => self.search_key(k, &pressed, cx),
             Focus::Scm => self.scm_key(k, &pressed, cx),
+            Focus::Extensions => self.ext_key(k, &pressed, cx),
             Focus::Terminal => self.terminal_key(k, &pressed, cx),
             Focus::Explorer => self.explorer_key(k, &pressed, cx),
             Focus::Editor => self.editor_popup_key(k, cx),
@@ -441,6 +442,8 @@ impl Workspace {
             OverlayKind::GoToLine => "Type a line number, or line:column",
             OverlayKind::Symbols => "Go to symbol in editor",
             OverlayKind::Theme => "Select a color theme",
+            OverlayKind::IconTheme => "Select a file icon theme",
+            OverlayKind::ProductIconTheme => "Select a product icon theme",
             OverlayKind::CodeActions => "Select a code action to apply",
             OverlayKind::Definitions => "Select a definition to go to",
             OverlayKind::AiKey => "Paste your OpenAI API key (sk-...)",
@@ -556,6 +559,8 @@ impl Workspace {
                 self.symbol_items(&text)
             }
             OverlayKind::Theme => self.theme_items(&text),
+            OverlayKind::IconTheme => self.icon_theme_items(&text),
+            OverlayKind::ProductIconTheme => self.product_icon_theme_items(&text),
             OverlayKind::CodeActions => {
                 if self.code_actions.is_empty() {
                     overlay.note = Some("Looking for code actions...".to_owned());
@@ -858,6 +863,20 @@ impl Workspace {
             ItemAction::Theme(name) => {
                 self.theme = crate::ext_support::resolve_theme(&self.extensions, &name);
                 self.settings.theme = name;
+            }
+            ItemAction::IconTheme(name) => {
+                let json = serde_json::Value::String(name.clone()).to_string();
+                self.set_setting("workbench.iconTheme", &json);
+                if self.settings.icon_theme == name {
+                    self.set_status(format!("File icon theme: {name}"));
+                }
+            }
+            ItemAction::ProductIconTheme(name) => {
+                let json = serde_json::Value::String(name.clone()).to_string();
+                self.set_setting("workbench.productIconTheme", &json);
+                if self.settings.product_icon_theme == name {
+                    self.set_status(format!("Product icon theme: {name}"));
+                }
             }
             ItemAction::CodeAction(i) => {
                 let Some(action) = self.code_actions.get(i).cloned() else { return };
@@ -1235,10 +1254,24 @@ impl Workspace {
                 return true;
             }
             ("down", false, false) | ("up", false, false) => {
-                let n = self.search.hits.len();
-                if n > 0 {
-                    self.search.selected = if k.key == "down" { (self.search.selected + 1).min(n - 1) } else { self.search.selected.saturating_sub(1) };
-                    self.search.scroll.scroll_to_item(self.search.selected, gpui::ScrollStrategy::Center);
+                use crate::workspace::SearchRow;
+                let rows = self.search.rows();
+                let selected = self.search.selected;
+                let current = rows.iter().position(|r| matches!(r, SearchRow::Line { first, end } if (*first..*end).contains(&selected)));
+                let lines: Vec<usize> = (0..rows.len()).filter(|&i| matches!(rows[i], SearchRow::Line { .. })).collect();
+                let target = match current {
+                    Some(cur) => {
+                        let at = lines.iter().position(|&i| i == cur).unwrap_or(0);
+                        let at = if k.key == "down" { (at + 1).min(lines.len() - 1) } else { at.saturating_sub(1) };
+                        lines.get(at).copied()
+                    }
+                    None => lines.first().copied(),
+                };
+                if let Some(row) = target {
+                    if let SearchRow::Line { first, .. } = rows[row] {
+                        self.search.selected = first;
+                        self.search.scroll.scroll_to_item(row, gpui::ScrollStrategy::Center);
+                    }
                 }
                 return true;
             }

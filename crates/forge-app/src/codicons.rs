@@ -32,3 +32,6 @@ pub const ADD: char = '\u{ea60}';
 pub const REMOVE: char = '\u{eb3b}';
 pub const DISCARD: char = '\u{eae2}';
 pub const ERROR: char = '\u{ea87}';
+pub const EXTENSIONS: char = '\u{eae6}';
+pub const TRASH: char = '\u{ea81}';
+pub const CLOUD_DOWNLOAD: char = '\u{eac2}';

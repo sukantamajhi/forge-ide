@@ -19,7 +19,7 @@ use gpui::{
 
 use crate::resize::{equal_shares, Edge, Resize};
 use crate::workspace::{
-    Focus, OverlayKind, PanelView, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
+    Focus, OverlayKind, PanelView, SearchRow, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
     GLYPH_WIDTH, LINE_NUMBER_WIDTH, TAB_BAR_HEIGHT, TEXT_PAD,
 };
 
@@ -45,6 +45,18 @@ struct LineCtx {
 fn file_badge(name: &str) -> Div {
     let (label, color) = crate::file_icons::badge(name);
     div().w(rems(1.5)).flex_none().flex().justify_center().text_size(rems(0.6875)).font_weight(FontWeight::BOLD).text_color(rgb(color)).child(label)
+}
+
+/// A file's icon: the extension icon theme's image when there is one, else the letter badge.
+fn file_icon(icons: Option<&forge_core::icon_theme::IconTheme>, name: &str) -> Div {
+    match icons.and_then(|t| t.file_icon(name, None)) {
+        Some(path) => icon_image(path),
+        None => file_badge(name),
+    }
+}
+
+fn icon_image(path: &std::path::Path) -> Div {
+    div().w(rems(1.5)).flex_none().flex().justify_center().items_center().child(gpui::img(path.to_path_buf()).w(rems(1.125)).h(rems(1.125)).flex_none())
 }
 
 fn px_f(v: f32) -> Pixels {
@@ -106,7 +118,7 @@ impl Workspace {
                     this.completion = None;
                     cx.notify();
                 }))
-                .child(file_badge(&doc.name()))
+                .child(file_icon(self.icon_theme.as_ref(), &doc.name()))
                 .child(doc.name())
                 .child(
                     div()
@@ -624,8 +636,12 @@ impl Workspace {
                     this.focus = match view {
                         SidebarView::Search => Focus::Search,
                         SidebarView::Git => Focus::Scm,
+                        SidebarView::Extensions => Focus::Extensions,
                         SidebarView::Explorer => Focus::Explorer,
                     };
+                    if view == SidebarView::Extensions {
+                        this.open_extensions_view();
+                    }
                     cx.notify();
                 }))
                 .child(crate::icons::glyph(icon, 1.375, if active { t.text } else { t.dim }))
@@ -635,6 +651,7 @@ impl Workspace {
             SidebarView::Explorer => self.render_explorer(cx).into_any_element(),
             SidebarView::Search => self.render_search(cx).into_any_element(),
             SidebarView::Git => self.render_scm(cx),
+            SidebarView::Extensions => self.render_extensions(cx).into_any_element(),
         };
         div()
             .flex()
@@ -653,7 +670,8 @@ impl Workspace {
                     .flex_row()
                     .child(tab(crate::codicons::FILES, "Explorer", Command::FocusExplorer, SidebarView::Explorer, 0, cx))
                     .child(tab(crate::codicons::SEARCH, "Search", Command::FindInFiles, SidebarView::Search, 0, cx))
-                    .child(tab(crate::codicons::SOURCE_CONTROL, "Source Control", Command::ShowGit, SidebarView::Git, changes, cx)),
+                    .child(tab(crate::codicons::SOURCE_CONTROL, "Source Control", Command::ShowGit, SidebarView::Git, changes, cx))
+                    .child(tab(crate::codicons::EXTENSIONS, "Extensions", Command::ShowExtensions, SidebarView::Extensions, 0, cx)),
             )
             .child(body)
     }
@@ -731,8 +749,9 @@ impl Workspace {
                                                 .child(if entry.is_dir {
                                                     div().w(rems(1.5)).flex_none().flex().justify_center().child(crate::icons::glyph(if entry.expanded { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 1.0, t.dim))
                                                 } else {
-                                                    file_badge(&entry.name)
+                                                    file_icon(this.icon_theme.as_ref(), &entry.name)
                                                 })
+                                                .children(entry.is_dir.then(|| this.icon_theme.as_ref().and_then(|i| i.folder_icon(&entry.name, entry.expanded)).map(icon_image)).flatten())
                                                 .child(entry.name.clone()),
                                         )
                                         .child(div().text_xs().text_color(rgb(name_color)).child(badge))
@@ -785,6 +804,7 @@ impl Workspace {
         } else {
             format!("{} results in {files} files{}", s.hits.len(), if s.capped { " (limit reached)" } else { "" })
         };
+        let rows = s.rows();
         div()
             .flex()
             .flex_col()
@@ -870,28 +890,72 @@ impl Workspace {
                 div().flex_1().min_h_0().child(
                     uniform_list(
                         "search-results",
-                        s.hits.len(),
-                        cx.processor(|this, range: Range<usize>, _window, cx| {
+                        rows.len(),
+                        cx.processor(move |this, range: Range<usize>, _window, cx| {
                             let t = this.theme.clone();
                             range
                                 .map(|ix| {
-                                    let hit = &this.search.hits[ix];
-                                    let rel = hit.path.strip_prefix(this.root()).unwrap_or(&hit.path).to_string_lossy().replace('\\', "/");
-                                    let preview = hit.preview.trim_start().to_owned();
-                                    div()
-                                        .id(("hit", ix))
-                                        .w_full()
-                                        .h(rems(2.25))
-                                        .px_1()
-                                        .flex()
-                                        .flex_col()
-                                        .cursor_pointer()
-                                        .overflow_hidden()
-                                        .when(this.search.selected == ix, |d| d.bg(rgb(t.selection)))
-                                        .hover(|s| s.bg(rgb(t.tab_active)))
-                                        .on_click(cx.listener(move |this, _, _, cx| this.open_hit(ix, cx)))
-                                        .child(div().text_xs().text_color(rgb(t.dim)).whitespace_nowrap().child(format!("{rel}:{}", hit.line + 1)))
-                                        .child(div().whitespace_nowrap().child(preview))
+                                    let row = div().id(("hit", ix)).w_full().h(rems(1.625)).px_2().flex().flex_row().items_center().gap_1().overflow_hidden().cursor_pointer();
+                                    match rows[ix] {
+                                        SearchRow::File { first, count } => {
+                                            let path = &this.search.hits[first].path;
+                                            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                            let rel = path.strip_prefix(this.root()).unwrap_or(path);
+                                            let dir = rel.parent().map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                                            row.hover(|s| s.bg(rgb(t.tab_active)))
+                                                .on_click(cx.listener(move |this, _, _, cx| this.open_hit(first, cx)))
+                                                .child(file_icon(this.icon_theme.as_ref(), &name))
+                                                .child(div().flex_none().whitespace_nowrap().font_weight(FontWeight::MEDIUM).child(name))
+                                                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_xs().text_color(rgb(t.dim)).child(dir))
+                                                .child(
+                                                    div()
+                                                        .flex_none()
+                                                        .min_w(rems(1.25))
+                                                        .px_1()
+                                                        .rounded_full()
+                                                        .bg(rgb(t.tab_active))
+                                                        .text_xs()
+                                                        .text_center()
+                                                        .text_color(rgb(t.text))
+                                                        .child(count.to_string()),
+                                                )
+                                        }
+                                        SearchRow::Line { first, end } => {
+                                            let selected = (first..end).contains(&this.search.selected);
+                                            let hit = &this.search.hits[first];
+                                            let chars: Vec<char> = hit.preview.chars().collect();
+                                            // Skip the indentation; if the match sits far right, start a little before it.
+                                            let mut skip = chars.iter().take_while(|c| c.is_whitespace()).count();
+                                            let cut = hit.col > skip + 16;
+                                            if cut {
+                                                skip = hit.col - 16;
+                                            }
+                                            let mut text = String::new();
+                                            if cut {
+                                                text.push('…');
+                                            }
+                                            let lead = usize::from(cut);
+                                            text.extend(&chars[skip.min(chars.len())..]);
+                                            let bytes: Vec<usize> = text.char_indices().map(|(b, _)| b).chain([text.len()]).collect();
+                                            let shown = bytes.len() - 1;
+                                            let marks: Vec<(Range<usize>, HighlightStyle)> = this.search.hits[first..end]
+                                                .iter()
+                                                .filter(|h| h.col >= skip)
+                                                .filter_map(|h| {
+                                                    let s = h.col - skip + lead;
+                                                    (s < shown).then(|| {
+                                                        let e = (s + h.len).min(shown);
+                                                        (bytes[s]..bytes[e], HighlightStyle { background_color: Some(rgb(t.find_current).into()), ..Default::default() })
+                                                    })
+                                                })
+                                                .collect();
+                                            row.pl(rems(2.25))
+                                                .when(selected, |d| d.bg(rgb(t.selection)))
+                                                .hover(|s| s.bg(rgb(t.tab_active)))
+                                                .on_click(cx.listener(move |this, _, _, cx| this.open_hit(first, cx)))
+                                                .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_sm().child(StyledText::new(text).with_highlights(marks)))
+                                        }
+                                    }
                                 })
                                 .collect()
                         }),
@@ -1372,7 +1436,7 @@ impl Workspace {
                                                     .flex_row()
                                                     .gap(rems(0.375))
                                                     .items_center()
-                                                    .child(file_badge(&name))
+                                                    .child(file_icon(this.icon_theme.as_ref(), &name))
                                                     .child(div().text_color(rgb(color)).child(name))
                                                     .child(div().text_sm().text_color(rgb(t.dim)).child(dir)),
                                             )
@@ -1923,6 +1987,13 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure_font(cx);
+        if std::mem::take(&mut self.product_dirty) {
+            let loaded = crate::ext_support::resolve_product_icons(&self.extensions, &self.settings.product_icon_theme)
+                .and_then(|theme| crate::product_icons::apply(theme.as_ref(), cx));
+            if let Err(error) = loaded {
+                self.set_status(format!("Product icon theme: {error}"));
+            }
+        }
         self.sync_terminal_size(window.viewport_size().width);
         let cols = self.scm_wrap_cols();
         self.scm_message.set_wrap(cols);

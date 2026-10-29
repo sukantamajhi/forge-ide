@@ -294,13 +294,14 @@ fn bundled_debugpy() -> Option<PathBuf> {
 /// How to run the debugpy adapter: the interpreter's own `debugpy` if installed there, else the
 /// copy bundled with VS Code's Python debugger.
 pub fn python_adapter(python: &Path) -> Result<AdapterCommand, String> {
-    let installed = Command::new(python)
-        .args(["-c", "import debugpy"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
+    let mut probe = Command::new(python);
+    probe.args(["-c", "import debugpy"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        probe.creation_flags(0x0800_0000);
+    }
+    let installed = probe.status().is_ok_and(|s| s.success());
     if installed {
         return Ok(AdapterCommand { command: python.to_path_buf(), args: vec!["-m".into(), "debugpy.adapter".into()], env: Vec::new(), interpreter: Some(python.to_path_buf()) });
     }

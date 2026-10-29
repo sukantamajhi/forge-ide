@@ -194,7 +194,16 @@ fn error_message(stderr: &str, stdout: &str) -> String {
 }
 
 pub fn is_available() -> bool {
-    Command::new("git").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    // Same setup as every other git call: with no console of its own, a program that starts git
+    // without a null stdin and the no-window flag waits for seconds before git answers.
+    let mut cmd = Command::new("git");
+    cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd.status().is_ok_and(|s| s.success())
 }
 
 /// The repository root containing `start`, if any.

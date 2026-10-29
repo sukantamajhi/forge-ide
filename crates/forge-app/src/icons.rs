@@ -21,7 +21,9 @@ pub fn register_font(cx: &mut App) {
 
 /// One icon, `size` rems tall, in `color`, centred in a box of its own size so it lines up.
 pub fn glyph(icon: char, size: f32, color: u32) -> Div {
-    div().flex().flex_none().items_center().justify_center().w(rems(size)).h(rems(size)).font_family(FAMILY).text_size(rems(size)).line_height(rems(size)).text_color(rgb(color)).child(icon.to_string())
+    // A product icon theme may draw this icon from its own font.
+    let (family, icon) = crate::product_icons::replacement(icon).unwrap_or_else(|| (FAMILY.to_owned(), icon));
+    div().flex().flex_none().items_center().justify_center().w(rems(size)).h(rems(size)).font_family(family).text_size(rems(size)).line_height(rems(size)).text_color(rgb(color)).child(icon.to_string())
 }
 
 /// The colours a tooltip is drawn with.

@@ -135,6 +135,8 @@ commands! {
     OpenSettingsJson, "workbench.action.openSettingsJson", "Open User Settings (JSON)", [];
     OpenKeybindings, "workbench.action.openGlobalKeybindingsFile", "Open Keyboard Shortcuts (JSON)", ["ctrl+k ctrl+s"];
     ChangeTheme, "workbench.action.selectTheme", "Color Theme", ["ctrl+k ctrl+t"];
+    ChangeIconTheme, "workbench.action.selectIconTheme", "File Icon Theme", [];
+    ChangeProductIconTheme, "workbench.action.selectProductIconTheme", "Product Icon Theme", [];
 
     GoToDefinition, "editor.action.revealDefinition", "Go to Definition", ["f12"];
     DebugStart, "workbench.action.debug.start", "Debug: Start Debugging / Continue", ["f5"];
@@ -185,6 +187,7 @@ commands! {
     GitLog, "git.viewHistory", "Git: View History", [];
     GitBlame, "git.blame", "Git: Show Blame for Current Line", [];
     LanguageServers, "forge.languageServers", "Language Servers: Manage and Install...", [];
+    ShowExtensions, "workbench.view.extensions", "View: Show Extensions", ["ctrl+shift+x"];
     ExtensionsInstall, "forge.extensions.install", "Extensions: Install from Open VSX...", [];
     ExtensionsVsix, "forge.extensions.vsix", "Extensions: Install from VSIX...", [];
     ExtensionsManage, "forge.extensions.manage", "Extensions: Manage Installed...", [];

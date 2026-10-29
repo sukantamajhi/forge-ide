@@ -227,6 +227,7 @@ impl Workspace {
             .child(row(&t, "Minimap", "Show a small overview of the file beside the editor. Click or drag it to scroll.", toggle(6, s.minimap, "true", "false", "editor.minimap.enabled", cx)))
             .child(heading(&t, "Workbench"))
             .child(row(&t, "Color Theme", "Extension themes are chosen in the command palette (Color Theme).", theme_chips.into_any_element()))
+            .child(row(&t, "File Icon Theme", "Install one from Extensions (try \"Material Icon Theme\"), then pick it in the command palette (File Icon Theme).", div().child(s.icon_theme.clone()).into_any_element()))
             .child(heading(&t, "Language Servers"))
             .child(row(&t, "Start Automatically", "Start the servers for your project's languages when a folder opens.", toggle(4, s.lsp_autostart, "true", "false", "lsp.autoStart", cx)))
             .child(heading(&t, "AI Commit Messages"))

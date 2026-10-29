@@ -50,6 +50,10 @@ pub struct Contributes {
     pub grammars: Vec<GrammarContribution>,
     #[serde(default)]
     pub themes: Vec<ThemeContribution>,
+    #[serde(default, rename = "iconThemes")]
+    pub icon_themes: Vec<IconThemeContribution>,
+    #[serde(default, rename = "productIconThemes")]
+    pub product_icon_themes: Vec<IconThemeContribution>,
     #[serde(default)]
     pub snippets: Vec<SnippetContribution>,
     /// `contributes.configuration`: one section object, or an array of them.
@@ -106,6 +110,17 @@ pub struct ThemeContribution {
     /// `vs`, `vs-dark` or `hc-black`; decides the fallback colors.
     #[serde(default)]
     pub ui_theme: Option<String>,
+    #[serde(default)]
+    pub path: String,
+}
+
+/// A file icon theme: a JSON file that maps file names and extensions to icon images.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct IconThemeContribution {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
     #[serde(default)]
     pub path: String,
 }
@@ -181,6 +196,8 @@ impl Extension {
             }
         };
         add(c.themes.len(), "theme");
+        add(c.icon_themes.len(), "icon theme");
+        add(c.product_icon_themes.len(), "product icon theme");
         add(c.grammars.len(), "grammar");
         add(c.languages.len(), "language");
         add(c.snippets.len(), "snippet file");

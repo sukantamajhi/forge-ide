@@ -234,6 +234,7 @@ pub(crate) enum Focus {
     Find,
     Search,
     Scm,
+    Extensions,
     Terminal,
 }
 
@@ -242,6 +243,7 @@ pub(crate) enum SidebarView {
     Explorer,
     Search,
     Git,
+    Extensions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,6 +263,8 @@ pub(crate) enum OverlayKind {
     GoToLine,
     Symbols,
     Theme,
+    IconTheme,
+    ProductIconTheme,
     CodeActions,
     /// Several definitions for one symbol (trait impls, overloads): pick where to go.
     Definitions,
@@ -291,6 +295,8 @@ pub(crate) enum ItemAction {
     Command(Command),
     File(PathBuf),
     Theme(String),
+    IconTheme(String),
+    ProductIconTheme(String),
     CodeAction(usize),
     Definition(usize),
     Symbol(usize, usize),
@@ -336,6 +342,47 @@ pub(crate) struct SearchPanel {
     pub cancel: Arc<AtomicBool>,
     pub scroll: UniformListScrollHandle,
     pub selected: usize,
+}
+
+/// The Extensions view: the search box and what Open VSX answered.
+pub(crate) struct ExtPanel {
+    pub query: LineInput,
+    pub results: Vec<forge_ext_host::openvsx::Listing>,
+    /// A search has finished (or failed) at least once, so opening the view does not search again.
+    pub searched: bool,
+    /// A search started from this view is running.
+    pub waiting: bool,
+    pub error: Option<String>,
+    /// The query the current results answer.
+    pub shown_query: String,
+}
+
+/// One row of the results list: a file header, or one line holding hits `first..end`
+/// (several matches on a line share a row).
+pub(crate) enum SearchRow {
+    File { first: usize, count: usize },
+    Line { first: usize, end: usize },
+}
+
+impl SearchPanel {
+    /// The results grouped by file, then by line. Hits arrive one file at a time, so they are contiguous.
+    pub fn rows(&self) -> Vec<SearchRow> {
+        let hits = &self.hits;
+        let mut rows = Vec::new();
+        let mut i = 0;
+        while i < hits.len() {
+            let file_end = (i..hits.len()).find(|&j| hits[j].path != hits[i].path).unwrap_or(hits.len());
+            rows.push(SearchRow::File { first: i, count: file_end - i });
+            let mut j = i;
+            while j < file_end {
+                let end = (j..file_end).find(|&k| hits[k].line != hits[j].line).unwrap_or(file_end);
+                rows.push(SearchRow::Line { first: j, end });
+                j = end;
+            }
+            i = file_end;
+        }
+        rows
+    }
 }
 
 pub(crate) struct RefEntry {
@@ -399,6 +446,10 @@ pub(crate) struct Workspace {
 
     pub settings: Settings,
     pub theme: Theme,
+    /// The extension icon theme drawing file icons; `None` means Forge's own letter badges.
+    pub icon_theme: Option<forge_core::icon_theme::IconTheme>,
+    /// The product icon theme must be (re)loaded before the next frame: fonts need the app context.
+    pub product_dirty: bool,
     pub keymap: Keymap,
     /// First keys of a multi-step chord already pressed (e.g. `ctrl+k`).
     pub pending_chord: String,
@@ -512,6 +563,9 @@ pub(crate) struct Workspace {
     pub extensions: Vec<forge_ext_host::Extension>,
     pub ext_rx: Option<Receiver<crate::ext_support::ExtEvent>>,
     pub ext_listings: Vec<forge_ext_host::openvsx::Listing>,
+    pub ext_panel: ExtPanel,
+    /// The extension being downloaded and installed, for its button.
+    pub ext_installing: Option<String>,
     /// Languages and grammars the installed extensions contribute.
     pub ext_langs: Vec<forge_core::ext_lang::ExtLanguage>,
     pub tm: forge_syntax::TextMateRegistry,
@@ -546,6 +600,7 @@ impl Workspace {
         let (ext_langs, tm, _warnings) = crate::ext_support::build_ext_languages(&extensions);
         let snippets = crate::snippet_support::load_snippets(&extensions);
         let theme = crate::ext_support::resolve_theme(&extensions, &settings.theme);
+        let icon_theme = crate::ext_support::resolve_icon_theme(&extensions, &settings.icon_theme);
         let (git_tx, git_rx) = mpsc::channel();
         let mut workspace = Self {
             lsp: LspManager::new(root.clone()),
@@ -558,6 +613,8 @@ impl Workspace {
             char_width: px(settings.font_size * 0.55),
             settings,
             theme,
+            icon_theme,
+            product_dirty: true,
             keymap,
             pending_chord: String::new(),
             status: status.into(),
@@ -656,6 +713,8 @@ impl Workspace {
             extensions,
             ext_rx: None,
             ext_listings: Vec::new(),
+            ext_panel: ExtPanel { query: LineInput::default(), results: Vec::new(), searched: false, waiting: false, error: None, shown_query: String::new() },
+            ext_installing: None,
             snippets,
             snippet_session: None,
             host: None,
@@ -914,6 +973,8 @@ impl Workspace {
             if let Ok(text) = std::fs::read_to_string(path) {
                 self.settings = Settings::parse(&text);
                 self.theme = crate::ext_support::resolve_theme(&self.extensions, &self.settings.theme);
+                self.icon_theme = crate::ext_support::resolve_icon_theme(&self.extensions, &self.settings.icon_theme);
+                self.product_dirty = true;
                 self.lsp.set_overrides(self.settings.language_servers.clone());
                 for ix in 0..self.docs.len() {
                     if !self.docs[ix].lsp_open {

@@ -4,6 +4,12 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+/// The coloured letter badges Forge draws itself.
+pub const BUILTIN_ICON_THEME: &str = "Forge Badges";
+
+/// The Codicons font Forge ships, which is VS Code's own default.
+pub const BUILTIN_PRODUCT_ICON_THEME: &str = "Default";
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub font_size: f32,
@@ -11,6 +17,10 @@ pub struct Settings {
     pub insert_spaces: bool,
     pub auto_closing_brackets: bool,
     pub theme: String,
+    /// `workbench.iconTheme`: [`BUILTIN_ICON_THEME`] or the label of an extension's icon theme.
+    pub icon_theme: String,
+    /// `workbench.productIconTheme`: [`BUILTIN_PRODUCT_ICON_THEME`] or the label of an extension's product icon theme.
+    pub product_icon_theme: String,
     pub trim_trailing_whitespace: bool,
     pub format_on_save: bool,
     /// `languageServers` in settings.json: VS Code language id to command and arguments.
@@ -33,6 +43,8 @@ impl Default for Settings {
             insert_spaces: true,
             auto_closing_brackets: true,
             theme: "Forge Dark".to_owned(),
+            icon_theme: BUILTIN_ICON_THEME.to_owned(),
+            product_icon_theme: BUILTIN_PRODUCT_ICON_THEME.to_owned(),
             trim_trailing_whitespace: false,
             format_on_save: false,
             language_servers: Default::default(),
@@ -119,6 +131,12 @@ impl Settings {
         }
         if let Some(v) = map.get("workbench.colorTheme").and_then(Value::as_str) {
             s.theme = v.to_owned();
+        }
+        if let Some(v) = map.get("workbench.iconTheme").and_then(Value::as_str) {
+            s.icon_theme = v.to_owned();
+        }
+        if let Some(v) = map.get("workbench.productIconTheme").and_then(Value::as_str) {
+            s.product_icon_theme = v.to_owned();
         }
         if let Some(v) = map.get("files.trimTrailingWhitespace").and_then(Value::as_bool) {
             s.trim_trailing_whitespace = v;

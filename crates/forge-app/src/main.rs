@@ -1,3 +1,6 @@
+// Release builds are a GUI program: launching from Explorer ("Open with Forge") must not flash a console window.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod command_impl;
 mod completion;
 mod context_menu;
@@ -12,8 +15,10 @@ mod resize;
 mod host_support;
 mod codicons;
 mod icons;
+mod product_icons;
 mod snippet_support;
 mod ext_support;
+mod ext_view;
 mod file_icons;
 mod server_support;
 mod session_support;
