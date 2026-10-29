@@ -81,6 +81,8 @@ pub struct Status {
     pub upstream: Option<String>,
     pub ahead: usize,
     pub behind: usize,
+    /// The repository has at least one remote, so a branch can be published.
+    pub has_remote: bool,
     pub changes: Vec<Change>,
 }
 
@@ -210,6 +212,7 @@ pub fn init(root: &Path) -> Result<String, String> {
 pub fn status(root: &Path) -> Result<Status, String> {
     let out = run(root, &["-c", "core.fsmonitor=false", "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"])?;
     let mut status = parse_status(&out);
+    status.has_remote = run(root, &["remote"]).is_ok_and(|r| !r.trim().is_empty());
     status.changes.truncate(5000);
     Ok(status)
 }
@@ -303,6 +306,16 @@ pub fn fetch(root: &Path) -> Result<String, String> {
 
 pub fn pull(root: &Path) -> Result<String, String> {
     run(root, &["pull", "--no-edit"]).map(|out| out.lines().last().unwrap_or("Pulled").trim().to_owned())
+}
+
+/// Pull what others pushed, then push what is local: "Sync Changes". Pulling is skipped for a
+/// branch with no upstream (nothing to pull yet), which makes this a first publish.
+pub fn sync(root: &Path) -> Result<String, String> {
+    let has_upstream = run(root, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_ok();
+    if has_upstream {
+        run(root, &["pull", "--no-edit"])?;
+    }
+    push(root).map(|_| "Synchronized with the remote".to_owned())
 }
 
 pub fn push(root: &Path) -> Result<String, String> {
@@ -553,6 +566,34 @@ hint: something
 
     fn by_path<'a>(s: &'a Status, p: &str) -> &'a Change {
         s.changes.iter().find(|c| c.path == p).unwrap_or_else(|| panic!("no {p} in {:?}", s.changes))
+    }
+
+    #[test]
+    fn a_new_branch_publishes_and_then_syncs_with_the_remote() {
+        let Some(dir) = repo("publish") else { return };
+        write(&dir, "a.txt", "one
+");
+        commit_all(&dir, "first");
+        assert!(!status(&dir).unwrap().has_remote, "no remote yet, so nothing to publish to");
+        let bare = std::env::temp_dir().join(format!("forge-git-publish-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        git_ok(&std::env::temp_dir(), &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()]);
+        git_ok(&dir, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        let before = status(&dir).unwrap();
+        assert!(before.has_remote && before.upstream.is_none(), "{before:?}");
+        // First sync publishes: there is no upstream to pull from yet.
+        sync(&dir).unwrap();
+        let published = status(&dir).unwrap();
+        assert_eq!(published.upstream.as_deref(), Some("origin/main"), "{published:?}");
+        // A later local commit is "ahead", and sync pushes it.
+        write(&dir, "a.txt", "two
+");
+        commit_all(&dir, "second");
+        assert_eq!(status(&dir).unwrap().ahead, 1);
+        sync(&dir).unwrap();
+        assert_eq!(status(&dir).unwrap().ahead, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&bare);
     }
 
     #[test]

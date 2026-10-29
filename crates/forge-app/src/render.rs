@@ -871,6 +871,18 @@ impl Workspace {
         let sync = if git.status.upstream.is_some() { format!("  ↓{} ↑{}", git.status.behind, git.status.ahead) } else { String::new() };
         let can_commit = !staged.is_empty();
         let nothing = staged.is_empty() && unstaged.is_empty();
+        // With nothing staged, the primary button is what comes after committing: publish a branch
+        // that has no upstream yet, or sync one that is ahead of or behind it.
+        let (ahead, behind) = (git.status.ahead, git.status.behind);
+        let publish = git.status.branch.is_some() && git.status.upstream.is_none() && git.status.has_remote && !git.status.head.is_empty();
+        let sync_label = if publish {
+            Some("☁ Publish Branch".to_owned())
+        } else if git.status.upstream.is_some() && (ahead > 0 || behind > 0) {
+            Some(format!("⟳ Sync Changes  ↓{behind} ↑{ahead}"))
+        } else {
+            None
+        };
+        let sync_label = sync_label.filter(|_| !can_commit);
 
         // A small square icon button for the repository row.
         let icon = |id: &'static str, glyph: &'static str, enabled: bool, cx: &mut Context<Self>, command: Command| {
@@ -893,6 +905,7 @@ impl Workspace {
                 .child(glyph)
         };
 
+        let sync_active = sync_label.is_some();
         let commit_button = div()
             .flex()
             .flex_row()
@@ -902,7 +915,7 @@ impl Workspace {
             .overflow_hidden()
             .bg(rgb(t.button))
             .text_color(rgb(t.button_text))
-            .when(!can_commit, |d| d.opacity(0.5))
+            .when(!can_commit && sync_label.is_none(), |d| d.opacity(0.5))
             .child(
                 div()
                     .id("git-commit")
@@ -910,9 +923,12 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when(can_commit, |d| d.cursor_pointer().hover(|s| s.opacity(0.85)))
-                    .on_click(cx.listener(|this, _, _, cx| this.run_command(Command::GitCommit, false, cx)))
-                    .child("✓ Commit"),
+                    .when(can_commit || sync_label.is_some(), |d| d.cursor_pointer().hover(|s| s.opacity(0.85)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let command = if publish { Command::GitPush } else if sync_active { Command::GitSync } else { Command::GitCommit };
+                        this.run_command(command, false, cx);
+                    }))
+                    .child(sync_label.clone().unwrap_or_else(|| "✓ Commit".to_owned())),
             )
             .child(
                 div()

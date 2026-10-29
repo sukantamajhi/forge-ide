@@ -83,6 +83,7 @@ impl Workspace {
             MenuEntry::Separator,
             self.command_item("Pull", Command::GitPull, true),
             self.command_item("Push", Command::GitPush, true),
+            self.command_item("Sync Changes", Command::GitSync, true),
             self.command_item("Fetch", Command::GitFetch, true),
             MenuEntry::Separator,
             self.command_item("Stage All Changes", Command::GitStageAll, true),

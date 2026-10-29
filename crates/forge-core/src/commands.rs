@@ -164,6 +164,7 @@ commands! {
     GitCreateBranch, "git.branch", "Git: Create Branch...", [];
     GitPull, "git.pull", "Git: Pull", [];
     GitPush, "git.push", "Git: Push", [];
+    GitSync, "git.sync", "Git: Sync Changes (Pull, then Push)", [];
     GitFetch, "git.fetch", "Git: Fetch", [];
     GitStash, "git.stash", "Git: Stash (Include Untracked)", [];
     GitStashPop, "git.stashPop", "Git: Pop Latest Stash", [];

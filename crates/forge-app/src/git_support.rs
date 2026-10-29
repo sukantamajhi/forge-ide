@@ -22,6 +22,7 @@ const AUTO_REFRESH: Duration = Duration::from_secs(4);
 fn job_title(label: &str) -> &'static str {
     match label {
         "pull" => "Pulling…",
+        "sync" => "Synchronizing…",
         "push" => "Pushing…",
         "fetch" => "Fetching…",
         "commit" => "Committing…",
@@ -545,6 +546,7 @@ impl Workspace {
             GitCreateBranch => self.open_overlay(OverlayKind::GitCreateBranch, ""),
             GitPull => self.git_job("pull", git::pull),
             GitPush => self.git_job("push", git::push),
+            GitSync => self.git_job("sync", git::sync),
             GitFetch => self.git_job("fetch", git::fetch),
             GitStash => self.git_job("stash", git::stash),
             GitStashPop => self.git_job("stash-pop", git::stash_pop),
