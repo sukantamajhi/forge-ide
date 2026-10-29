@@ -15,6 +15,8 @@ pub struct Settings {
     pub format_on_save: bool,
     /// `languageServers` in settings.json: VS Code language id to command and arguments.
     pub language_servers: std::collections::BTreeMap<String, (String, Vec<String>)>,
+    /// `ai.model` in settings.json: the OpenAI model that writes commit messages.
+    pub ai_model: String,
 }
 
 impl Default for Settings {
@@ -28,6 +30,7 @@ impl Default for Settings {
             trim_trailing_whitespace: false,
             format_on_save: false,
             language_servers: Default::default(),
+            ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
         }
     }
 }
@@ -113,6 +116,9 @@ impl Settings {
         }
         if let Some(v) = map.get("editor.formatOnSave").and_then(Value::as_bool) {
             s.format_on_save = v;
+        }
+        if let Some(v) = map.get("ai.model").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty()) {
+            s.ai_model = v.to_owned();
         }
         if let Some(servers) = map.get("languageServers").and_then(Value::as_object) {
             for (id, entry) in servers {

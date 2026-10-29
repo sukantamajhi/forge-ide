@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/forge-logo.svg" alt="Forge logo: an anvil shaped like the letter F, with a spark" width="128" height="128">
+</p>
+
 # Forge
 
 An original, GPU-rendered code editor written in Rust on [GPUI](https://crates.io/crates/gpui),
@@ -31,7 +35,7 @@ cargo build --release -p forge-app            # LTO; slow first build
   document (Shift+Alt+F), outline, Problems panel.
 - **Source control** (Ctrl+Shift+G; uses your `git`): changed-files view with staged / unstaged groups,
   stage, unstage, discard (untracked files go to the Recycle Bin), commit, commit all, pull, push, fetch,
-  stash, branch create and checkout, file history and commit diffs, blame for a line, unified diff tabs,
+  stash, AI-written commit subjects (see below), branch create and checkout, file history and commit diffs, blame for a line, unified diff tabs,
   change markers in the editor gutter that update as you type, status decorations in the explorer, and the
   branch with ahead/behind in the status bar. Everything is also in the Command Palette as `Git: ...`.
 - **Workbench:** right-click menus in the editor and explorer, explorer with new file/folder, rename (F2) and delete to the Recycle Bin, integrated
@@ -53,6 +57,22 @@ highlighting covers Rust, JSON, JavaScript, Python and TOML.
 [ { "key": "ctrl+shift+d", "command": "editor.action.copyLinesDownAction" },
   { "key": "ctrl+d", "command": "-editor.action.addSelectionToNextFindMatch" } ]
 ```
+
+## AI commit messages
+
+Stage your changes, then press **Write message with AI** in the Source Control view (or run `Git: Generate Commit
+Message with AI`). Forge fills the message box with a one-line subject you can edit before committing.
+
+- The first time, Forge asks for your OpenAI API key in a masked box and saves it once, encrypted with Windows DPAPI:
+  the file `%APPDATA%\Forge\openai-key.dpapi` holds no plaintext and only your Windows account can decrypt it. It is never in
+  `settings.json` or the registry, and is handed to `curl` on stdin so it does not appear in a
+  process list. Run `AI: Forget Saved OpenAI API Key` to delete it. If `OPENAI_API_KEY` is set in your environment, that is used instead.
+- Only the **staged diff** and your **last 10 commit subjects** (to match your commit style) are sent to the
+  OpenAI API, and only when you ask. Lock files, `.env*`, `*.pem` and `*.key` are left out of the diff. Long diffs
+  are cut at about 24,000 characters.
+- `"ai.model"` in `settings.json` picks the model. The default is `gpt-5-nano`, the cheapest GPT text model on
+  OpenAI's price list ($0.05 in / $0.40 out per 1M tokens, checked October 2026). It is a reasoning model, so Forge
+  asks for minimal reasoning; models such as `gpt-4.1-nano` or `gpt-5.4-nano` work too.
 
 ## Language servers
 

@@ -24,6 +24,9 @@ pub struct Theme {
     pub git_added: u32,
     pub git_modified: u32,
     pub git_deleted: u32,
+    /// Primary button (the Commit button) and its label.
+    pub button: u32,
+    pub button_text: u32,
     syntax: [u32; 14],
 }
 
@@ -61,6 +64,8 @@ impl Theme {
             git_added: 0x73c991,
             git_modified: 0xe2c08d,
             git_deleted: 0xc74e39,
+            button: 0x0e639c,
+            button_text: 0xffffff,
             syntax: [
                 0xc792ea, 0x82aaff, 0xffcb6b, 0xc3e88d, 0x89ddff, 0xf78c6c, 0xf78c6c, 0x5c6773, 0x80cbc4, 0xffcb6b,
                 0x89ddff, 0x8f98a8, 0xd7dae0, 0xf07178,
@@ -91,6 +96,8 @@ impl Theme {
             git_added: 0x2e7d32,
             git_modified: 0x8a6d00,
             git_deleted: 0xc62828,
+            button: 0x007acc,
+            button_text: 0xffffff,
             syntax: [
                 0x7c3aed, 0x1d4ed8, 0xb45309, 0x15803d, 0x0e7490, 0xc2410c, 0xc2410c, 0x8a909c, 0x0f766e, 0xb45309,
                 0x0e7490, 0x6b7280, 0x2b303b, 0xbe123c,
@@ -121,6 +128,8 @@ impl Theme {
             git_added: 0x89d185,
             git_modified: 0xffd700,
             git_deleted: 0xff6b6b,
+            button: 0x1a73c9,
+            button_text: 0xffffff,
             syntax: [
                 0xff80ff, 0x7fd4ff, 0xffe066, 0x9bff9b, 0x66ffff, 0xffa066, 0xffa066, 0xa0a0a0, 0x66ffe0, 0xffe066,
                 0x66ffff, 0xd0d0d0, 0xffffff, 0xff8080,

@@ -206,8 +206,10 @@ impl Workspace {
 
             // ---- source control ----
             ShowGit | GitRefresh | GitInit | GitStageAll | GitUnstageAll | GitStageFile | GitUnstageFile | GitDiscardFile | GitOpenChanges
-            | GitCommit | GitCommitAll | GitCheckout | GitCreateBranch | GitPull | GitPush | GitFetch | GitStash | GitStashPop
+            | GitCommit | GitCommitAll | GitGenerateMessage | GitCheckout | GitCreateBranch | GitPull | GitPush | GitFetch | GitStash | GitStashPop
             | GitFileHistory | GitLog | GitBlame => self.run_git_command(command, cx),
+            AiSetKey => self.open_overlay(OverlayKind::AiKey, ""),
+            AiForgetKey => self.forget_ai_key(),
             LanguageServers => self.open_overlay(OverlayKind::LanguageServers, ""),
             ExtensionsInstall => self.open_overlay(OverlayKind::ExtSearch, ""),
             ExtensionsVsix => self.open_overlay(OverlayKind::ExtVsix, ""),

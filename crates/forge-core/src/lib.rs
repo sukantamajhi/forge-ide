@@ -1,6 +1,7 @@
 //! Editor logic with no UI dependency: themes, settings, commands and keybindings,
 //! text input, fuzzy matching, folding, project search and the terminal session.
 
+pub mod ai;
 pub mod commands;
 pub mod ext_lang;
 pub mod fileops;
@@ -17,5 +18,6 @@ pub mod servers;
 pub mod snippet;
 pub mod settings;
 pub mod terminal;
+pub mod textarea;
 pub mod theme;
 pub mod vscode_theme;

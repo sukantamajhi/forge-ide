@@ -159,6 +159,26 @@ impl Workspace {
                 Ok(text) => self.open_virtual(&key, &title, &text, true, cx),
                 Err(error) => self.set_status(format!("Git: {error}")),
             },
+            GitMsg::AiMessage(result) => {
+                self.ai_pending = false;
+                match result {
+                    Ok(message) => {
+                        self.scm_message.set_text(&message);
+                        self.sidebar_visible = true;
+                        self.sidebar_view = SidebarView::Git;
+                        self.focus = Focus::Scm;
+                        self.set_status("Generated a commit message. Edit it if needed, then press Enter to commit.");
+                    }
+                    Err(error) => {
+                        // A rejected key is forgotten so the next try asks for a new one.
+                        if error.contains("API key") {
+                            self.ai_key = None;
+                            let _ = forge_core::ai::forget_saved_key();
+                        }
+                        self.set_status(format!("AI commit message: {error}"));
+                    }
+                }
+            }
             GitMsg::Branches(Ok(list)) => {
                 self.branches = list;
                 self.refresh_overlay();
@@ -382,6 +402,53 @@ impl Workspace {
         self.git_job("commit", move |r| git::commit(r, &message, all));
     }
 
+    /// Ask the model for a commit subject describing the staged changes. Only the staged diff
+    /// (minus lock files and likely secrets) and the last few commit subjects are sent.
+    pub fn git_generate_message(&mut self) {
+        self.sidebar_visible = true;
+        self.sidebar_view = SidebarView::Git;
+        if self.ai_pending {
+            self.set_status("Already generating a commit message");
+            return;
+        }
+        if self.git.as_ref().is_none_or(|g| g.status.staged().next().is_none()) {
+            self.set_status("There are no staged changes to describe. Stage changes first.");
+            return;
+        }
+        // An environment variable wins, then the key typed this session, then the one saved
+        // (encrypted) by an earlier session. Only when there is none is the user asked.
+        if self.ai_key.is_none() {
+            self.ai_key = forge_core::ai::load_saved_key();
+        }
+        let Some(key) = forge_core::ai::api_key().or_else(|| self.ai_key.clone()) else {
+            self.open_overlay(OverlayKind::AiKey, "");
+            return;
+        };
+        let model = self.settings.ai_model.clone();
+        self.ai_pending = true;
+        self.set_status(format!("Generating a commit message with {model}: the staged diff is sent to the OpenAI API..."));
+        self.git_background(
+            move |root| {
+                let diff = git::staged_diff(root)?;
+                if diff.trim().is_empty() {
+                    return Err("only lock files or secret-like files are staged, so there is nothing to describe".to_owned());
+                }
+                let recent: Vec<String> = git::log(root, None, 10).map(|log| log.into_iter().map(|c| c.subject).collect()).unwrap_or_default();
+                forge_core::ai::generate_commit_message(&key, &model, &diff, &recent)
+            },
+            GitMsg::AiMessage,
+        );
+    }
+
+    /// Drop the key from memory and delete the saved copy.
+    pub fn forget_ai_key(&mut self) {
+        self.ai_key = None;
+        self.set_status(match forge_core::ai::forget_saved_key() {
+            Ok(()) => "The saved OpenAI API key was removed".to_owned(),
+            Err(error) => error,
+        });
+    }
+
     pub fn git_request_branches(&mut self) {
         self.git_background(git::branches, GitMsg::Branches);
     }
@@ -469,6 +536,7 @@ impl Workspace {
             }
             GitCommit => self.git_commit(false),
             GitCommitAll => self.git_commit(true),
+            GitGenerateMessage => self.git_generate_message(),
             GitCheckout => {
                 self.branches.clear();
                 self.open_overlay(OverlayKind::GitCheckout, "");

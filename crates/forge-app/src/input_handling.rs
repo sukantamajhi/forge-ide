@@ -390,6 +390,7 @@ impl Workspace {
 
     pub fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Context<Self>) {
         self.drag = None;
+        self.scm_dragging = false;
     }
 
     // ---- overlays ----
@@ -403,6 +404,7 @@ impl Workspace {
             OverlayKind::Theme => "Select a color theme",
             OverlayKind::CodeActions => "Select a code action to apply",
             OverlayKind::Definitions => "Select a definition to go to",
+            OverlayKind::AiKey => "Paste your OpenAI API key (sk-...)",
             OverlayKind::Rename => "New name for the symbol",
             OverlayKind::NewEntry { folder: false, .. } => "File name (a/b/c.txt creates folders)",
             OverlayKind::NewEntry { folder: true, .. } => "Folder name",
@@ -524,6 +526,10 @@ impl Workspace {
                         Item { label: labels[i].clone(), detail, positions: m.positions, action: ItemAction::Definition(i) }
                     })
                     .collect()
+            }
+            OverlayKind::AiKey => {
+                overlay.note = Some("Used only to write commit messages. Saved once, encrypted for your Windows account, so Forge does not ask again. Enter to confirm.".to_owned());
+                Vec::new()
             }
             OverlayKind::Rename => {
                 overlay.note = Some("Enter to rename every reference, Escape to cancel".to_owned());
@@ -716,6 +722,22 @@ impl Workspace {
                 if let Some((line, col)) = parse_go_to_line(query, doc.buffer.len_lines(), current) {
                     let offset = doc.buffer.point_to_offset(line, col);
                     self.place_caret_offset(offset);
+                }
+            }
+            OverlayKind::AiKey => {
+                if forge_core::ai::is_valid_key(&text) {
+                    let saved = forge_core::ai::save_key(&text);
+                    self.ai_key = Some(text);
+                    if self.git.as_ref().is_some_and(|g| g.status.staged().next().is_some()) {
+                        self.git_generate_message();
+                    } else {
+                        self.set_status(match &saved {
+                            Ok(()) => "OpenAI API key saved, encrypted for your Windows account. Stage changes, then write a message with AI.".to_owned(),
+                            Err(error) => format!("The key is kept for this session only: {error}"),
+                        });
+                    }
+                } else {
+                    self.set_status("That does not look like an OpenAI API key");
                 }
             }
             OverlayKind::Rename => {
@@ -1123,26 +1145,39 @@ impl Workspace {
 
     // ---- source control ----
 
-    fn scm_key(&mut self, k: &Keystroke, pressed: &str, cx: &mut Context<Self>) -> bool {
+    fn scm_key(&mut self, k: &Keystroke, _pressed: &str, cx: &mut Context<Self>) -> bool {
         let ctrl = k.modifiers.control || k.modifiers.platform;
         match (k.key.as_str(), ctrl) {
             ("escape", _) => {
                 self.focus = Focus::Editor;
                 return true;
             }
-            ("enter", _) => {
-                self.git_commit(false);
+            ("c" | "x", true) => {
+                if let Some(text) = self.scm_message.selected_text() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    if k.key == "x" {
+                        self.scm_message.delete_selection();
+                    }
+                }
+                return true;
+            }
+            ("v", true) => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                    self.scm_message.insert(&text);
+                }
                 return true;
             }
             _ => {}
         }
-        if pressed == "ctrl+v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                self.scm_message.insert(&text);
+        // Enter adds a line, like a text box; Ctrl+Enter commits.
+        match self.scm_message.apply(&k.key, ctrl, k.modifiers.shift, k.key_char.as_deref()) {
+            Outcome::Submit => {
+                self.git_commit(false);
+                true
             }
-            return true;
+            Outcome::Edited | Outcome::Moved => true,
+            _ => false,
         }
-        matches!(self.scm_message.apply(&k.key, ctrl, k.key_char.as_deref()), Outcome::Edited | Outcome::Moved)
     }
 
     // ---- explorer ----

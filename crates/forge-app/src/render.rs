@@ -13,7 +13,7 @@ use forge_text::brackets::matching_bracket;
 use forge_text::columns::{display_width, expand_tabs_mapped, TAB_WIDTH};
 use forge_text::search::Match;
 use gpui::{
-    div, font, prelude::*, px, rgb, rgba, uniform_list, AnyElement, App, Context, Div, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
+    div, font, prelude::*, px, rems, rgb, rgba, uniform_list, AnyElement, App, Context, Div, FontWeight, HighlightStyle, MouseButton, MouseDownEvent, MouseMoveEvent,
     Pixels, StyledText, Window,
 };
 
@@ -21,6 +21,10 @@ use crate::workspace::{
     Focus, OverlayKind, PanelView, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
     LINE_NUMBER_WIDTH, PANEL_HEIGHT, SIDEBAR_WIDTH, TAB_BAR_HEIGHT, TEXT_PAD,
 };
+
+/// Horizontal padding of the Git view, and of the text inside the commit message box.
+const SCM_PAD: f32 = 10.0;
+const INPUT_PAD: f32 = 6.0;
 
 /// Per-frame values every visible line needs.
 struct LineCtx {
@@ -52,13 +56,13 @@ impl Workspace {
         let text = input.text();
         let split = text.char_indices().nth(input.cursor()).map_or(text.len(), |(b, _)| b);
         let (before, after) = text.split_at(split);
-        let row = div().flex().flex_row().items_center().h(px(22.0)).px_2().bg(rgb(t.bg)).border_1().border_color(rgb(if focused { t.info } else { t.border })).rounded_sm().overflow_hidden().whitespace_nowrap();
+        let row = div().flex().flex_row().items_center().h(rems(1.375)).px_2().bg(rgb(t.bg)).border_1().border_color(rgb(if focused { t.info } else { t.border })).rounded_sm().overflow_hidden().whitespace_nowrap();
         if text.is_empty() {
-            return row.child(div().w(px(1.0)).h(px(14.0)).bg(rgb(if focused { t.caret } else { t.bg }))).child(div().text_color(rgb(t.dim)).child(placeholder.to_owned()));
+            return row.child(div().w(px(1.0)).h(rems(0.875)).bg(rgb(if focused { t.caret } else { t.bg }))).child(div().text_color(rgb(t.dim)).child(placeholder.to_owned()));
         }
         let selected = input.is_all_selected();
         row.child(div().when(selected, |d| d.bg(rgb(t.selection))).child(before.to_owned()))
-            .child(div().w(px(1.0)).h(px(14.0)).bg(rgb(if focused && !selected { t.caret } else { t.bg })))
+            .child(div().w(px(1.0)).h(rems(0.875)).bg(rgb(if focused && !selected { t.caret } else { t.bg })))
             .child(div().when(selected, |d| d.bg(rgb(t.selection))).child(after.to_owned()))
     }
 
@@ -97,6 +101,15 @@ impl Workspace {
                 .child(
                     div()
                         .id(("close", g * 1000 + vi))
+                        .w(rems(1.375))
+                        .h(rems(1.375))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_size(rems(1.0625))
+                        .hover(|s| s.bg(rgb(t.border)))
                         .text_color(rgb(if doc.dirty { t.accent } else { t.dim }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -160,7 +173,7 @@ impl Workspace {
             .gap_2()
             .text_color(rgb(t.dim))
             .child(div().text_2xl().text_color(rgb(t.text)).child("Forge"))
-            .children(rows.into_iter().map(|(label, key)| div().flex().flex_row().gap_4().child(div().w(px(170.0)).child(label)).child(div().text_color(rgb(t.text)).child(key.unwrap_or_default()))))
+            .children(rows.into_iter().map(|(label, key)| div().flex().flex_row().gap_4().child(div().w(rems(10.625)).child(label)).child(div().text_color(rgb(t.text)).child(key.unwrap_or_default()))))
     }
 
     // ---- the editor ----
@@ -363,10 +376,15 @@ impl Workspace {
         let toggle = |label: &'static str, on: bool, which: u8, cx: &mut Context<Self>| {
             div()
                 .id(("find-toggle", which as usize))
+                .min_w(rems(1.75))
+                .h(rems(1.625))
+                .flex()
+                .items_center()
+                .justify_center()
                 .px_1()
                 .rounded_sm()
                 .cursor_pointer()
-                .text_xs()
+                .text_sm()
                 .bg(rgb(if on { t.selection } else { t.popup }))
                 .text_color(rgb(if on { t.text } else { t.dim }))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -383,8 +401,15 @@ impl Workspace {
         let step = |label: &'static str, forward: bool, cx: &mut Context<Self>| {
             div()
                 .id(("find-step", usize::from(forward)))
-                .px_1()
+                .w(rems(1.75))
+                .h(rems(1.625))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_sm()
                 .cursor_pointer()
+                .text_size(rems(1.0625))
+                .hover(|s| s.bg(rgb(t.border)))
                 .text_color(rgb(t.text))
                 .on_click(cx.listener(move |this, _, _, cx| this.find_next(forward, cx)))
                 .child(label)
@@ -393,9 +418,9 @@ impl Workspace {
         let error = f.error.is_some() || (status == "No results");
         let mut widget = div()
             .absolute()
-            .top(px(4.0))
-            .right(px(24.0))
-            .w(px(440.0))
+            .top(rems(0.25))
+            .right(rems(1.5))
+            .w(rems(27.5))
             .flex()
             .flex_col()
             .gap_1()
@@ -420,14 +445,21 @@ impl Workspace {
                     .child(toggle("Aa", f.options.case_sensitive, 0, cx))
                     .child(toggle("ab", f.options.whole_word, 1, cx))
                     .child(toggle(".*", f.options.regex, 2, cx))
-                    .child(div().w(px(70.0)).text_xs().text_color(rgb(if error { t.error } else { t.dim })).child(status))
+                    .child(div().w(rems(4.375)).text_xs().text_color(rgb(if error { t.error } else { t.dim })).child(status))
                     .child(step("↑", false, cx))
                     .child(step("↓", true, cx))
                     .child(
                         div()
                             .id("find-close")
-                            .px_1()
+                            .w(rems(1.75))
+                            .h(rems(1.625))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
                             .cursor_pointer()
+                            .text_size(rems(1.125))
+                            .hover(|s| s.bg(rgb(t.border)))
                             .text_color(rgb(t.dim))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.find.open = false;
@@ -464,10 +496,12 @@ impl Workspace {
             let active = self.sidebar_view == view;
             div()
                 .id(("sidebar-tab", view as usize))
-                .px_3()
-                .py_2()
+                .px_4()
+                .h(rems(2.25))
+                .flex()
+                .items_center()
                 .cursor_pointer()
-                .text_xs()
+                .text_sm()
                 .text_color(rgb(if active { t.text } else { t.dim }))
                 .border_b_1()
                 .border_color(rgb(if active { t.info } else { t.sidebar }))
@@ -516,7 +550,7 @@ impl Workspace {
                         self.tree.entries.len(),
                         cx.processor(|this, range: Range<usize>, _window, cx| {
                             let t = this.theme.clone();
-                            let line_h = this.line_height().max(22.0);
+                            let line_h = this.line_height().max(26.0);
                             range
                                 .map(|ix| {
                                     let entry = this.tree.entries[ix].clone();
@@ -539,6 +573,7 @@ impl Workspace {
                                     let badge = decor.filter(|c| *c != '•').map(|c| c.to_string()).unwrap_or_default();
                                     div()
                                         .id(("entry", ix))
+                                        .w_full()
                                         .h(px(line_h))
                                         .pl(px(8.0 + entry.depth as f32 * 14.0))
                                         .cursor_pointer()
@@ -585,10 +620,15 @@ impl Workspace {
         let toggle = |label: &'static str, on: bool, which: usize, cx: &mut Context<Self>| {
             div()
                 .id(("search-toggle", which))
+                .min_w(rems(1.75))
+                .h(rems(1.625))
+                .flex()
+                .items_center()
+                .justify_center()
                 .px_1()
                 .rounded_sm()
                 .cursor_pointer()
-                .text_xs()
+                .text_sm()
                 .bg(rgb(if on { t.selection } else { t.sidebar }))
                 .text_color(rgb(if on { t.text } else { t.dim }))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -651,7 +691,8 @@ impl Workspace {
                                     let preview = hit.preview.trim_start().to_owned();
                                     div()
                                         .id(("hit", ix))
-                                        .h(px(36.0))
+                                        .w_full()
+                                        .h(rems(2.25))
                                         .px_1()
                                         .flex()
                                         .flex_col()
@@ -674,8 +715,119 @@ impl Workspace {
 
     // ---- source control ----
 
+    /// Characters that fit on one row of the commit message box.
+    pub fn scm_wrap_cols(&self) -> usize {
+        let inner = SIDEBAR_WIDTH - 1.0 - 2.0 * SCM_PAD - 2.0 * (1.0 + INPUT_PAD);
+        ((inner / f32::from(self.char_width).max(1.0)).floor() as usize).max(8)
+    }
+
+    /// The commit message box: wrapped rows, caret, selection, placeholder, mouse selection.
+    fn render_message_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme.clone();
+        let focused = self.focus == Focus::Scm;
+        let area = &self.scm_message;
+        let rows = area.rows();
+        let chars: Vec<char> = area.text().chars().collect();
+        let (caret_row, _) = area.cursor_row_col();
+        let (selection, cursor) = (area.selection(), area.cursor());
+        let line_h = self.line_height();
+        let char_w = f32::from(self.char_width).max(1.0);
+        let text_left = SCM_PAD + 1.0 + INPUT_PAD;
+        let placeholder = "Message (Ctrl+Enter to commit)";
+        let column_at = move |x: Pixels| (((f32::from(x) - text_left) / char_w).round().max(0.0)) as usize;
+
+        let row_elements = rows.iter().enumerate().map(|(ri, r)| {
+            let caret = |on: bool| div().w(px(1.0)).h(px(line_h - 4.0)).flex_none().bg(rgb(if on { t.caret } else { t.bg }));
+            let mut row = div()
+                .id(("scm-input-row", ri))
+                .flex()
+                .flex_row()
+                .items_center()
+                .h(px(line_h))
+                .w_full()
+                .whitespace_nowrap()
+                .cursor_text()
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.focus = Focus::Scm;
+                    let offset = this.scm_message.offset_at(ri, column_at(ev.position.x));
+                    match ev.click_count {
+                        1 => this.scm_message.set_cursor(offset, ev.modifiers.shift),
+                        2 => this.scm_message.select_word_at(offset),
+                        _ => this.scm_message.select_all(),
+                    }
+                    this.scm_dragging = ev.click_count == 1;
+                    cx.notify();
+                }))
+                .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                    if !this.scm_dragging {
+                        return;
+                    }
+                    if ev.pressed_button != Some(MouseButton::Left) {
+                        this.scm_dragging = false;
+                        return;
+                    }
+                    let offset = this.scm_message.offset_at(ri, column_at(ev.position.x));
+                    this.scm_message.set_cursor(offset, true);
+                    cx.notify();
+                }));
+            if area.is_empty() {
+                if ri == 0 {
+                    row = row.child(caret(focused)).child(div().text_color(rgb(t.dim)).child(placeholder));
+                }
+                return row;
+            }
+            // Cut the row at the selection edges and the caret, and draw each piece.
+            let mut cuts = vec![r.start, r.end];
+            if let Some((a, b)) = selection {
+                cuts.extend([a.clamp(r.start, r.end), b.clamp(r.start, r.end)]);
+            }
+            let has_caret = focused && caret_row == ri;
+            if has_caret {
+                cuts.push(cursor);
+            }
+            cuts.sort_unstable();
+            cuts.dedup();
+            let selected = |from: usize, to: usize| selection.is_some_and(|(a, b)| a <= from && to <= b);
+            let mut caret_drawn = false;
+            for (i, &at) in cuts.iter().enumerate() {
+                if has_caret && at == cursor && !caret_drawn {
+                    row = row.child(caret(true));
+                    caret_drawn = true;
+                }
+                let Some(&next) = cuts.get(i + 1) else { continue };
+                let piece: String = chars[at..next].iter().collect();
+                row = row.child(div().when(selected(at, next), |d| d.bg(rgb(t.selection))).child(piece));
+            }
+            // A selected empty row (a blank line inside the selection) still shows as a small block.
+            if r.is_empty() && selection.is_some_and(|(a, b)| a <= r.start && r.start < b) {
+                row = row.child(div().w(px(char_w * 0.6)).h(px(line_h - 4.0)).bg(rgb(t.selection)));
+            }
+            row
+        });
+
+        div()
+            .id("scm-input")
+            .w_full()
+            .px(px(INPUT_PAD))
+            .py(rems(0.25))
+            .bg(rgb(t.bg))
+            .border_1()
+            .border_color(rgb(if focused { t.info } else { t.border }))
+            .rounded_sm()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.focus = Focus::Scm;
+                cx.notify();
+            }))
+            .children(row_elements)
+    }
+
     fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
-        let t = &self.theme;
+        let t = self.theme.clone();
         let Some(git) = self.git.as_ref() else {
             return div()
                 .p_3()
@@ -691,8 +843,8 @@ impl Workspace {
                         .py_1()
                         .rounded_sm()
                         .cursor_pointer()
-                        .bg(rgb(t.selection))
-                        .text_color(rgb(t.text))
+                        .bg(rgb(t.button))
+                        .text_color(rgb(t.button_text))
                         .on_click(cx.listener(|this, _, _, cx| this.run_command(Command::GitInit, false, cx)))
                         .child("Initialize Repository"),
                 )
@@ -700,75 +852,131 @@ impl Workspace {
         };
         #[derive(Clone)]
         enum Row {
-            Header(&'static str, usize, bool),
+            Header { staged: bool, count: usize, open: bool },
             File(Change, bool),
         }
         let staged: Vec<Change> = git.status.staged().cloned().collect();
         let unstaged: Vec<Change> = git.status.unstaged().cloned().collect();
         let mut rows: Vec<Row> = Vec::new();
-        if !staged.is_empty() {
-            rows.push(Row::Header("STAGED CHANGES", staged.len(), true));
-            rows.extend(staged.iter().cloned().map(|c| Row::File(c, true)));
-        }
-        if !unstaged.is_empty() {
-            rows.push(Row::Header("CHANGES", unstaged.len(), false));
-            rows.extend(unstaged.iter().cloned().map(|c| Row::File(c, false)));
+        for (is_staged, list, open) in [(true, &staged, self.scm_staged_open), (false, &unstaged, self.scm_changes_open)] {
+            if list.is_empty() {
+                continue;
+            }
+            rows.push(Row::Header { staged: is_staged, count: list.len(), open });
+            if open {
+                rows.extend(list.iter().cloned().map(|c| Row::File(c, is_staged)));
+            }
         }
         let branch = git.status.branch.clone().unwrap_or_else(|| format!("detached at {}", git.status.head));
         let sync = if git.status.upstream.is_some() { format!("  ↓{} ↑{}", git.status.behind, git.status.ahead) } else { String::new() };
         let can_commit = !staged.is_empty();
-        let nothing = rows.is_empty();
+        let nothing = staged.is_empty() && unstaged.is_empty();
 
-        let button = |id: &'static str, label: &'static str, command: Command, primary: bool, enabled: bool, cx: &mut Context<Self>| {
+        // A small square icon button for the repository row.
+        let icon = |id: &'static str, glyph: &'static str, enabled: bool, cx: &mut Context<Self>, command: Command| {
             div()
                 .id(id)
-                .px_2()
-                .py_1()
+                .w(rems(1.875))
+                .h(rems(1.875))
+                .flex()
+                .items_center()
+                .justify_center()
                 .rounded_sm()
-                .text_xs()
-                .cursor_pointer()
-                .bg(rgb(if primary && enabled { t.selection } else { t.tab_active }))
+                .text_size(rems(1.125))
+                .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(rgb(t.tab_active))))
                 .text_color(rgb(if enabled { t.text } else { t.dim }))
-                .on_click(cx.listener(move |this, _, _, cx| this.run_command(command, false, cx)))
-                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if enabled {
+                        this.run_command(command, false, cx);
+                    }
+                }))
+                .child(glyph)
         };
+
+        let commit_button = div()
+            .flex()
+            .flex_row()
+            .w_full()
+            .h(rems(2.125))
+            .rounded_sm()
+            .overflow_hidden()
+            .bg(rgb(t.button))
+            .text_color(rgb(t.button_text))
+            .when(!can_commit, |d| d.opacity(0.5))
+            .child(
+                div()
+                    .id("git-commit")
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(can_commit, |d| d.cursor_pointer().hover(|s| s.opacity(0.85)))
+                    .on_click(cx.listener(|this, _, _, cx| this.run_command(Command::GitCommit, false, cx)))
+                    .child("✓ Commit"),
+            )
+            .child(
+                div()
+                    .id("git-commit-more")
+                    .w(rems(2.375))
+                    .text_size(rems(1.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .border_l_1()
+                    .border_color(rgba(0xffffff55))
+                    .hover(|s| s.opacity(0.85))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_scm_menu(ev.position, cx);
+                    }))
+                    .child("▾"),
+            );
 
         div()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
-            .gap_1()
-            .p_2()
             .child(
                 div()
                     .flex()
                     .flex_row()
-                    .justify_between()
                     .items_center()
-                    .text_xs()
-                    .child(div().text_color(rgb(t.text)).child(format!("⎇ {branch}{sync}")))
-                    .child(button("git-refresh", "⟳", Command::GitRefresh, false, true, cx)),
+                    .justify_between()
+                    .h(rems(2.375))
+                    .px(px(SCM_PAD))
+                    .text_sm()
+                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(t.text)).child(format!("⎇ {branch}{sync}")))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .child(icon("git-ai", "✦", can_commit && !self.ai_pending, cx, Command::GitGenerateMessage))
+                            .child(icon("git-commit-icon", "✓", can_commit, cx, Command::GitCommit))
+                            .child(icon("git-refresh", "⟳", true, cx, Command::GitRefresh))
+                            .child(
+                                div()
+                                    .id("git-more")
+                                    .w(rems(1.875))
+                                    .h(rems(1.875))
+                                    .text_size(rems(1.125))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(rgb(t.tab_active)))
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        this.open_scm_menu(ev.position, cx);
+                                    }))
+                                    .child("⋯"),
+                            ),
+                    ),
             )
-            .child(
-                div()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.focus = Focus::Scm;
-                        cx.notify();
-                    }))
-                    .child(self.render_input(&self.scm_message, "Message (Enter to commit)", self.focus == Focus::Scm)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_1()
-                    .child(button("git-commit", "✓ Commit", Command::GitCommit, true, can_commit, cx))
-                    .child(button("git-pull", "↓ Pull", Command::GitPull, false, true, cx))
-                    .child(button("git-push", "↑ Push", Command::GitPush, false, true, cx))
-                    .child(button("git-fetch", "Fetch", Command::GitFetch, false, true, cx)),
-            )
-            .children(nothing.then(|| div().pt_2().text_xs().text_color(rgb(t.dim)).child("No changes detected.")))
+            .child(div().flex().flex_col().gap(rems(0.5)).px(px(SCM_PAD)).pb(rems(0.625)).child(self.render_message_box(cx)).child(commit_button))
+            .children(nothing.then(|| div().px(px(SCM_PAD)).pt_1().text_xs().text_color(rgb(t.dim)).child("No changes detected.")))
             .child(
                 div().flex_1().min_h_0().child(
                     uniform_list(
@@ -779,26 +987,69 @@ impl Workspace {
                             range
                                 .filter_map(|i| rows.get(i).cloned().map(|r| (i, r)))
                                 .map(|(i, row)| match row {
-                                    Row::Header(label, count, is_staged) => {
-                                        let (glyph, command) = if is_staged { ("−", Command::GitUnstageAll) } else { ("+", Command::GitStageAll) };
+                                    Row::Header { staged, count, open } => {
+                                        let (label, glyph, command) = if staged {
+                                            ("STAGED CHANGES", "−", Command::GitUnstageAll)
+                                        } else {
+                                            ("CHANGES", "+", Command::GitStageAll)
+                                        };
+                                        let group = format!("scm-head-{}", usize::from(staged));
                                         div()
+                                            .id(("scm-head", usize::from(staged)))
+                                            .group(group.clone())
+                                            .w_full()
                                             .flex()
                                             .flex_row()
-                                            .justify_between()
                                             .items_center()
-                                            .px_1()
-                                            .h(px(24.0))
-                                            .text_xs()
-                                            .text_color(rgb(t.dim))
-                                            .child(format!("{label}  {count}"))
+                                            .gap(rems(0.375))
+                                            .h(rems(1.75))
+                                            .px(rems(0.375))
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(rgb(t.text))
+                                            .hover(|s| s.bg(rgb(t.tab_active)))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                if staged {
+                                                    this.scm_staged_open = !this.scm_staged_open;
+                                                } else {
+                                                    this.scm_changes_open = !this.scm_changes_open;
+                                                }
+                                                cx.notify();
+                                            }))
+                                            .child(div().w(rems(1.125)).flex_none().flex().justify_center().text_size(rems(0.9375)).text_color(rgb(t.dim)).child(if open { "▾" } else { "▸" }))
+                                            .child(div().flex_1().whitespace_nowrap().child(label))
                                             .child(
                                                 div()
-                                                    .id(("scm-bulk", usize::from(is_staged)))
-                                                    .px_2()
+                                                    .id(("scm-bulk", usize::from(staged)))
+                                                    .invisible()
+                                                    .group_hover(group, |s| s.visible())
+                                                    .w(rems(1.625))
+                                                    .h(rems(1.5))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded_sm()
+                                                    .text_size(rems(1.125))
+                                                    .hover(|s| s.bg(rgb(t.border)))
                                                     .cursor_pointer()
-                                                    .text_color(rgb(t.text))
-                                                    .on_click(cx.listener(move |this, _, _, cx| this.run_command(command, false, cx)))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        cx.stop_propagation();
+                                                        this.run_command(command, false, cx);
+                                                    }))
                                                     .child(glyph),
+                                            )
+                                            .child(
+                                                div()
+                                                    .min_w(rems(1.375))
+                                                    .px_1()
+                                                    .rounded_full()
+                                                    .flex()
+                                                    .justify_center()
+                                                    .bg(rgb(t.border))
+                                                    .text_color(rgb(t.text))
+                                                    .font_weight(FontWeight::NORMAL)
+                                                    .child(count.to_string()),
                                             )
                                             .into_any_element()
                                     }
@@ -816,12 +1067,19 @@ impl Workspace {
                                         };
                                         let untracked = change.untracked;
                                         let (open_rel, stage_rel, discard_rel) = (change.path.clone(), change.path.clone(), change.path.clone());
+                                        let group = format!("scm-file-{i}");
                                         let action = |id: usize, glyph: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace) + 'static>| {
                                             div()
                                                 .id(("scm-action", i * 4 + id))
-                                                .px_1()
+                                                .w(rems(1.625))
+                                                .h(rems(1.5))
+                                                .text_size(rems(1.0625))
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .rounded_sm()
                                                 .cursor_pointer()
-                                                .text_color(rgb(t.text))
+                                                .hover(|s| s.bg(rgb(t.border)))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     cx.stop_propagation();
                                                     f(this);
@@ -829,14 +1087,27 @@ impl Workspace {
                                                 }))
                                                 .child(glyph)
                                         };
-                                        let mut file = div()
+                                        let mut actions = div().flex().flex_row().flex_none().invisible().group_hover(group.clone(), |s| s.visible());
+                                        if is_staged {
+                                            let rel = stage_rel.clone();
+                                            actions = actions.child(action(1, "−", cx, Box::new(move |w| w.scm_unstage(rel.clone()))));
+                                        } else {
+                                            let rel = discard_rel.clone();
+                                            actions = actions.child(action(0, "↩", cx, Box::new(move |w| w.scm_confirm_discard(rel.clone(), untracked))));
+                                            let rel = stage_rel.clone();
+                                            actions = actions.child(action(1, "+", cx, Box::new(move |w| w.scm_stage(rel.clone()))));
+                                        }
+                                        div()
                                             .id(("scm-file", i))
+                                            .group(group)
+                                            .w_full()
                                             .flex()
                                             .flex_row()
                                             .items_center()
-                                            .gap_2()
-                                            .px_1()
-                                            .h(px(24.0))
+                                            .gap(rems(0.375))
+                                            .h(rems(1.75))
+                                            .pl(rems(1.75))
+                                            .pr(rems(0.5))
                                             .cursor_pointer()
                                             .whitespace_nowrap()
                                             .hover(|s| s.bg(rgb(t.tab_active)))
@@ -844,7 +1115,6 @@ impl Workspace {
                                                 this.git_open_diff(open_rel.clone(), is_staged, untracked);
                                                 cx.notify();
                                             }))
-                                            .child(div().w(px(12.0)).flex_none().text_xs().text_color(rgb(color)).child(letter.to_string()))
                                             .child(
                                                 div()
                                                     .flex_1()
@@ -852,20 +1122,13 @@ impl Workspace {
                                                     .overflow_hidden()
                                                     .flex()
                                                     .flex_row()
-                                                    .gap_2()
+                                                    .gap(rems(0.375))
                                                     .child(div().text_color(rgb(color)).child(name))
-                                                    .child(div().text_xs().text_color(rgb(t.dim)).child(dir)),
-                                            );
-                                        if is_staged {
-                                            let rel = stage_rel.clone();
-                                            file = file.child(action(1, "−", cx, Box::new(move |w| w.scm_unstage(rel.clone()))));
-                                        } else {
-                                            let rel = discard_rel.clone();
-                                            file = file.child(action(0, "↩", cx, Box::new(move |w| w.scm_confirm_discard(rel.clone(), untracked))));
-                                            let rel = stage_rel.clone();
-                                            file = file.child(action(1, "+", cx, Box::new(move |w| w.scm_stage(rel.clone()))));
-                                        }
-                                        file.into_any_element()
+                                                    .child(div().text_sm().text_color(rgb(t.dim)).child(dir)),
+                                            )
+                                            .child(actions)
+                                            .child(div().w(rems(1.0)).flex_none().flex().justify_center().text_sm().text_color(rgb(color)).child(letter.to_string()))
+                                            .into_any_element()
                                     }
                                 })
                                 .collect::<Vec<AnyElement>>()
@@ -923,7 +1186,7 @@ impl Workspace {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .h(px(26.0))
+                    .h(rems(2.0))
                     .bg(rgb(t.sidebar))
                     .child(tab(format!("PROBLEMS {problem_count}"), PanelView::Problems, cx))
                     .child(tab("TERMINAL".to_owned(), PanelView::Terminal, cx))
@@ -932,8 +1195,14 @@ impl Workspace {
                     .child(
                         div()
                             .id("panel-close")
-                            .px_3()
+                            .w(rems(2.25))
+                            .h(rems(2.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .cursor_pointer()
+                            .text_size(rems(1.1875))
+                            .hover(|s| s.bg(rgb(t.border)))
                             .text_color(rgb(t.dim))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.panel_visible = false;
@@ -1017,11 +1286,12 @@ impl Workspace {
                         let rel = path.strip_prefix(this.root()).unwrap_or(&path).to_string_lossy().replace('\\', "/");
                         div()
                             .id(("problem", ix))
+                            .w_full()
                             .flex()
                             .flex_row()
                             .gap_2()
                             .px_2()
-                            .h(px(22.0))
+                            .h(rems(1.375))
                             .items_center()
                             .cursor_pointer()
                             .whitespace_nowrap()
@@ -1060,11 +1330,12 @@ impl Workspace {
                         let rel = loc.path.strip_prefix(this.root()).unwrap_or(&loc.path).to_string_lossy().replace('\\', "/");
                         div()
                             .id(("reference", ix))
+                            .w_full()
                             .flex()
                             .flex_row()
                             .gap_3()
                             .px_2()
-                            .h(px(22.0))
+                            .h(rems(1.375))
                             .items_center()
                             .cursor_pointer()
                             .whitespace_nowrap()
@@ -1119,14 +1390,14 @@ impl Workspace {
                 .flex_row()
                 .gap_3()
                 .px_2()
-                .h(px(22.0))
+                .h(rems(1.375))
                 .items_center()
                 .whitespace_nowrap()
                 .bg(rgb(if ix == state.selected { t.selection } else { t.popup }))
                 .child(item.label.clone())
                 .children(item.detail.clone().map(|d| div().text_color(rgb(t.dim)).text_xs().child(d)))
         });
-        Some(div().absolute().left(x).top(y).min_w(px(280.0)).max_w(px(560.0)).py_1().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().occlude().children(rows))
+        Some(div().absolute().left(x).top(y).min_w(rems(17.5)).max_w(rems(35.0)).py_1().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().occlude().children(rows))
     }
 
     fn render_hover(&self) -> Option<Div> {
@@ -1148,7 +1419,7 @@ impl Workspace {
         if sections.is_empty() {
             return None;
         }
-        Some(div().absolute().left(x).top(y + px(4.0)).max_w(px(560.0)).flex().flex_col().gap_2().p_2().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().text_sm().occlude().children(sections))
+        Some(div().absolute().left(x).top(y + px(4.0)).max_w(rems(35.0)).flex().flex_col().gap_2().p_2().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().text_sm().occlude().children(sections))
     }
 
     fn render_signature(&self, help: &SignatureHelp) -> Option<Div> {
@@ -1165,7 +1436,7 @@ impl Workspace {
             vec![(byte(s)..byte(e), HighlightStyle { color: Some(rgb(t.info).into()), font_weight: Some(FontWeight::BOLD), ..Default::default() })]
         });
         let text = StyledText::new(label).with_highlights(highlights.unwrap_or_default());
-        Some(div().absolute().left(x).top(top).max_w(px(640.0)).px_2().py_1().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().whitespace_nowrap().child(text))
+        Some(div().absolute().left(x).top(top).max_w(rems(40.0)).px_2().py_1().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().whitespace_nowrap().child(text))
     }
 
     fn render_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -1190,7 +1461,7 @@ impl Workspace {
                 .justify_between()
                 .gap_3()
                 .px_2()
-                .h(px(24.0))
+                .h(rems(1.5))
                 .cursor_pointer()
                 .whitespace_nowrap()
                 .bg(rgb(if selected { t.selection } else { t.popup }))
@@ -1207,14 +1478,14 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(48.0))
+                .top(rems(3.0))
                 .left_0()
                 .right_0()
                 .flex()
                 .justify_center()
                 .child(
                     div()
-                        .w(px(640.0))
+                        .w(rems(40.0))
                         .flex()
                         .flex_col()
                         .gap_1()
@@ -1226,7 +1497,15 @@ impl Workspace {
                         .shadow_lg()
                         .occlude()
                         .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
-                        .when(show_input, |d| d.child(self.render_input(&overlay.input, &overlay.placeholder, true)))
+                        .when(show_input, |d| {
+                            if overlay.kind == OverlayKind::AiKey {
+                                // The key is never drawn: one dot per character.
+                                let dots = LineInput::new(&"•".repeat(overlay.input.text().chars().count()));
+                                d.child(self.render_input(&dots, &overlay.placeholder, true))
+                            } else {
+                                d.child(self.render_input(&overlay.input, &overlay.placeholder, true))
+                            }
+                        })
                         .children(overlay.note.clone().map(|n| div().px_2().py_1().text_xs().text_color(rgb(t.dim)).child(n)))
                         .children(rows),
                 ),
@@ -1290,7 +1569,7 @@ impl Workspace {
             .items_center()
             .gap_4()
             .px_3()
-            .h(px(24.0))
+            .h(rems(1.5))
             .text_xs()
             .bg(rgb(t.sidebar))
             .border_t_1()
@@ -1349,6 +1628,8 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.measure_font(cx);
         self.sync_terminal_size(window.viewport_size().width);
+        let cols = self.scm_wrap_cols();
+        self.scm_message.set_wrap(cols);
         let t = self.theme.clone();
 
         let mut centre = div().flex().flex_col().flex_1().min_w_0().h_full();
@@ -1414,8 +1695,8 @@ fn diff_line_style(t: &Theme, text: &str) -> Option<(u32, bool)> {
 /// The colored bar in the gutter beside a changed line.
 fn gutter_marker(t: &Theme, kind: ChangeKind, line_h: Pixels) -> Div {
     match kind {
-        ChangeKind::Added => div().absolute().left(px(1.0)).top_0().w(px(3.0)).h(line_h).bg(rgb(t.git_added)),
-        ChangeKind::Modified => div().absolute().left(px(1.0)).top_0().w(px(3.0)).h(line_h).bg(rgb(t.git_modified)),
-        ChangeKind::Removed => div().absolute().left(px(0.0)).bottom_0().w(px(9.0)).h(px(2.0)).bg(rgb(t.git_deleted)),
+        ChangeKind::Added => div().absolute().left(px(1.0)).top_0().w(rems(0.1875)).h(line_h).bg(rgb(t.git_added)),
+        ChangeKind::Modified => div().absolute().left(px(1.0)).top_0().w(rems(0.1875)).h(line_h).bg(rgb(t.git_modified)),
+        ChangeKind::Removed => div().absolute().left(px(0.0)).bottom_0().w(rems(0.5625)).h(px(2.0)).bg(rgb(t.git_deleted)),
     }
 }

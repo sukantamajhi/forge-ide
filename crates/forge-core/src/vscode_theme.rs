@@ -219,6 +219,9 @@ fn build(label: &str, ui_theme: Option<&str>, parts: Parts) -> Theme {
     set(&mut theme.git_added, &["gitDecoration.addedResourceForeground", "editorGutter.addedBackground"], bg);
     set(&mut theme.git_modified, &["gitDecoration.modifiedResourceForeground", "editorGutter.modifiedBackground"], bg);
     set(&mut theme.git_deleted, &["gitDecoration.deletedResourceForeground", "editorGutter.deletedBackground"], bg);
+    set(&mut theme.button, &["button.background"], bg);
+    let button = theme.button;
+    set(&mut theme.button_text, &["button.foreground"], button);
 
     // Plain text and punctuation fall back to the default text color rather than the
     // built-in theme's, which may belong to a different kind of theme.

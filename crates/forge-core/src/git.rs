@@ -340,6 +340,18 @@ pub fn diff_text(root: &Path, rel: &str, staged: bool, untracked: bool) -> Resul
     Ok(if out.is_empty() { "No changes.\n".to_owned() } else { out })
 }
 
+/// The staged changes as one diff, for describing them to a model. Lock files and files that
+/// commonly hold secrets (`.env*`, keys, certificates) are left out so they are never sent.
+pub fn staged_diff(root: &Path) -> Result<String, String> {
+    run(
+        root,
+        &[
+            "diff", "--cached", "--no-color", "--no-ext-diff", "--", ".", ":(exclude,glob)**/*.lock", ":(exclude,glob)**/package-lock.json",
+            ":(exclude,glob)**/.env*", ":(exclude,glob)**/*.pem", ":(exclude,glob)**/*.key",
+        ],
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Commit {
     pub hash: String,
@@ -541,6 +553,24 @@ hint: something
 
     fn by_path<'a>(s: &'a Status, p: &str) -> &'a Change {
         s.changes.iter().find(|c| c.path == p).unwrap_or_else(|| panic!("no {p} in {:?}", s.changes))
+    }
+
+    #[test]
+    fn staged_diff_leaves_out_lock_files_and_secret_like_files() {
+        let Some(dir) = repo("aidiff") else { return };
+        write(&dir, "src/lib.rs", "pub fn kept() {}\n");
+        write(&dir, "Cargo.lock", "LOCK_CONTENT\n");
+        write(&dir, "web/package-lock.json", "LOCK_JSON\n");
+        write(&dir, ".env", "SECRET_TOKEN=abc\n");
+        write(&dir, "config/.env.local", "SECRET_LOCAL=abc\n");
+        write(&dir, "certs/server.pem", "PEM_CONTENT\n");
+        git_ok(&dir, &["add", "-A"]);
+        let diff = staged_diff(&dir).unwrap();
+        assert!(diff.contains("pub fn kept"), "{diff}");
+        for hidden in ["LOCK_CONTENT", "LOCK_JSON", "SECRET_TOKEN", "SECRET_LOCAL", "PEM_CONTENT"] {
+            assert!(!diff.contains(hidden), "{hidden} must not be sent:\n{diff}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

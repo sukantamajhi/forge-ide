@@ -7,9 +7,9 @@ use gpui::{div, prelude::*, px, rgb, AnyElement, ClipboardItem, Context, Div, Mo
 
 use crate::workspace::{Focus, OverlayKind, Workspace};
 
-const MENU_WIDTH: f32 = 270.0;
-const ROW_HEIGHT: f32 = 24.0;
-const SEPARATOR_HEIGHT: f32 = 9.0;
+const MENU_WIDTH: f32 = 300.0;
+const ROW_HEIGHT: f32 = 30.0;
+const SEPARATOR_HEIGHT: f32 = 11.0;
 /// Vertical padding inside the menu frame, top and bottom together.
 const FRAME_PADDING: f32 = 8.0;
 
@@ -68,6 +68,31 @@ impl Workspace {
             self.command_item("Format Document", Command::FormatDocument, has_server && writable),
             MenuEntry::Separator,
             self.command_item("Command Palette...", Command::CommandPalette, true),
+        ];
+        self.context_menu = Some(ContextMenu { position, entries, target: None });
+        cx.notify();
+    }
+
+    /// The Git view's "more actions" menu, opened from the Commit button's arrow or the ... icon.
+    pub fn open_scm_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let staged = self.git.as_ref().is_some_and(|g| g.status.staged().next().is_some());
+        let entries = vec![
+            self.command_item("Commit", Command::GitCommit, staged),
+            self.command_item("Commit All", Command::GitCommitAll, true),
+            self.command_item("Write Commit Message with AI", Command::GitGenerateMessage, staged && !self.ai_pending),
+            MenuEntry::Separator,
+            self.command_item("Pull", Command::GitPull, true),
+            self.command_item("Push", Command::GitPush, true),
+            self.command_item("Fetch", Command::GitFetch, true),
+            MenuEntry::Separator,
+            self.command_item("Stage All Changes", Command::GitStageAll, true),
+            self.command_item("Unstage All Changes", Command::GitUnstageAll, staged),
+            MenuEntry::Separator,
+            self.command_item("Checkout to...", Command::GitCheckout, true),
+            self.command_item("Create Branch...", Command::GitCreateBranch, true),
+            self.command_item("Stash", Command::GitStash, true),
+            self.command_item("Pop Latest Stash", Command::GitStashPop, true),
+            self.command_item("View History", Command::GitLog, true),
         ];
         self.context_menu = Some(ContextMenu { position, entries, target: None });
         cx.notify();
