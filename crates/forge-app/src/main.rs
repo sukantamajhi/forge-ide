@@ -10,11 +10,13 @@ mod minimap;
 mod render;
 mod resize;
 mod host_support;
+mod codicons;
 mod icons;
 mod snippet_support;
 mod ext_support;
 mod file_icons;
 mod server_support;
+mod session_support;
 mod settings_view;
 mod tree;
 mod wrap;
@@ -33,6 +35,8 @@ fn main() {
     let target = std::env::args()
         .nth(1)
         .map(PathBuf::from)
+        // With no argument, reopen the folder that was open last time (like VS Code), if it still exists.
+        .or_else(|| forge_core::session::SessionStore::load().last_folder.filter(|p| p.is_dir()))
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
     // Language servers need absolute paths (they become `file://` URIs).
@@ -45,6 +49,7 @@ fn main() {
     };
 
     Application::new().run(move |cx: &mut App| {
+        icons::register_font(cx);
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

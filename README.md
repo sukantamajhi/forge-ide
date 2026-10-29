@@ -43,6 +43,9 @@ cargo build --release -p forge-app            # LTO; slow first build
   emphasis, links, lists and task lists, quotes, code blocks, tables and rules. Links are clickable (web and mail links open
   in your browser or mail app, links to project files open in Forge; `file:` and other schemes are refused), and the
   editor and preview scroll together. Raw HTML is not drawn.
+- **Reopening:** Forge remembers each folder's open files (tab order, the active tab, and the caret in each) in
+  `%APPDATA%\Forge\session.json` and brings them back when you open that folder again. Started with no argument, it reopens
+  the last folder. Unsaved edits are not restored, and only the first editor group's tabs are.
 - **Editor buttons** at the right of the tab bar: Open Preview (Markdown files only), Split Editor, and a **...** menu with
   Copy Path / Copy Relative Path / Reveal in File Explorer, Close / Close Others / Close All (files with unsaved changes stay
   open), Toggle Minimap, Go to Line, Command Palette, and the file's Git actions.
@@ -92,6 +95,11 @@ Message with AI`). Forge fills the message box with a one-line subject you can e
 - `"ai.model"` in `settings.json` picks the model. The default is `gpt-5-nano`, the cheapest GPT text model on
   OpenAI's price list ($0.05 in / $0.40 out per 1M tokens, checked October 2026). It is a reasoning model, so Forge
   asks for minimal reasoning; models such as `gpt-4.1-nano` or `gpt-5.4-nano` work too.
+
+## Icons
+
+The icons are VS Code's **Codicons** (`@vscode/codicons` 0.0.46-24, © Microsoft, icons under CC BY 4.0, code under MIT). The font is
+embedded from `assets/fonts/codicon.ttf`; the licences are beside it. Every icon button shows its name and shortcut on hover.
 
 ## Language servers
 

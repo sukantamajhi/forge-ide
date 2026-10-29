@@ -726,7 +726,7 @@ impl Workspace {
                     this.debug_toggle_variable(i);
                     cx.notify();
                 }))
-                .child(div().w(rems(0.875)).flex_none().text_color(rgb(t.dim)).child(if !expandable { "" } else if v.expanded { "▾" } else { "▸" }))
+                .child(div().w(rems(1.0)).flex_none().children(expandable.then(|| crate::icons::glyph(if v.expanded { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 0.875, t.dim))))
                 .child(div().text_color(rgb(t.info)).child(v.name.clone()))
                 .child(div().text_color(rgb(t.dim)).child(if v.value.is_empty() { String::new() } else { format!("= {}", v.value) }))
         })
@@ -773,7 +773,7 @@ impl Workspace {
         let session = self.debug.as_ref()?;
         let t = &self.theme;
         let stopped = !session.running;
-        let button = |id: &'static str, glyph: &'static str, command: Command, enabled: bool, color: u32, cx: &mut Context<Self>| {
+        let button = |id: &'static str, glyph: char, name: &'static str, command: Command, enabled: bool, color: u32, cx: &mut Context<Self>| {
             div()
                 .id(id)
                 .w(rems(2.0))
@@ -782,15 +782,14 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .rounded_sm()
-                .text_size(rems(1.125))
-                .text_color(rgb(if enabled { color } else { t.dim }))
+                .tooltip(self.tooltip(name, Some(command)))
                 .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(rgb(t.border))))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if enabled {
                         this.run_command(command, false, cx);
                     }
                 }))
-                .child(glyph)
+                .child(crate::icons::glyph(glyph, 1.25, if enabled { color } else { t.dim }))
         };
         let left = self.sidebar_width() + ((window_width - self.sidebar_width()) / 2.0 - 112.0).max(0.0);
         Some(
@@ -808,11 +807,11 @@ impl Workspace {
                 .rounded_md()
                 .shadow_lg()
                 .occlude()
-                .child(button("debug-continue", "▶", Command::DebugStart, stopped, t.git_added, cx))
-                .child(button("debug-over", "⤼", Command::DebugStepOver, stopped, t.info, cx))
-                .child(button("debug-into", "↓", Command::DebugStepInto, stopped, t.info, cx))
-                .child(button("debug-out", "↑", Command::DebugStepOut, stopped, t.info, cx))
-                .child(button("debug-stop", "■", Command::DebugStop, true, t.error, cx))
+                .child(button("debug-continue", crate::codicons::DEBUG_CONTINUE, "Continue", Command::DebugStart, stopped, t.git_added, cx))
+                .child(button("debug-over", crate::codicons::DEBUG_STEP_OVER, "Step Over", Command::DebugStepOver, stopped, t.info, cx))
+                .child(button("debug-into", crate::codicons::DEBUG_STEP_INTO, "Step Into", Command::DebugStepInto, stopped, t.info, cx))
+                .child(button("debug-out", crate::codicons::DEBUG_STEP_OUT, "Step Out", Command::DebugStepOut, stopped, t.info, cx))
+                .child(button("debug-stop", crate::codicons::DEBUG_STOP, "Stop", Command::DebugStop, true, t.error, cx))
                 .into_any_element(),
         )
     }

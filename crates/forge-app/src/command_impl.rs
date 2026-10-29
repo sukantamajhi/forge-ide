@@ -611,6 +611,8 @@ impl Workspace {
     }
 
     pub fn open_folder(&mut self, root: std::path::PathBuf, cx: &mut Context<Self>) {
+        self.save_session(true);
+        self.session_ready = false;
         for doc in &self.docs {
             if let (Some(language), true) = (doc.language, doc.lsp_open) {
                 self.lsp.did_close(language, &doc.path);
@@ -629,6 +631,7 @@ impl Workspace {
         self.terminals.clear();
         self.search.hits.clear();
         self.set_status(format!("Opened folder {}", root.display()));
+        self.restore_session(None, cx);
         cx.notify();
     }
 

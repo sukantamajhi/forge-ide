@@ -18,6 +18,7 @@ pub mod markdown;
 pub mod project_search;
 pub mod quick;
 pub mod servers;
+pub mod session;
 pub mod snippet;
 pub mod settings;
 pub mod terminal;

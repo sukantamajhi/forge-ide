@@ -118,21 +118,21 @@ impl Workspace {
                         .justify_center()
                         .rounded_sm()
                         .cursor_pointer()
-                        .text_size(rems(1.0625))
                         .hover(|s| s.bg(rgb(t.border)))
-                        .text_color(rgb(if doc.dirty { t.accent } else { t.dim }))
+                        .tooltip(self.tooltip(if doc.dirty { "Unsaved changes: close" } else { "Close" }, Some(Command::CloseTab)))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.close_view(g, vi, cx);
                         }))
-                        .child(if doc.dirty { "●" } else { "×" }),
+                        .child(crate::icons::glyph(if doc.dirty { crate::codicons::CIRCLE_FILLED } else { crate::codicons::CLOSE }, 0.875, if doc.dirty { t.accent } else { t.dim })),
                 )
         })
         .collect::<Vec<_>>();
         // Icon buttons for the file: its Markdown preview, a split, and a menu of everything else.
-        let button = |id: &'static str, icon: gpui::Div, active: bool, cx: &mut Context<Self>, press: Box<dyn Fn(&mut Workspace, &gpui::MouseDownEvent, &mut Context<Workspace>)>| {
+        let button = |id: &'static str, icon: gpui::Div, name: &'static str, command: Option<Command>, active: bool, cx: &mut Context<Self>, press: Box<dyn Fn(&mut Workspace, &gpui::MouseDownEvent, &mut Context<Workspace>)>| {
             div()
                 .id((id, g))
+                .tooltip(self.tooltip(name, command))
                 .w(rems(1.875))
                 .h(rems(1.875))
                 .flex()
@@ -161,9 +161,9 @@ impl Workspace {
             .items_center()
             .gap_1()
             .px_2()
-            .children((has_views && markdown).then(|| button("tab-preview", crate::icons::preview(if preview_on { t.text } else { t.dim }), preview_on, cx, Box::new(|w, _, _| w.toggle_markdown_preview()))))
-            .children(has_views.then(|| button("tab-split", crate::icons::split(t.dim), false, cx, Box::new(|w, _, cx| w.run_command(Command::SplitEditor, false, cx)))))
-            .children(has_views.then(|| button("tab-more", crate::icons::more(t.dim), false, cx, Box::new(move |w, ev, cx| w.open_tab_menu(g, ev.position, cx)))));
+            .children((has_views && markdown).then(|| button("tab-preview", crate::icons::glyph(crate::codicons::OPEN_PREVIEW, 1.125, if preview_on { t.text } else { t.dim }), "Open Preview to the Side", Some(Command::MarkdownPreview), preview_on, cx, Box::new(|w, _, _| w.toggle_markdown_preview()))))
+            .children(has_views.then(|| button("tab-split", crate::icons::glyph(crate::codicons::SPLIT_HORIZONTAL, 1.125, t.dim), "Split Editor", Some(Command::SplitEditor), false, cx, Box::new(|w, _, cx| w.run_command(Command::SplitEditor, false, cx)))))
+            .children(has_views.then(|| button("tab-more", crate::icons::glyph(crate::codicons::ELLIPSIS, 1.125, t.dim), "More Actions...", None, false, cx, Box::new(move |w, ev, cx| w.open_tab_menu(g, ev.position, cx)))));
         div()
             .flex()
             .flex_row()
@@ -414,7 +414,7 @@ impl Workspace {
             _ if caret_line => t.text,
             _ => t.dim,
         };
-        let chevron = if view.folds.has_region_at(line) { if collapsed { "▸" } else { "▾" } } else { "" };
+        let chevron = view.folds.has_region_at(line).then_some(if collapsed { crate::codicons::CHEVRON_RIGHT } else { crate::codicons::CHEVRON_DOWN });
 
         let change = change_at(&doc.gutter, line);
         let is_debug_line = ctx.debug_line == Some(line);
@@ -459,7 +459,7 @@ impl Workspace {
                     .text_color(rgb(number_color))
                     .child(if row.k == 0 { (line + 1).to_string() } else { String::new() }),
             )
-            .child(div().w(px(FOLD_WIDTH)).flex_none().text_color(rgb(t.dim)).text_xs().child(if row.k == 0 { chevron } else { "" }))
+            .child(div().w(px(FOLD_WIDTH)).flex_none().flex().items_center().justify_center().children(chevron.filter(|_| row.k == 0).map(|icon| crate::icons::glyph(icon, 0.875, t.dim))))
             .child(
                 div()
                     .relative()
@@ -488,7 +488,7 @@ impl Workspace {
     fn render_find_widget(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let f = &self.find;
-        let toggle = |label: &'static str, on: bool, which: u8, cx: &mut Context<Self>| {
+        let toggle = |icon: char, tip: &'static str, on: bool, which: u8, cx: &mut Context<Self>| {
             div()
                 .id(("find-toggle", which as usize))
                 .min_w(rems(1.75))
@@ -499,9 +499,8 @@ impl Workspace {
                 .px_1()
                 .rounded_sm()
                 .cursor_pointer()
-                .text_sm()
                 .bg(rgb(if on { t.selection } else { t.popup }))
-                .text_color(rgb(if on { t.text } else { t.dim }))
+                .tooltip(self.tooltip(tip, None))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     match which {
                         0 => this.find.options.case_sensitive = !this.find.options.case_sensitive,
@@ -511,9 +510,9 @@ impl Workspace {
                     this.refresh_find();
                     cx.notify();
                 }))
-                .child(label)
+                .child(crate::icons::glyph(icon, 1.0, if on { t.text } else { t.dim }))
         };
-        let step = |label: &'static str, forward: bool, cx: &mut Context<Self>| {
+        let step = |icon: char, forward: bool, cx: &mut Context<Self>| {
             div()
                 .id(("find-step", usize::from(forward)))
                 .w(rems(1.75))
@@ -523,11 +522,10 @@ impl Workspace {
                 .justify_center()
                 .rounded_sm()
                 .cursor_pointer()
-                .text_size(rems(1.0625))
                 .hover(|s| s.bg(rgb(t.border)))
-                .text_color(rgb(t.text))
+                .tooltip(self.tooltip(if forward { "Next Match" } else { "Previous Match" }, Some(if forward { Command::FindNext } else { Command::FindPrevious })))
                 .on_click(cx.listener(move |this, _, _, cx| this.find_next(forward, cx)))
-                .child(label)
+                .child(crate::icons::glyph(icon, 1.0, t.text))
         };
         let status = f.status_label();
         let error = f.error.is_some() || (status == "No results");
@@ -557,12 +555,12 @@ impl Workspace {
                     .items_center()
                     .gap_1()
                     .child(div().flex_1().min_w_0().child(self.render_input(&f.query, "Find", self.focus == Focus::Find && !f.focus_replace)))
-                    .child(toggle("Aa", f.options.case_sensitive, 0, cx))
-                    .child(toggle("ab", f.options.whole_word, 1, cx))
-                    .child(toggle(".*", f.options.regex, 2, cx))
+                    .child(toggle(crate::codicons::CASE_SENSITIVE, "Match Case (Alt+C)", f.options.case_sensitive, 0, cx))
+                    .child(toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", f.options.whole_word, 1, cx))
+                    .child(toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", f.options.regex, 2, cx))
                     .child(div().w(rems(4.375)).text_xs().text_color(rgb(if error { t.error } else { t.dim })).child(status))
-                    .child(step("↑", false, cx))
-                    .child(step("↓", true, cx))
+                    .child(step(crate::codicons::ARROW_UP, false, cx))
+                    .child(step(crate::codicons::ARROW_DOWN, true, cx))
                     .child(
                         div()
                             .id("find-close")
@@ -573,15 +571,14 @@ impl Workspace {
                             .justify_center()
                             .rounded_sm()
                             .cursor_pointer()
-                            .text_size(rems(1.125))
                             .hover(|s| s.bg(rgb(t.border)))
-                            .text_color(rgb(t.dim))
+                            .tooltip(self.tooltip("Close (Escape)", None))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.find.open = false;
                                 this.focus = Focus::Editor;
                                 cx.notify();
                             }))
-                            .child("×"),
+                            .child(crate::icons::glyph(crate::codicons::CLOSE, 1.0, t.dim)),
                     ),
             );
         if f.replace_visible {
@@ -607,19 +604,21 @@ impl Workspace {
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let changes = self.git.as_ref().map_or(0, |g| g.status.changes.len());
-        let tab = |label: String, view: SidebarView, cx: &mut Context<Self>| {
+        let tab = |icon: char, name: &'static str, command: Command, view: SidebarView, badge: usize, cx: &mut Context<Self>| {
             let active = self.sidebar_view == view;
             div()
                 .id(("sidebar-tab", view as usize))
                 .px_4()
-                .h(rems(2.25))
+                .h(rems(2.5))
                 .flex()
+                .flex_row()
                 .items_center()
+                .gap(rems(0.25))
                 .cursor_pointer()
-                .text_sm()
-                .text_color(rgb(if active { t.text } else { t.dim }))
                 .border_b_1()
                 .border_color(rgb(if active { t.info } else { t.sidebar }))
+                .hover(|s| s.bg(rgb(t.tab_active)))
+                .tooltip(self.tooltip(name, Some(command)))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.sidebar_view = view;
                     this.focus = match view {
@@ -629,7 +628,8 @@ impl Workspace {
                     };
                     cx.notify();
                 }))
-                .child(label)
+                .child(crate::icons::glyph(icon, 1.375, if active { t.text } else { t.dim }))
+                .children((badge > 0).then(|| div().min_w(rems(1.125)).h(rems(1.125)).px_1().rounded_full().flex().items_center().justify_center().text_xs().bg(rgb(t.button)).text_color(rgb(t.button_text)).child(badge.to_string())))
         };
         let body: AnyElement = match self.sidebar_view {
             SidebarView::Explorer => self.render_explorer(cx).into_any_element(),
@@ -647,7 +647,14 @@ impl Workspace {
             .border_r_1()
             .border_color(rgb(t.border))
             .child(self.resize_handle(("resize", 0), Resize::Sidebar, Edge::Right, cx))
-            .child(div().flex().flex_row().child(tab("EXPLORER".to_owned(), SidebarView::Explorer, cx)).child(tab("SEARCH".to_owned(), SidebarView::Search, cx)).child(tab(if changes > 0 { format!("GIT {changes}") } else { "GIT".to_owned() }, SidebarView::Git, cx)))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .child(tab(crate::codicons::FILES, "Explorer", Command::FocusExplorer, SidebarView::Explorer, 0, cx))
+                    .child(tab(crate::codicons::SEARCH, "Search", Command::FindInFiles, SidebarView::Search, 0, cx))
+                    .child(tab(crate::codicons::SOURCE_CONTROL, "Source Control", Command::ShowGit, SidebarView::Git, changes, cx)),
+            )
             .child(body)
     }
 
@@ -671,11 +678,6 @@ impl Workspace {
                             range
                                 .map(|ix| {
                                     let entry = this.tree.entries[ix].clone();
-                                    let marker = match (entry.is_dir, entry.expanded) {
-                                        (true, true) => "▾ ",
-                                        (true, false) => "▸ ",
-                                        (false, _) => "  ",
-                                    };
                                     let selected = this.explorer_selected == Some(ix);
                                     let open = this.active_doc().is_some_and(|d| crate::workspace::same_path(&d.path, &entry.path));
                                     let (path, is_dir) = (entry.path.clone(), entry.is_dir);
@@ -727,7 +729,7 @@ impl Workspace {
                                                 .gap(rems(0.25))
                                                 .text_color(rgb(name_color))
                                                 .child(if entry.is_dir {
-                                                    div().w(rems(1.5)).flex_none().flex().justify_center().text_color(rgb(t.dim)).child(marker.trim().to_owned())
+                                                    div().w(rems(1.5)).flex_none().flex().justify_center().child(crate::icons::glyph(if entry.expanded { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 1.0, t.dim))
                                                 } else {
                                                     file_badge(&entry.name)
                                                 })
@@ -747,7 +749,7 @@ impl Workspace {
     fn render_search(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let s = &self.search;
-        let toggle = |label: &'static str, on: bool, which: usize, cx: &mut Context<Self>| {
+        let toggle = |icon: char, tip: &'static str, on: bool, which: usize, cx: &mut Context<Self>| {
             div()
                 .id(("search-toggle", which))
                 .min_w(rems(1.75))
@@ -758,9 +760,8 @@ impl Workspace {
                 .px_1()
                 .rounded_sm()
                 .cursor_pointer()
-                .text_sm()
                 .bg(rgb(if on { t.selection } else { t.sidebar }))
-                .text_color(rgb(if on { t.text } else { t.dim }))
+                .tooltip(self.tooltip(tip, None))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     match which {
                         0 => this.search.options.case_sensitive = !this.search.options.case_sensitive,
@@ -770,7 +771,7 @@ impl Workspace {
                     this.start_search();
                     cx.notify();
                 }))
-                .child(label)
+                .child(crate::icons::glyph(icon, 1.0, if on { t.text } else { t.dim }))
         };
         let files = s.hits.iter().map(|h| &h.path).collect::<std::collections::BTreeSet<_>>().len();
         let status = if let Some(e) = &s.error {
@@ -819,7 +820,8 @@ impl Workspace {
                                 this.focus = Focus::Search;
                                 cx.notify();
                             }))
-                            .child(if s.replace_open { "▾" } else { "▸" }),
+                            .tooltip(self.tooltip("Toggle Replace", Some(Command::ReplaceInFiles)))
+                            .child(crate::icons::glyph(if s.replace_open { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 1.0, t.dim)),
                     )
                     .child(div().flex_1().min_w_0().on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         this.search.replace_focused = false;
@@ -827,9 +829,9 @@ impl Workspace {
                         cx.stop_propagation();
                         cx.notify();
                     })).child(self.render_input(&s.query, "Search", self.focus == Focus::Search && !s.replace_focused)))
-                    .child(toggle("Aa", s.options.case_sensitive, 0, cx))
-                    .child(toggle("ab", s.options.whole_word, 1, cx))
-                    .child(toggle(".*", s.options.regex, 2, cx)),
+                    .child(toggle(crate::codicons::CASE_SENSITIVE, "Match Case (Alt+C)", s.options.case_sensitive, 0, cx))
+                    .child(toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", s.options.whole_word, 1, cx))
+                    .child(toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", s.options.regex, 2, cx)),
             )
             .children(s.replace_open.then(|| {
                 div()
@@ -1063,16 +1065,16 @@ impl Workspace {
         let (ahead, behind) = (git.status.ahead, git.status.behind);
         let publish = git.status.branch.is_some() && git.status.upstream.is_none() && git.status.has_remote && !git.status.head.is_empty();
         let sync_label = if publish {
-            Some("☁ Publish Branch".to_owned())
+            Some((crate::codicons::CLOUD_UPLOAD, "Publish Branch".to_owned()))
         } else if git.status.upstream.is_some() && (ahead > 0 || behind > 0) {
-            Some(format!("⟳ Sync Changes  ↓{behind} ↑{ahead}"))
+            Some((crate::codicons::SYNC, format!("Sync Changes  ↓{behind} ↑{ahead}")))
         } else {
             None
         };
         let sync_label = sync_label.filter(|_| !can_commit);
 
         // A small square icon button for the repository row.
-        let icon = |id: &'static str, glyph: &'static str, enabled: bool, cx: &mut Context<Self>, command: Command| {
+        let icon = |id: &'static str, glyph: char, name: &'static str, enabled: bool, cx: &mut Context<Self>, command: Command| {
             div()
                 .id(id)
                 .w(rems(1.875))
@@ -1081,15 +1083,14 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .rounded_sm()
-                .text_size(rems(1.125))
+                .tooltip(self.tooltip(name, Some(command)))
                 .when(enabled, |d| d.cursor_pointer().hover(|s| s.bg(rgb(t.tab_active))))
-                .text_color(rgb(if enabled { t.text } else { t.dim }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if enabled {
                         this.run_command(command, false, cx);
                     }
                 }))
-                .child(glyph)
+                .child(crate::icons::glyph(glyph, 1.125, if enabled { t.text } else { t.dim }))
         };
 
         let sync_active = sync_label.is_some();
@@ -1115,7 +1116,10 @@ impl Workspace {
                         let command = if publish { Command::GitPush } else if sync_active { Command::GitSync } else { Command::GitCommit };
                         this.run_command(command, false, cx);
                     }))
-                    .child(sync_label.clone().unwrap_or_else(|| "✓ Commit".to_owned())),
+                    .child({
+                        let (icon, label) = sync_label.clone().unwrap_or((crate::codicons::CHECK, "Commit".to_owned()));
+                        div().flex().flex_row().items_center().gap(rems(0.5)).child(crate::icons::glyph(icon, 1.0, t.button_text)).child(label)
+                    }),
             )
             .child(
                 div()
@@ -1129,11 +1133,12 @@ impl Workspace {
                     .border_l_1()
                     .border_color(rgba(0xffffff55))
                     .hover(|s| s.opacity(0.85))
+                    .tooltip(self.tooltip("More Commit Actions...", None))
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         this.open_scm_menu(ev.position, cx);
                     }))
-                    .child("▾"),
+                    .child(crate::icons::glyph(crate::codicons::CHEVRON_DOWN, 1.0, t.button_text)),
             );
 
         div()
@@ -1150,14 +1155,27 @@ impl Workspace {
                     .h(rems(2.375))
                     .px(px(SCM_PAD))
                     .text_sm()
-                    .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(t.text)).child(format!("⎇ {branch}{sync}")))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(rems(0.375))
+                            .text_color(rgb(t.text))
+                            .child(crate::icons::glyph(crate::codicons::GIT_BRANCH, 1.0, t.dim))
+                            .child(format!("{branch}{sync}")),
+                    )
                     .child(
                         div()
                             .flex()
                             .flex_row()
-                            .child(icon("git-ai", "✦", can_commit && !self.ai_pending, cx, Command::GitGenerateMessage))
-                            .child(icon("git-commit-icon", "✓", can_commit, cx, Command::GitCommit))
-                            .child(icon("git-refresh", "⟳", true, cx, Command::GitRefresh))
+                            .child(icon("git-ai", crate::codicons::SPARKLE, "Write Commit Message with AI", can_commit && !self.ai_pending, cx, Command::GitGenerateMessage))
+                            .child(icon("git-commit-icon", crate::codicons::CHECK, "Commit", can_commit, cx, Command::GitCommit))
+                            .child(icon("git-refresh", crate::codicons::REFRESH, "Refresh", true, cx, Command::GitRefresh))
                             .child(
                                 div()
                                     .id("git-more")
@@ -1170,11 +1188,12 @@ impl Workspace {
                                     .rounded_sm()
                                     .cursor_pointer()
                                     .hover(|s| s.bg(rgb(t.tab_active)))
+                                    .tooltip(self.tooltip("More Actions...", None))
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                                         cx.stop_propagation();
                                         this.open_scm_menu(ev.position, cx);
                                     }))
-                                    .child("⋯"),
+                                    .child(crate::icons::glyph(crate::codicons::ELLIPSIS, 1.125, t.text)),
                             ),
                     ),
             )
@@ -1191,10 +1210,10 @@ impl Workspace {
                                 .filter_map(|i| rows.get(i).cloned().map(|r| (i, r)))
                                 .map(|(i, row)| match row {
                                     Row::Header { staged, count, open } => {
-                                        let (label, glyph, command) = if staged {
-                                            ("STAGED CHANGES", "−", Command::GitUnstageAll)
+                                        let (label, glyph, tip, command) = if staged {
+                                            ("STAGED CHANGES", crate::codicons::REMOVE, "Unstage All Changes", Command::GitUnstageAll)
                                         } else {
-                                            ("CHANGES", "+", Command::GitStageAll)
+                                            ("CHANGES", crate::codicons::ADD, "Stage All Changes", Command::GitStageAll)
                                         };
                                         let group = format!("scm-head-{}", usize::from(staged));
                                         div()
@@ -1220,7 +1239,7 @@ impl Workspace {
                                                 }
                                                 cx.notify();
                                             }))
-                                            .child(div().w(rems(1.125)).flex_none().flex().justify_center().text_size(rems(0.9375)).text_color(rgb(t.dim)).child(if open { "▾" } else { "▸" }))
+                                            .child(crate::icons::glyph(if open { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 1.0, t.dim))
                                             .child(div().flex_1().whitespace_nowrap().child(label))
                                             .child(
                                                 div()
@@ -1233,14 +1252,14 @@ impl Workspace {
                                                     .items_center()
                                                     .justify_center()
                                                     .rounded_sm()
-                                                    .text_size(rems(1.125))
                                                     .hover(|s| s.bg(rgb(t.border)))
                                                     .cursor_pointer()
+                                                    .tooltip(this.tooltip(tip, Some(command)))
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         cx.stop_propagation();
                                                         this.run_command(command, false, cx);
                                                     }))
-                                                    .child(glyph),
+                                                    .child(crate::icons::glyph(glyph, 1.0, t.text)),
                                             )
                                             .child(
                                                 div()
@@ -1271,12 +1290,12 @@ impl Workspace {
                                         let untracked = change.untracked;
                                         let (open_rel, stage_rel, discard_rel) = (change.path.clone(), change.path.clone(), change.path.clone());
                                         let group = format!("scm-file-{i}");
-                                        let action = |id: usize, glyph: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace) + 'static>| {
+                                        let action = |id: usize, glyph: char, tip: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace) + 'static>| {
                                             div()
                                                 .id(("scm-action", i * 4 + id))
                                                 .w(rems(1.625))
                                                 .h(rems(1.5))
-                                                .text_size(rems(1.0625))
+                                                .tooltip(this.tooltip(tip, None))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
@@ -1288,17 +1307,17 @@ impl Workspace {
                                                     f(this);
                                                     cx.notify();
                                                 }))
-                                                .child(glyph)
+                                                .child(crate::icons::glyph(glyph, 1.0, t.text))
                                         };
                                         let mut actions = div().flex().flex_row().flex_none().invisible().group_hover(group.clone(), |s| s.visible());
                                         if is_staged {
                                             let rel = stage_rel.clone();
-                                            actions = actions.child(action(1, "−", cx, Box::new(move |w| w.scm_unstage(rel.clone()))));
+                                            actions = actions.child(action(1, crate::codicons::REMOVE, "Unstage Changes", cx, Box::new(move |w| w.scm_unstage(rel.clone()))));
                                         } else {
                                             let rel = discard_rel.clone();
-                                            actions = actions.child(action(0, "↩", cx, Box::new(move |w| w.scm_confirm_discard(rel.clone(), untracked))));
+                                            actions = actions.child(action(0, crate::codicons::DISCARD, "Discard Changes", cx, Box::new(move |w| w.scm_confirm_discard(rel.clone(), untracked))));
                                             let rel = stage_rel.clone();
-                                            actions = actions.child(action(1, "+", cx, Box::new(move |w| w.scm_stage(rel.clone()))));
+                                            actions = actions.child(action(1, crate::codicons::ADD, "Stage Changes", cx, Box::new(move |w| w.scm_stage(rel.clone()))));
                                         }
                                         div()
                                             .id(("scm-file", i))
@@ -1409,9 +1428,8 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .text_size(rems(1.1875))
                             .hover(|s| s.bg(rgb(t.border)))
-                            .text_color(rgb(t.dim))
+                            .tooltip(self.tooltip("Close Panel", Some(Command::TogglePanel)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.panel_visible = false;
                                 if this.focus == Focus::Terminal {
@@ -1419,7 +1437,7 @@ impl Workspace {
                                 }
                                 cx.notify();
                             }))
-                            .child("×"),
+                            .child(crate::icons::glyph(crate::codicons::CLOSE, 1.125, t.dim)),
                     ),
             )
             .child(div().flex_1().min_h_0().child(body))
@@ -1804,7 +1822,13 @@ impl Workspace {
                             .cursor_pointer()
                             .text_color(rgb(t.text))
                             .on_click(cx.listener(|this, _, _, cx| this.run_command(Command::GitCheckout, false, cx)))
-                            .child(format!("⎇ {branch}{dirty}{sync}{busy}"))
+                            .tooltip(self.tooltip("Checkout Branch...", Some(Command::GitCheckout)))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(rems(0.25))
+                            .child(crate::icons::glyph(crate::codicons::GIT_BRANCH, 0.875, t.text))
+                            .child(format!("{branch}{dirty}{sync}{busy}"))
                     }))
                     .child(
                         div()

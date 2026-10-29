@@ -459,6 +459,10 @@ pub(crate) struct Workspace {
     pub debug_cols: [f32; 3],
     pub viewport: (f32, f32),
     pub resize: Option<crate::resize::Drag>,
+    /// The session (open files) is saved only once it has been restored, so launching never overwrites it with nothing.
+    pub session_ready: bool,
+    pub session_saved: Option<forge_core::session::Session>,
+    pub session_checked: Instant,
     pub preview_open: bool,
     pub md_cache: Option<(usize, u64, Vec<forge_core::markdown::Block>)>,
     /// The preview's scroll state, and where the editor and preview were (as fractions of their height) at the last sync.
@@ -610,6 +614,9 @@ impl Workspace {
             debug_cols: saved_layout.debug_columns,
             viewport: (1200.0, 800.0),
             resize: None,
+            session_ready: false,
+            session_saved: None,
+            session_checked: Instant::now(),
             preview_open: false,
             md_cache: None,
             preview_scroll: gpui::ScrollHandle::new(),
@@ -644,9 +651,13 @@ impl Workspace {
         };
         workspace.lsp.set_overrides(workspace.settings.language_servers.clone());
         workspace.init_git();
-        if let Some(file) = initial_file {
-            workspace.open_file(file, None, cx);
-        }
+        workspace.restore_session(initial_file, cx);
+        // Closing the window saves the session one last time, however recently it last changed.
+        cx.on_app_quit(|this, _| {
+            this.save_session(true);
+            std::future::ready(())
+        })
+        .detach();
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(TICK).await;
             if this.update(cx, |workspace, cx| workspace.tick(cx)).is_err() {
@@ -1135,6 +1146,7 @@ impl Workspace {
         }
         changed |= self.poll_background();
         changed |= self.debug_tick(cx);
+        self.save_session(false);
         // The editor scrolls during layout, after render has run, so the preview is kept in step here.
         if self.preview_open {
             if let Some((g, vi)) = self.active_ix().filter(|(g, _)| self.is_markdown(*g)) {
