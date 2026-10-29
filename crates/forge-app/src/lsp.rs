@@ -87,6 +87,31 @@ impl LspManager {
         self.spec(language).map(|s| s.key)
     }
 
+    /// Whether the server for `language` has been launched but has not finished starting.
+    pub fn is_starting(&self, language: Language) -> bool {
+        self.spec(language).and_then(|s| self.servers.get(&s.key)).is_some_and(|server| !matches!(server.state, State::Ready))
+    }
+
+    /// Start the servers for `languages` (most wanted first), skipping ones that are not installed
+    /// and ones that share a server already started. At most `limit` are launched. Returns their names.
+    pub fn autostart(&mut self, languages: &[Language], limit: usize) -> Vec<String> {
+        let mut started = Vec::new();
+        let mut keys = std::collections::HashSet::new();
+        for &language in languages {
+            if started.len() >= limit {
+                break;
+            }
+            let Some(spec) = self.spec(language) else { continue };
+            if !keys.insert(spec.key.clone()) || self.servers.contains_key(&spec.key) || servers::resolve(&spec).is_err() {
+                continue;
+            }
+            if self.start(language).is_ok() {
+                started.push(spec.title.clone());
+            }
+        }
+        started
+    }
+
     /// Why a file in `language` has no running server to talk to, for status messages and logs.
     pub fn unavailable_reason(&self, language: Language) -> String {
         let Some(spec) = self.spec(language) else {

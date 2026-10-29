@@ -10,7 +10,19 @@ const HIDDEN: &[&str] = &[".git", "target", "node_modules"];
 pub fn project_root(file: &Path) -> PathBuf {
     let start = file.parent().unwrap_or(file);
     let ancestor_with = |marker: &str| start.ancestors().find(|dir| dir.join(marker).exists()).map(Path::to_path_buf);
-    ancestor_with(".git").or_else(|| ancestor_with("Cargo.toml")).unwrap_or_else(|| start.to_path_buf())
+    // The nearest repository, else the nearest project file of any ecosystem. Language servers
+    // resolve imports from this folder, so a Python file opened on its own must not be rooted in
+    // its own package directory.
+    ancestor_with(".git")
+        .or_else(|| ["Cargo.toml", "pyproject.toml", "setup.py", "package.json", "go.mod", "pom.xml"].iter().find_map(|m| ancestor_with(m)))
+        .or_else(|| python_package_parent(start))
+        .unwrap_or_else(|| start.to_path_buf())
+}
+
+/// For a folder inside a Python package (`__init__.py`), the folder above the outermost package.
+fn python_package_parent(start: &Path) -> Option<PathBuf> {
+    let outermost = start.ancestors().take_while(|dir| dir.join("__init__.py").exists()).last()?;
+    outermost.parent().map(Path::to_path_buf)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -152,6 +164,23 @@ mod tests {
         assert_eq!(project_root(&loose), loose.parent().unwrap());
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(loose.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn project_root_knows_other_ecosystems_and_python_packages() {
+        let root = scratch("eco");
+        std::fs::create_dir_all(root.join("web/src")).unwrap();
+        std::fs::write(root.join("web/package.json"), "{}").unwrap();
+        assert_eq!(project_root(&root.join("web/src/app.ts")), root.join("web"));
+
+        std::fs::create_dir_all(root.join("svc/pkg/sub")).unwrap();
+        std::fs::write(root.join("svc/pkg/__init__.py"), "").unwrap();
+        std::fs::write(root.join("svc/pkg/sub/__init__.py"), "").unwrap();
+        assert_eq!(project_root(&root.join("svc/pkg/sub/mod.py")), root.join("svc"), "the folder above the outermost package");
+
+        std::fs::write(root.join("svc/pyproject.toml"), "").unwrap();
+        assert_eq!(project_root(&root.join("svc/pkg/sub/mod.py")), root.join("svc"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

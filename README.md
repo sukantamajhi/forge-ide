@@ -91,6 +91,12 @@ nothing global is touched). Servers are looked up there first, then on `PATH`. O
 | --- | --- |
 | TypeScript/JavaScript (+JSX/TSX), HTML, CSS/SCSS/Less, JSON, YAML, Shell, Python (pyright), Dockerfile, PHP (intelephense) via npm; XML (LemMinX, needs Java) and Markdown (marksman) by download | rust-analyzer, gopls, clangd, jdtls, csharp-ls, ruby-lsp, lua-language-server, taplo, sqls |
 
+When you open a folder, Forge starts the servers for the languages it finds there (up to four, only languages that
+are a real part of the project, and only servers that are installed), so go to definition works as soon as you open a
+file. A request made while a server is still loading waits and runs when it is ready. Turn this off with
+`"lsp.autoStart": false`. A file opened on its own is rooted at its repository, or its `pyproject.toml`,
+`package.json`, `go.mod` or `Cargo.toml`, or above its Python package.
+
 Add or replace a server in `settings.json`, keyed by language id:
 `"languageServers": { "go": { "command": "gopls" }, "python": { "command": "pylsp", "args": [] } }`.
 Not every language has a server (`.env`, INI, Makefile, ignore files and diffs get highlighting only). A missing

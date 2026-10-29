@@ -440,6 +440,10 @@ pub(crate) struct Workspace {
     pub ai_pending: bool,
     /// Typed by the user; held in memory for this session and never written anywhere.
     pub ai_key: Option<String>,
+    /// A language-server request made while the server was still starting: run it once it is ready.
+    pub lsp_retry: Option<(String, RequestTag, Instant)>,
+    /// The folder's languages have not been scanned for servers to start yet.
+    pub autostart_pending: bool,
     pub scm_scroll: UniformListScrollHandle,
     pub branches: Vec<Branch>,
     pub history: Vec<Commit>,
@@ -555,6 +559,8 @@ impl Workspace {
             scm_changes_open: true,
             ai_pending: false,
             ai_key: None,
+            lsp_retry: None,
+            autostart_pending: false,
             scm_scroll: UniformListScrollHandle::new(),
             branches: Vec::new(),
             history: Vec::new(),
@@ -583,6 +589,10 @@ impl Workspace {
         })
         .detach();
         workspace.activate_for(forge_ext_host::host::ActivationEvent::Startup);
+        if workspace.settings.lsp_autostart {
+            workspace.autostart_pending = true;
+            workspace.ensure_file_index();
+        }
         if let Ok(script) = std::env::var("FORGE_REPLAY") {
             workspace.start_replay(script, cx);
         }
@@ -1006,6 +1016,14 @@ impl Workspace {
 
     pub fn request_at(&mut self, method: &str, tag: RequestTag) {
         let Some((language, uri, at)) = self.lsp_target() else {
+            let language = self.active_doc().and_then(|d| d.language);
+            if language.is_some_and(|l| self.lsp.is_starting(l)) {
+                // The server is still loading the project: do this as soon as it is ready.
+                eprintln!("[lsp] {method}: server is starting, will retry when ready");
+                self.lsp_retry = Some((method.to_owned(), tag, Instant::now()));
+                self.set_status("Language server is still starting; this will run as soon as it is ready");
+                return;
+            }
             let reason = self.lsp_unavailable_reason();
             eprintln!("[lsp] {method}: no target: {reason}");
             self.set_status(format!("Language server unavailable: {reason}"));
@@ -1045,6 +1063,11 @@ impl Workspace {
                     let serves = self.docs[ix].language.and_then(|l| self.lsp.key_for(l)).as_deref() == Some(key.as_str());
                     if serves && !self.docs[ix].lsp_open {
                         self.attach_lsp(ix);
+                    }
+                }
+                if let Some((method, tag, at)) = self.lsp_retry.take() {
+                    if at.elapsed() < std::time::Duration::from_secs(90) {
+                        self.request_at(&method, tag);
                     }
                 }
             }

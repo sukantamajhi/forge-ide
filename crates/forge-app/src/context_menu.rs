@@ -179,9 +179,10 @@ impl Workspace {
     pub fn render_context_menu(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Option<Div> {
         let menu = self.context_menu.as_ref()?;
         let t = &self.theme;
-        let height = FRAME_PADDING
-            + menu.entries.iter().map(|e| if matches!(e, MenuEntry::Separator) { SEPARATOR_HEIGHT } else { ROW_HEIGHT }).sum::<f32>();
-        let x = f32::from(menu.position.x).min(f32::from(viewport.width) - MENU_WIDTH).max(0.0);
+        let k = (self.settings.font_size / 14.0).max(0.5);
+        let height = (FRAME_PADDING * k)
+            + menu.entries.iter().map(|e| if matches!(e, MenuEntry::Separator) { SEPARATOR_HEIGHT * k } else { ROW_HEIGHT * k }).sum::<f32>();
+        let x = f32::from(menu.position.x).min(f32::from(viewport.width) - MENU_WIDTH * k).max(0.0);
         let y = f32::from(menu.position.y).min(f32::from(viewport.height) - height).max(0.0);
         let rows: Vec<AnyElement> = menu
             .entries
@@ -189,7 +190,7 @@ impl Workspace {
             .enumerate()
             .map(|(ix, entry)| match entry {
                 MenuEntry::Separator => div()
-                    .h(px(SEPARATOR_HEIGHT))
+                    .h(px(SEPARATOR_HEIGHT * k))
                     .px_2()
                     .flex()
                     .items_center()
@@ -199,7 +200,7 @@ impl Workspace {
                     let enabled = *enabled;
                     div()
                         .id(("context-menu-item", ix))
-                        .h(px(ROW_HEIGHT))
+                        .h(px(ROW_HEIGHT * k))
                         .px_3()
                         .flex()
                         .flex_row()
@@ -229,7 +230,7 @@ impl Workspace {
                 .absolute()
                 .left(px(x))
                 .top(px(y))
-                .w(px(MENU_WIDTH))
+                .w(px(MENU_WIDTH * k))
                 .py_1()
                 .bg(rgb(t.popup))
                 .border_1()

@@ -8,6 +8,7 @@ mod render;
 mod host_support;
 mod snippet_support;
 mod ext_support;
+mod file_icons;
 mod server_support;
 mod tree;
 mod workspace;

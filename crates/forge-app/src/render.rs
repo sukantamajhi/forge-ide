@@ -38,6 +38,12 @@ struct LineCtx {
     focused: bool,
 }
 
+/// The small coloured file-type badge shown before a file's name.
+fn file_badge(name: &str) -> Div {
+    let (label, color) = crate::file_icons::badge(name);
+    div().w(rems(1.5)).flex_none().flex().justify_center().text_size(rems(0.6875)).font_weight(FontWeight::BOLD).text_color(rgb(color)).child(label)
+}
+
 fn px_f(v: f32) -> Pixels {
     px(v)
 }
@@ -97,6 +103,7 @@ impl Workspace {
                     this.completion = None;
                     cx.notify();
                 }))
+                .child(file_badge(&doc.name()))
                 .child(doc.name())
                 .child(
                     div()
@@ -525,7 +532,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.sidebar_width()))
             .h_full()
             .bg(rgb(t.sidebar))
             .border_r_1()
@@ -602,7 +609,20 @@ impl Workspace {
                                         .flex_row()
                                         .justify_between()
                                         .pr_2()
-                                        .child(div().text_color(rgb(name_color)).child(format!("{marker}{}", entry.name)))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap(rems(0.25))
+                                                .text_color(rgb(name_color))
+                                                .child(if entry.is_dir {
+                                                    div().w(rems(1.5)).flex_none().flex().justify_center().text_color(rgb(t.dim)).child(marker.trim().to_owned())
+                                                } else {
+                                                    file_badge(&entry.name)
+                                                })
+                                                .child(entry.name.clone()),
+                                        )
                                         .child(div().text_xs().text_color(rgb(name_color)).child(badge))
                                 })
                                 .collect()
@@ -715,9 +735,14 @@ impl Workspace {
 
     // ---- source control ----
 
+    /// The sidebar's width: 300px at the default zoom, growing and shrinking with it.
+    pub fn sidebar_width(&self) -> f32 {
+        SIDEBAR_WIDTH * (self.settings.font_size / 14.0).clamp(0.7, 3.0)
+    }
+
     /// Characters that fit on one row of the commit message box.
     pub fn scm_wrap_cols(&self) -> usize {
-        let inner = SIDEBAR_WIDTH - 1.0 - 2.0 * SCM_PAD - 2.0 * (1.0 + INPUT_PAD);
+        let inner = self.sidebar_width() - 1.0 - 2.0 * SCM_PAD - 2.0 * (1.0 + INPUT_PAD);
         ((inner / f32::from(self.char_width).max(1.0)).floor() as usize).max(8)
     }
 
@@ -1139,6 +1164,8 @@ impl Workspace {
                                                     .flex()
                                                     .flex_row()
                                                     .gap(rems(0.375))
+                                                    .items_center()
+                                                    .child(file_badge(&name))
                                                     .child(div().text_color(rgb(color)).child(name))
                                                     .child(div().text_sm().text_color(rgb(t.dim)).child(dir)),
                                             )
@@ -1646,6 +1673,9 @@ impl Render for Workspace {
         self.sync_terminal_size(window.viewport_size().width);
         let cols = self.scm_wrap_cols();
         self.scm_message.set_wrap(cols);
+        // One rem is 16px at the default zoom. Zooming changes the font size, and every size written in
+        // rems (buttons, icons, rows) follows it.
+        window.set_rem_size(px(16.0 * self.settings.font_size / 14.0));
         let t = self.theme.clone();
 
         let mut centre = div().flex().flex_col().flex_1().min_w_0().h_full();

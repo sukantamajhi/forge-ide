@@ -429,6 +429,27 @@ impl Workspace {
         self.refresh_overlay();
     }
 
+    /// Start the language servers for the languages found in the project's files, most common first.
+    fn autostart_servers(&mut self, files: &[PathBuf]) {
+        let mut counts: std::collections::HashMap<forge_syntax::Language, usize> = std::collections::HashMap::new();
+        for path in files {
+            if let Some(language) = forge_syntax::Language::from_path(path) {
+                *counts.entry(language).or_default() += 1;
+            }
+        }
+        let mut ranked: Vec<_> = counts.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name().cmp(b.0.name())));
+        // Only languages that are a real part of the project: a few helper scripts in a Rust
+        // project should not launch a JavaScript server.
+        let top = ranked.first().map_or(0, |(_, n)| *n);
+        let languages: Vec<_> = ranked.into_iter().enumerate().filter(|(i, (_, n))| *i == 0 || (*n >= 3 && *n * 10 >= top)).map(|(_, (language, _))| language).collect();
+        let started = self.lsp.autostart(&languages, 4);
+        eprintln!("[lsp] autostart: {started:?}");
+        if !started.is_empty() {
+            self.set_status(format!("Starting language servers: {}", started.join(", ")));
+        }
+    }
+
     pub fn ensure_file_index(&mut self) {
         if self.file_index.is_some() || self.file_index_rx.is_some() {
             return;
@@ -1056,6 +1077,9 @@ impl Workspace {
         }
         if let Some(rx) = &self.file_index_rx {
             if let Ok(files) = rx.try_recv() {
+                if std::mem::take(&mut self.autostart_pending) {
+                    self.autostart_servers(&files);
+                }
                 self.file_index = Some(files);
                 self.file_index_rx = None;
                 self.refresh_overlay();
@@ -1355,7 +1379,7 @@ impl Workspace {
 
     /// Match the terminal grid to the panel size.
     pub fn sync_terminal_size(&mut self, viewport_width: Pixels) {
-        let sidebar = if self.sidebar_visible { crate::workspace::SIDEBAR_WIDTH } else { 0.0 };
+        let sidebar = if self.sidebar_visible { self.sidebar_width() } else { 0.0 };
         let cols = (f32::from(viewport_width) - sidebar - 24.0) / f32::from(self.char_width).max(1.0);
         let rows = (crate::workspace::PANEL_HEIGHT - 34.0) / self.line_height();
         for terminal in &mut self.terminals {
