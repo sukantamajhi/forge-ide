@@ -31,3 +31,4 @@ pub const DEBUG_STOP: char = '\u{ead7}';
 pub const ADD: char = '\u{ea60}';
 pub const REMOVE: char = '\u{eb3b}';
 pub const DISCARD: char = '\u{eae2}';
+pub const ERROR: char = '\u{ea87}';

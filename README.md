@@ -80,6 +80,13 @@ highlighting covers Rust, JSON, JavaScript, Python and TOML.
   { "key": "ctrl+d", "command": "-editor.action.addSelectionToNextFindMatch" } ]
 ```
 
+## Git progress
+
+Commit, push, publish, pull, sync and fetch run in the background and show that they are running: the main button turns
+into "Committing…" / "Pushing…" / "Publishing branch…" with a pulsing icon, counting dots and a sliding bar, the status bar
+shows the same, and other git actions are ignored until it finishes. The result then appears in the status bar for ten
+seconds, green on success and red on failure, naming the operation that failed.
+
 ## AI commit messages
 
 Stage your changes, then press **Write message with AI** in the Source Control view (or run `Git: Generate Commit
@@ -170,19 +177,34 @@ edits, crash isolation; automated, skipped without Node) and in a real window. *
 run yet**: that is the next step and needs you to choose which ones.
 
 
-## Not built yet
+## Status: what is built and what is not
 
-Minimap, word wrap, replace in files, side-by-side diffs, staging individual hunks or lines, merge-conflict
-resolution, rebase, git credentials prompts (commands fail instead of prompting), debugger, multi-root
-workspaces, a settings UI, right-click context menus, drag-and-drop of tabs or text, sticky scroll, inlay
-hints, semantic highlighting, per-language settings, and **running extension code** (see Extensions). Text layout assumes a monospace font, one cell per char (tabs = 4), no soft wrap.
-Several definitions are not offered as a list (the first is taken); completions are plain text, and snippets are not offered in the completion popup;
-files must be UTF-8 (a leading BOM is kept out of the text and written back on save) and under 64 MiB; syntax
-highlighting is skipped above 4 MiB. Embedded code is highlighted (`<script>` and `<style>` in HTML, fenced code in
-Markdown, nested such as HTML in a Markdown fence) but embedded regions over 512 KiB are left plain, and there is no
-highlighting inside template strings, `style=""` attributes or PHP/HTML mixes. SCSS/Less use the CSS grammar, and
-`.h` files are treated as C. VS Code's own extensions cannot supply language servers yet, so "every VS Code language
-server" is not covered: only the servers above. The plan for extension compatibility is in `docs/EXTENSIONS_PLAN.md`.
+**Built** (details in the sections above): multi-cursor editing, find/replace and Replace in Files, Quick Open and the
+Command Palette, language-server features (with a go-to-definition picker and servers started automatically), a
+VS Code-style Source Control view (stage, commit, push, publish, pull, sync, fetch, stash, branches, history, blame, AI
+commit messages, visible progress and results), Markdown preview with scroll sync, minimap, word wrap, a Settings page,
+right-click menus, resizable and remembered panels, editor tab-bar buttons and menu, Codicons icons with hover tooltips,
+session restore, debugging for Python / Node / Rust, VS Code extensions from Open VSX (themes, languages, grammars,
+snippets, and a partial `vscode` API for running code), and syntax highlighting for 29 languages.
+
+**Not built yet:**
+
+- Source control: side-by-side diffs, staging individual hunks or lines, merge-conflict resolution, rebase, credential
+  prompts (commands that need a login fail instead of asking), cancelling a running git operation.
+- Workbench: multi-root workspaces, drag-and-drop of tabs or text, sticky scroll, inlay hints, semantic highlighting,
+  per-language settings, restoring unsaved edits or a second editor group's tabs, mouse-driven checks of the new
+  hover tooltips (verified by keyboard replay only).
+- Debugging: only Python, JavaScript/Node and Rust; no conditional breakpoints or watch expressions.
+- Extensions: webviews, tree views, terminals, notebooks, debugging and tasks APIs, language-feature providers, and
+  VS Code's own extensions as language servers. No third-party extension has been run yet. Plan: `docs/EXTENSIONS_PLAN.md`.
+- Text and files: layout assumes a monospace font, one cell per char (tabs = 4); files must be UTF-8 (a leading BOM is
+  kept out of the text and written back on save) and under 64 MiB; highlighting is skipped above 4 MiB.
+- Highlighting: embedded code is highlighted (`<script>`/`<style>` in HTML, fenced code in Markdown) but not above
+  512 KiB, and not inside template strings, `style=""` attributes or PHP/HTML mixes. SCSS/Less use the CSS grammar and
+  `.h` files are treated as C.
+- Completions are plain text, and snippets are not offered in the completion popup.
+- Language servers: rust-analyzer, gopls, clangd, jdtls, csharp-ls, ruby-lsp, lua-language-server, taplo and sqls are
+  configured but you install them yourself; `.env`, INI, Makefile, ignore files and diffs get highlighting only.
 
 ## Testing aid
 

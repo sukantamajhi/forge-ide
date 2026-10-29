@@ -24,6 +24,7 @@ fn job_title(label: &str) -> &'static str {
         "pull" => "Pulling…",
         "sync" => "Synchronizing…",
         "push" => "Pushing…",
+        "publish" => "Publishing branch…",
         "fetch" => "Fetching…",
         "commit" => "Committing…",
         "checkout" | "branch" => "Switching branch…",
@@ -51,6 +52,7 @@ impl Workspace {
                 epoch: 0,
                 decor: HashMap::new(),
                 job: None,
+                job_started: None,
             });
         }
     }
@@ -87,6 +89,7 @@ impl Workspace {
             return;
         }
         g.job = Some(job_title(label).to_owned());
+        g.job_started = Some(Instant::now());
         let (root, tx, label) = (g.root.clone(), self.git_tx.clone(), label.to_owned());
         std::thread::spawn(move || {
             let result = f(&root);
@@ -108,6 +111,11 @@ impl Workspace {
         while let Ok(msg) = self.git_rx.try_recv() {
             changed = true;
             self.handle_git_msg(msg, cx);
+        }
+        // While an operation runs, repaint every tick so its progress animates; and once a result's
+        // colour is due to fade, once more.
+        if self.git.as_ref().is_some_and(|g| g.job.is_some()) || self.ai_pending || (self.status_kind != crate::workspace::StatusKind::Info && self.status_at.elapsed().as_secs() == 10) {
+            changed = true;
         }
         let due = self.git.as_ref().is_some_and(|g| !g.refreshing && (g.refresh_wanted || g.last_refresh.elapsed() > AUTO_REFRESH));
         if due {
@@ -134,6 +142,7 @@ impl Workspace {
             GitMsg::Done { label, result } => {
                 if let Some(g) = self.git.as_mut() {
                     g.job = None;
+                    g.job_started = None;
                     g.head.clear();
                     g.head_pending.clear();
                     g.epoch += 1;
@@ -147,9 +156,9 @@ impl Workspace {
                         if label == "init" {
                             self.init_git();
                         }
-                        self.set_status(if message.is_empty() { "Done".to_owned() } else { message });
+                        self.set_result(if message.is_empty() { "Done".to_owned() } else { message }, true);
                     }
-                    Err(error) => self.set_status(format!("Git: {error}")),
+                    Err(error) => self.set_result(format!("Git {}failed: {error}", if label.is_empty() { String::new() } else { format!("{label} ") }), false),
                 }
                 // Checkout, pull, stash and discard rewrite files under the open tabs.
                 self.reload_clean_docs();
@@ -168,7 +177,7 @@ impl Workspace {
                         self.sidebar_visible = true;
                         self.sidebar_view = SidebarView::Git;
                         self.focus = Focus::Scm;
-                        self.set_status("Generated a commit message. Edit it if needed, then press Enter to commit.");
+                        self.set_result("Generated a commit message. Edit it if needed, then press Enter to commit.", true);
                     }
                     Err(error) => {
                         // A rejected key is forgotten so the next try asks for a new one.
@@ -176,7 +185,7 @@ impl Workspace {
                             self.ai_key = None;
                             let _ = forge_core::ai::forget_saved_key();
                         }
-                        self.set_status(format!("AI commit message: {error}"));
+                        self.set_result(format!("AI commit message failed: {error}"), false);
                     }
                 }
             }
@@ -545,7 +554,14 @@ impl Workspace {
             }
             GitCreateBranch => self.open_overlay(OverlayKind::GitCreateBranch, ""),
             GitPull => self.git_job("pull", git::pull),
-            GitPush => self.git_job("push", git::push),
+            GitPush => {
+                let (publish, branch, ahead) = self.git.as_ref().map_or((false, String::new(), 0), |g| (g.status.upstream.is_none(), g.status.branch.clone().unwrap_or_default(), g.status.ahead));
+                if publish {
+                    self.git_job("publish", move |r| git::push(r).map(|_| format!("Published branch {branch} to the remote")));
+                } else {
+                    self.git_job("push", move |r| git::push(r).map(|_| format!("Pushed {ahead} commit{}", if ahead == 1 { "" } else { "s" })));
+                }
+            }
             GitSync => self.git_job("sync", git::sync),
             GitFetch => self.git_job("fetch", git::fetch),
             GitStash => self.git_job("stash", git::stash),

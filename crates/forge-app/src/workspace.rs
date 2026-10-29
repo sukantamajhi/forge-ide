@@ -362,6 +362,14 @@ pub(crate) enum GitMsg {
     AiMessage(Result<String, String>),
 }
 
+/// What a status message is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusKind {
+    Info,
+    Success,
+    Error,
+}
+
 pub(crate) struct GitState {
     pub root: PathBuf,
     pub status: Status,
@@ -376,8 +384,9 @@ pub(crate) struct GitState {
     pub epoch: u64,
     /// Letter shown beside a path in the explorer; folders get a dot.
     pub decor: HashMap<PathBuf, char>,
-    /// Name of an operation running in the background ("Pulling"...).
+    /// Name of an operation running in the background ("Pulling"...), and when it started.
     pub job: Option<String>,
+    pub job_started: Option<Instant>,
 }
 
 pub(crate) struct Workspace {
@@ -394,6 +403,9 @@ pub(crate) struct Workspace {
     /// First keys of a multi-step chord already pressed (e.g. `ctrl+k`).
     pub pending_chord: String,
     pub status: SharedString,
+    /// Whether the status message reports success or failure of something the user did, and when it was set.
+    pub status_kind: StatusKind,
+    pub status_at: Instant,
     pub char_width: Pixels,
     pub clipboard_lines: Option<String>,
     pub last_typing: Option<Instant>,
@@ -549,6 +561,8 @@ impl Workspace {
             keymap,
             pending_chord: String::new(),
             status: status.into(),
+            status_kind: StatusKind::Info,
+            status_at: Instant::now(),
             clipboard_lines: None,
             last_typing: None,
             close_armed: None,
@@ -754,6 +768,15 @@ impl Workspace {
 
     pub fn set_status(&mut self, text: impl Into<SharedString>) {
         self.status = text.into();
+        self.status_kind = StatusKind::Info;
+        self.status_at = Instant::now();
+    }
+
+    /// Report how something the user started ended: shown green or red in the status bar for a few seconds.
+    pub fn set_result(&mut self, text: impl Into<SharedString>, ok: bool) {
+        self.status = text.into();
+        self.status_kind = if ok { StatusKind::Success } else { StatusKind::Error };
+        self.status_at = Instant::now();
     }
 
     pub fn doc_index(&self, path: &Path) -> Option<usize> {

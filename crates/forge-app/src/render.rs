@@ -1058,7 +1058,10 @@ impl Workspace {
         }
         let branch = git.status.branch.clone().unwrap_or_else(|| format!("detached at {}", git.status.head));
         let sync = if git.status.upstream.is_some() { format!("  ↓{} ↑{}", git.status.behind, git.status.ahead) } else { String::new() };
-        let can_commit = !staged.is_empty();
+        // An operation (commit, push, publish, sync...) running in the background: its name and how long it has run.
+        let working = git.job.clone().map(|name| (name, git.job_started.map_or(0, |at| at.elapsed().as_millis() as u64)));
+        let busy = working.is_some();
+        let can_commit = !staged.is_empty() && !busy;
         let nothing = staged.is_empty() && unstaged.is_empty();
         // With nothing staged, the primary button is what comes after committing: publish a branch
         // that has no upstream yet, or sync one that is ahead of or behind it.
@@ -1071,7 +1074,7 @@ impl Workspace {
         } else {
             None
         };
-        let sync_label = sync_label.filter(|_| !can_commit);
+        let sync_label = sync_label.filter(|_| !can_commit && !busy);
 
         // A small square icon button for the repository row.
         let icon = |id: &'static str, glyph: char, name: &'static str, enabled: bool, cx: &mut Context<Self>, command: Command| {
@@ -1095,6 +1098,7 @@ impl Workspace {
 
         let sync_active = sync_label.is_some();
         let commit_button = div()
+            .relative()
             .flex()
             .flex_row()
             .w_full()
@@ -1103,7 +1107,13 @@ impl Workspace {
             .overflow_hidden()
             .bg(rgb(t.button))
             .text_color(rgb(t.button_text))
-            .when(!can_commit && sync_label.is_none(), |d| d.opacity(0.5))
+            .when(!can_commit && sync_label.is_none() && !busy, |d| d.opacity(0.5))
+            .when(busy, |d| d.opacity(0.9))
+            // While work runs, a bar slides along the bottom edge of the button.
+            .children(working.as_ref().map(|(_, ms)| {
+                let along = (*ms % 1400) as f32 / 1400.0;
+                div().absolute().bottom_0().left(relative(along * 0.75)).w(relative(0.25)).h(px(3.0)).rounded_full().bg(rgba(0xffffffdd))
+            }))
             .child(
                 div()
                     .id("git-commit")
@@ -1111,12 +1121,28 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when(can_commit || sync_label.is_some(), |d| d.cursor_pointer().hover(|s| s.opacity(0.85)))
+                    .when((can_commit || sync_label.is_some()) && !busy, |d| d.cursor_pointer().hover(|s| s.opacity(0.85)))
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        // Nothing starts while another operation is still running.
+                        if this.git.as_ref().is_some_and(|g| g.job.is_some()) {
+                            return;
+                        }
                         let command = if publish { Command::GitPush } else if sync_active { Command::GitSync } else { Command::GitCommit };
                         this.run_command(command, false, cx);
                     }))
-                    .child({
+                    .child(if let Some((name, ms)) = working.clone() {
+                        // "Committing" with dots that count up, and the icon pulsing: it is plainly doing something.
+                        let dots = ".".repeat(((ms / 350) % 4) as usize);
+                        let verb = name.trim_end_matches('…').to_owned();
+                        let pulse = if (ms / 400) % 2 == 0 { 1.0 } else { 0.45 };
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(rems(0.5))
+                            .child(div().opacity(pulse).child(crate::icons::glyph(crate::codicons::SYNC, 1.0, t.button_text)))
+                            .child(div().min_w(rems(9.0)).child(format!("{verb}{dots}")))
+                    } else {
                         let (icon, label) = sync_label.clone().unwrap_or((crate::codicons::CHECK, "Commit".to_owned()));
                         div().flex().flex_row().items_center().gap(rems(0.5)).child(crate::icons::glyph(icon, 1.0, t.button_text)).child(label)
                     }),
@@ -1173,7 +1199,7 @@ impl Workspace {
                         div()
                             .flex()
                             .flex_row()
-                            .child(icon("git-ai", crate::codicons::SPARKLE, "Write Commit Message with AI", can_commit && !self.ai_pending, cx, Command::GitGenerateMessage))
+                            .child(icon("git-ai", crate::codicons::SPARKLE, if self.ai_pending { "Writing a commit message..." } else { "Write Commit Message with AI" }, can_commit && !self.ai_pending, cx, Command::GitGenerateMessage))
                             .child(icon("git-commit-icon", crate::codicons::CHECK, "Commit", can_commit, cx, Command::GitCommit))
                             .child(icon("git-refresh", crate::codicons::REFRESH, "Refresh", true, cx, Command::GitRefresh))
                             .child(
@@ -1765,7 +1791,23 @@ impl Workspace {
                     (d.message.lines().next().unwrap_or_default().to_owned(), if d.severity == Severity::Error { t.error } else { t.warning })
                 })
             })
-            .unwrap_or_else(|| (self.status.to_string(), t.dim));
+            .unwrap_or_else(|| {
+                // A result the user just caused is green or red for ten seconds, then fades back.
+                let recent = self.status_at.elapsed().as_secs() < 10;
+                let color = match (self.status_kind, recent) {
+                    (crate::workspace::StatusKind::Success, true) => t.git_added,
+                    (crate::workspace::StatusKind::Error, true) => t.error,
+                    _ => t.dim,
+                };
+                (self.status.to_string(), color)
+            });
+        let result_icon = (self.status_at.elapsed().as_secs() < 10)
+            .then(|| match self.status_kind {
+                crate::workspace::StatusKind::Success => Some(crate::codicons::CHECK),
+                crate::workspace::StatusKind::Error => Some(crate::codicons::ERROR),
+                crate::workspace::StatusKind::Info => None,
+            })
+            .flatten();
         let (errors, warnings) = self.docs.iter().fold((0, 0), |(e, w), d| {
             (e + d.diagnostics.iter().filter(|x| x.severity == Severity::Error).count(), w + d.diagnostics.iter().filter(|x| x.severity == Severity::Warning).count())
         });
@@ -1815,7 +1857,14 @@ impl Workspace {
                         let dirty = if g.status.changes.is_empty() { "" } else { "*" };
                         let branch = g.status.branch.clone().unwrap_or_else(|| format!("({})", g.status.head));
                         let sync = if g.status.ahead + g.status.behind > 0 { format!(" ↓{} ↑{}", g.status.behind, g.status.ahead) } else { String::new() };
-                        let busy = g.job.as_ref().map(|j| format!("  {j}")).unwrap_or_default();
+                        let busy = g
+                            .job
+                            .as_ref()
+                            .map(|j| {
+                                let ms = g.job_started.map_or(0, |at| at.elapsed().as_millis() as u64);
+                                format!("  {}{}", j.trim_end_matches('…'), ".".repeat(((ms / 350) % 4) as usize))
+                            })
+                            .unwrap_or_default();
                         div()
                             .id("status-branch")
                             .flex_none()
@@ -1843,7 +1892,19 @@ impl Workspace {
                             }))
                             .child(format!("✖ {errors}  ⚠ {warnings}")),
                     )
-                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(color)).child(message))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(rems(0.25))
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_color(rgb(color))
+                            .children(result_icon.map(|icon| crate::icons::glyph(icon, 0.875, color)))
+                            .child(message),
+                    )
                     .children(self.ext_status_items(1).into_iter().map(|(id, item)| self.render_ext_status(id, item, cx))),
             )
             .child(
