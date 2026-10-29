@@ -1062,7 +1062,12 @@ impl Workspace {
     pub(crate) fn reload_config_if_needed(&mut self, path: &Path) {
         if same_path(path, &config_dir().join("settings.json")) {
             if let Ok(text) = std::fs::read_to_string(path) {
+                let provider = self.settings.ai_provider;
                 self.settings = Settings::parse(&text);
+                // A key typed for one provider is not the other's.
+                if self.settings.ai_provider != provider {
+                    self.ai_key = None;
+                }
                 self.theme = crate::ext_support::resolve_theme(&self.extensions, &self.settings.theme);
                 self.icon_theme = crate::ext_support::resolve_icon_theme(&self.extensions, &self.settings.icon_theme);
                 self.product_dirty = true;

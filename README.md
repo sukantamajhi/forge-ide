@@ -130,16 +130,25 @@ seconds, green on success and red on failure, naming the operation that failed.
 Stage your changes, then press **Write message with AI** in the Source Control view (or run `Git: Generate Commit
 Message with AI`). Forge fills the message box with a one-line subject you can edit before committing.
 
-- The first time, Forge asks for your OpenAI API key in a masked box and saves it once, encrypted with Windows DPAPI:
-  the file `%APPDATA%\Forge\openai-key.dpapi` holds no plaintext and only your Windows account can decrypt it. It is never in
+- **Choose who writes them:** OpenAI or Google **Gemini**. Pick one under Settings, AI Commit Messages, Provider, or run
+  `AI: Write Commit Messages with OpenAI` / `AI: Write Commit Messages with Gemini`, or set `"ai.provider"` to `"openai"`
+  (the default) or `"gemini"` in `settings.json`. Gemini is called through its **OpenAI-compatible endpoint**
+  (`generativelanguage.googleapis.com/v1beta/openai/chat/completions`, a Bearer key), so both providers get the same request.
+- The first time, Forge asks for the chosen provider's API key in a masked box (OpenAI: platform.openai.com/api-keys, Gemini:
+  aistudio.google.com/apikey) and saves it once, encrypted with Windows DPAPI: `%APPDATA%\Forge\openai-key.dpapi` or
+  `gemini-key.dpapi` holds no plaintext and only your Windows account can decrypt it. Each provider keeps its own key. A key is never in
   `settings.json` or the registry, and is handed to `curl` on stdin so it does not appear in a
-  process list. Run `AI: Forget Saved OpenAI API Key` to delete it. If `OPENAI_API_KEY` is set in your environment, that is used instead.
+  process list. Run `AI: Forget Saved API Key` to delete the chosen provider's key. If `OPENAI_API_KEY` (OpenAI) or
+  `GEMINI_API_KEY` / `GOOGLE_API_KEY` (Gemini) is set in your environment, that is used instead.
 - Only the **staged diff** and your **last 10 commit subjects** (to match your commit style) are sent to the
-  OpenAI API, and only when you ask. Lock files, `.env*`, `*.pem` and `*.key` are left out of the diff. Long diffs
+  chosen provider's API, and only when you ask. Lock files, `.env*`, `*.pem` and `*.key` are left out of the diff. Long diffs
   are cut at about 24,000 characters.
-- `"ai.model"` in `settings.json` picks the model. The default is `gpt-5-nano`, the cheapest GPT text model on
-  OpenAI's price list ($0.05 in / $0.40 out per 1M tokens, checked October 2026). It is a reasoning model, so Forge
-  asks for minimal reasoning; models such as `gpt-4.1-nano` or `gpt-5.4-nano` work too.
+- Models: `"ai.model"` is the OpenAI model (default `gpt-5-nano`, the cheapest GPT text model on OpenAI's price list, $0.05 in /
+  $0.40 out per 1M tokens, checked October 2026) and `"ai.geminiModel"` is the Gemini model (default `gemini-2.5-flash`). The
+  Settings page edits whichever belongs to the chosen provider. Reasoning models spend part of the output budget thinking,
+  so Forge keeps that small: OpenAI's GPT-5 models get minimal reasoning and a 2,000-token budget; Gemini gets 4,096 tokens,
+  with thinking turned off for 2.5 Flash and Flash-Lite and set to low for models that cannot turn it off (2.5 Pro, Gemini 3).
+  If a model still runs out of tokens, the message says so; pick a model that thinks less.
 
 ## Icons
 
@@ -222,7 +231,7 @@ run yet**: that is the next step and needs you to choose which ones.
 **Built** (details in the sections above): multi-cursor editing, find/replace and Replace in Files, Quick Open and the
 Command Palette, language-server features (with a go-to-definition picker and servers started automatically), a
 VS Code-style Source Control view (stage, commit, push, publish, pull, sync, fetch, stash, branches, history, blame, AI
-commit messages, visible progress and results, side-by-side diffs, hunk and line staging, merge-conflict resolution,
+commit messages (OpenAI or Gemini), visible progress and results, side-by-side diffs, hunk and line staging, merge-conflict resolution,
 rebase and merge with continue / skip / abort, login prompts, cancel), Markdown preview with scroll sync, minimap, word wrap, a Settings page,
 right-click menus, resizable and remembered panels, editor tab-bar buttons and menu, Codicons icons with hover tooltips,
 session restore, debugging for Python / Node / Rust, VS Code extensions from Open VSX (themes, languages, grammars,

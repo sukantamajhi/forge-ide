@@ -452,7 +452,10 @@ impl Workspace {
             OverlayKind::ProductIconTheme => "Select a product icon theme",
             OverlayKind::CodeActions => "Select a code action to apply",
             OverlayKind::Definitions => "Select a definition to go to",
-            OverlayKind::AiKey => "Paste your OpenAI API key (sk-...)",
+            OverlayKind::AiKey => match self.settings.ai_provider {
+                forge_core::ai::Provider::OpenAi => "Paste your OpenAI API key (sk-...)",
+                forge_core::ai::Provider::Gemini => "Paste your Gemini API key (AIza...)",
+            },
             OverlayKind::Rename => "New name for the symbol",
             OverlayKind::NewEntry { folder: false, .. } => "File name (a/b/c.txt creates folders)",
             OverlayKind::NewEntry { folder: true, .. } => "Folder name",
@@ -602,7 +605,12 @@ impl Workspace {
                     .collect()
             }
             OverlayKind::AiKey => {
-                overlay.note = Some("Used only to write commit messages. Saved once, encrypted for your Windows account, so Forge does not ask again. Enter to confirm.".to_owned());
+                let provider = self.settings.ai_provider;
+                overlay.note = Some(format!(
+                    "{} key from {}. Used only to write commit messages. Saved once, encrypted for your Windows account, so Forge does not ask again. Enter to confirm.",
+                    provider.label(),
+                    provider.key_page()
+                ));
                 Vec::new()
             }
             OverlayKind::Rename => {
@@ -825,19 +833,20 @@ impl Workspace {
                 }
             }
             OverlayKind::AiKey => {
+                let provider = self.settings.ai_provider;
                 if forge_core::ai::is_valid_key(&text) {
-                    let saved = forge_core::ai::save_key(&text);
+                    let saved = forge_core::ai::save_key(provider, &text);
                     self.ai_key = Some(text);
                     if self.git.as_ref().is_some_and(|g| g.status.staged().next().is_some()) {
                         self.git_generate_message();
                     } else {
                         self.set_status(match &saved {
-                            Ok(()) => "OpenAI API key saved, encrypted for your Windows account. Stage changes, then write a message with AI.".to_owned(),
+                            Ok(()) => format!("{} API key saved, encrypted for your Windows account. Stage changes, then write a message with AI.", provider.label()),
                             Err(error) => format!("The key is kept for this session only: {error}"),
                         });
                     }
                 } else {
-                    self.set_status("That does not look like an OpenAI API key");
+                    self.set_status(format!("That does not look like a {} API key: it needs at least 8 characters and no spaces, quotes or backslashes. Paste only the key.", provider.label()));
                 }
             }
             OverlayKind::Rename => {

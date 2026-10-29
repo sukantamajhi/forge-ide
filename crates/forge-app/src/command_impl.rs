@@ -242,6 +242,11 @@ impl Workspace {
             CloseOtherTabs | CloseTabsToRight | CloseSavedTabs | CloseAllTabs | PinTab | UnpinTab | CopyFilePath | CopyRelativeFilePath | RevealActiveFile
             | ShowActiveFileInExplorer => self.run_tab_command(command, cx),
             AiSetKey => self.open_overlay(OverlayKind::AiKey, ""),
+            AiUseOpenAi | AiUseGemini => {
+                let provider = if command == AiUseGemini { forge_core::ai::Provider::Gemini } else { forge_core::ai::Provider::OpenAi };
+                self.set_setting("ai.provider", &serde_json::to_string(provider.id()).unwrap_or_default());
+                self.set_status(format!("Commit messages are written by {} ({})", provider.label(), self.settings.active_ai_model()));
+            }
             AiForgetKey => self.forget_ai_key(),
             LanguageServers => self.open_overlay(OverlayKind::LanguageServers, ""),
             ShowExtensions => self.open_extensions_view(),

@@ -1,0 +1,44 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-10-29T22:42:35.110Z",
+        "reason": "agent triage: sections, window frame and bars take their inset from an inner .wrap or fixed-height flex rows; rendered at 375px and desktop with no flush text"
+      },
+      {
+        "rule": "tight-leading",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-10-29T22:42:35.782Z",
+        "reason": "agent triage: single-line Bevan display slugs at line-height 1, intentional"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          "site/css/style.css"
+        ],
+        "createdAt": "2026-10-29T22:55:23.715Z",
+        "reason": "agent triage: Geist and Geist Mono chosen deliberately for a modern product tone; the user asked for modern and professional"
+      },
+      {
+        "rule": "overused-font",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-10-29T22:55:33.322Z",
+        "reason": "agent triage: Geist chosen deliberately for a modern product tone; user asked for modern and professional"
+      }
+    ]
+  }
+}

@@ -40,7 +40,7 @@ fn heading(t: &Theme, text: &str) -> Div {
 impl Workspace {
     /// Open the Settings page.
     pub fn open_settings_page(&mut self) {
-        self.settings_model = LineInput::new(&self.settings.ai_model);
+        self.settings_model = LineInput::new(self.settings.active_ai_model());
         self.settings_model_focus = false;
         self.settings_open = true;
     }
@@ -70,7 +70,7 @@ impl Workspace {
         if k.key == "escape" {
             if self.settings_model_focus {
                 self.settings_model_focus = false;
-                self.settings_model = LineInput::new(&self.settings.ai_model);
+                self.settings_model = LineInput::new(self.settings.active_ai_model());
             } else {
                 self.settings_open = false;
             }
@@ -82,7 +82,7 @@ impl Workspace {
                     let model = self.settings_model.text().trim().to_owned();
                     if !model.is_empty() {
                         let json = serde_json::to_string(&model).unwrap_or_default();
-                        self.set_setting("ai.model", &json);
+                        self.set_setting(self.settings.active_ai_model_key(), &json);
                     }
                     self.settings_model_focus = false;
                     true
@@ -185,8 +185,31 @@ impl Workspace {
                 cx.stop_propagation();
                 cx.notify();
             }))
-            .child(self.render_input(&self.settings_model, "gpt-5-nano", model_focused))
+            .child(self.render_input(&self.settings_model, s.ai_provider.default_model(), model_focused))
             .into_any_element();
+        let provider_chips = div().flex().flex_row().gap_2().children(forge_core::ai::Provider::ALL.into_iter().enumerate().map(|(i, provider)| {
+            let selected = s.ai_provider == provider;
+            div()
+                .id(("ai-provider", i))
+                .px_3()
+                .h(rems(1.75))
+                .flex()
+                .items_center()
+                .rounded_sm()
+                .cursor_pointer()
+                .border_1()
+                .border_color(rgb(if selected { t.info } else { t.border }))
+                .bg(rgb(if selected { t.selection } else { t.bg }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let json = serde_json::to_string(provider.id()).unwrap_or_default();
+                    this.set_setting("ai.provider", &json);
+                    // The model box shows the chosen provider's model.
+                    this.settings_model = LineInput::new(this.settings.active_ai_model());
+                    this.settings_model_focus = false;
+                    cx.notify();
+                }))
+                .child(provider.label())
+        }));
 
         let auto_closing = s.auto_closing_brackets;
         let content = div()
@@ -231,8 +254,9 @@ impl Workspace {
             .child(heading(&t, "Language Servers"))
             .child(row(&t, "Start Automatically", "Start the servers for your project's languages when a folder opens.", toggle(4, s.lsp_autostart, "true", "false", "lsp.autoStart", cx)))
             .child(heading(&t, "AI Commit Messages"))
-            .child(row(&t, "Model", "The OpenAI model that writes commit messages. Press Enter to save.", model_input))
-            .child(row(&t, "OpenAI API Key", "Saved once, encrypted for your Windows account.", div().flex().flex_row().gap_2()
+            .child(row(&t, "Provider", "Who writes commit messages. Gemini is called through its OpenAI-compatible endpoint, so both use the same request.", provider_chips.into_any_element()))
+            .child(row(&t, "Model", &format!("The {} model that writes commit messages. Press Enter to save.", s.ai_provider.label()), model_input))
+            .child(row(&t, &format!("{} API Key", s.ai_provider.label()), &format!("Saved once, encrypted for your Windows account. Get one at {}.", s.ai_provider.key_page()), div().flex().flex_row().gap_2()
                 .child(button("settings-key-set", "Enter key...", cx, Box::new(|w, cx| {
                     w.settings_open = false;
                     w.run_command(Command::AiSetKey, false, cx);

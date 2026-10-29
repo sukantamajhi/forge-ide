@@ -35,6 +35,10 @@ pub struct Settings {
     pub lsp_autostart: bool,
     /// `ai.model` in settings.json: the OpenAI model that writes commit messages.
     pub ai_model: String,
+    /// `ai.provider`: who writes them, OpenAI or Gemini (through its OpenAI-compatible endpoint).
+    pub ai_provider: crate::ai::Provider,
+    /// `ai.geminiModel`: the Gemini model used when the provider is Gemini.
+    pub ai_gemini_model: String,
 }
 
 impl Default for Settings {
@@ -55,6 +59,8 @@ impl Default for Settings {
             word_wrap: false,
             lsp_autostart: true,
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
+            ai_provider: crate::ai::Provider::default(),
+            ai_gemini_model: crate::ai::DEFAULT_GEMINI_MODEL.to_owned(),
         }
     }
 }
@@ -110,6 +116,22 @@ pub fn strip_json_comments(text: &str) -> String {
 }
 
 impl Settings {
+    /// The model the chosen provider is asked for.
+    pub fn active_ai_model(&self) -> &str {
+        match self.ai_provider {
+            crate::ai::Provider::OpenAi => &self.ai_model,
+            crate::ai::Provider::Gemini => &self.ai_gemini_model,
+        }
+    }
+
+    /// The settings.json key that holds the chosen provider's model.
+    pub fn active_ai_model_key(&self) -> &'static str {
+        match self.ai_provider {
+            crate::ai::Provider::OpenAi => "ai.model",
+            crate::ai::Provider::Gemini => "ai.geminiModel",
+        }
+    }
+
     /// Unknown keys, wrong types and out-of-range values fall back to defaults. Invalid
     /// JSON yields all defaults.
     pub fn parse(text: &str) -> Self {
@@ -166,6 +188,12 @@ impl Settings {
         }
         if let Some(v) = map.get("ai.model").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty()) {
             s.ai_model = v.to_owned();
+        }
+        if let Some(v) = map.get("ai.geminiModel").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty()) {
+            s.ai_gemini_model = v.to_owned();
+        }
+        if let Some(v) = map.get("ai.provider").and_then(Value::as_str).and_then(crate::ai::Provider::from_id) {
+            s.ai_provider = v;
         }
         if let Some(servers) = map.get("languageServers").and_then(Value::as_object) {
             for (id, entry) in servers {

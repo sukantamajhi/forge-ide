@@ -236,11 +236,14 @@ impl Workspace {
                     }
                     Err(error) => {
                         // A rejected key is forgotten so the next try asks for a new one.
-                        if error.contains("API key") {
+                        let lower = error.to_ascii_lowercase();
+                        let rejected = ["api key", "auth key", "invalid key", "unauthorized", "authentication"].iter().any(|w| lower.contains(w));
+                        if rejected {
                             self.ai_key = None;
-                            let _ = forge_core::ai::forget_saved_key();
+                            let _ = forge_core::ai::forget_saved_key(self.settings.ai_provider);
                         }
-                        self.set_result(format!("AI commit message failed: {error}"), false);
+                        let hint = if rejected { " The saved key was removed; run the command again to enter a new one." } else { "" };
+                        self.set_result(format!("AI commit message failed: {}.{hint}", error.trim_end_matches('.')), false);
                     }
                 }
             }
@@ -485,16 +488,17 @@ impl Workspace {
         }
         // An environment variable wins, then the key typed this session, then the one saved
         // (encrypted) by an earlier session. Only when there is none is the user asked.
+        let provider = self.settings.ai_provider;
         if self.ai_key.is_none() {
-            self.ai_key = forge_core::ai::load_saved_key();
+            self.ai_key = forge_core::ai::load_saved_key(provider);
         }
-        let Some(key) = forge_core::ai::api_key().or_else(|| self.ai_key.clone()) else {
+        let Some(key) = forge_core::ai::api_key(provider).or_else(|| self.ai_key.clone()) else {
             self.open_overlay(OverlayKind::AiKey, "");
             return;
         };
-        let model = self.settings.ai_model.clone();
+        let model = self.settings.active_ai_model().to_owned();
         self.ai_pending = true;
-        self.set_status(format!("Generating a commit message with {model}: the staged diff is sent to the OpenAI API..."));
+        self.set_status(format!("Generating a commit message with {model}: the staged diff is sent to the {} API...", provider.label()));
         self.git_background(
             move |root| {
                 let diff = git::staged_diff(root)?;
@@ -502,7 +506,7 @@ impl Workspace {
                     return Err("only lock files or secret-like files are staged, so there is nothing to describe".to_owned());
                 }
                 let recent: Vec<String> = git::log(root, None, 10).map(|log| log.into_iter().map(|c| c.subject).collect()).unwrap_or_default();
-                forge_core::ai::generate_commit_message(&key, &model, &diff, &recent)
+                forge_core::ai::generate_commit_message(provider, &key, &model, &diff, &recent)
             },
             GitMsg::AiMessage,
         );
@@ -511,8 +515,9 @@ impl Workspace {
     /// Drop the key from memory and delete the saved copy.
     pub fn forget_ai_key(&mut self) {
         self.ai_key = None;
-        self.set_status(match forge_core::ai::forget_saved_key() {
-            Ok(()) => "The saved OpenAI API key was removed".to_owned(),
+        let provider = self.settings.ai_provider;
+        self.set_status(match forge_core::ai::forget_saved_key(provider) {
+            Ok(()) => format!("The saved {} API key was removed", provider.label()),
             Err(error) => error,
         });
     }

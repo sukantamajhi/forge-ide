@@ -186,8 +186,10 @@ commands! {
     GitCommit, "git.commit", "Git: Commit", [];
     GitCommitAll, "git.commitAll", "Git: Commit All", [];
     GitGenerateMessage, "forge.git.generateCommitMessage", "Git: Generate Commit Message with AI", [];
-    AiSetKey, "forge.ai.setApiKey", "AI: Enter OpenAI API Key...", [];
-    AiForgetKey, "forge.ai.forgetApiKey", "AI: Forget Saved OpenAI API Key", [];
+    AiSetKey, "forge.ai.setApiKey", "AI: Set API Key for Commit Messages", [];
+    AiUseOpenAi, "forge.ai.useOpenAi", "AI: Write Commit Messages with OpenAI", [];
+    AiUseGemini, "forge.ai.useGemini", "AI: Write Commit Messages with Gemini", [];
+    AiForgetKey, "forge.ai.forgetApiKey", "AI: Forget Saved API Key (of the chosen provider)", [];
     GitCheckout, "git.checkout", "Git: Checkout to...", [];
     GitCreateBranch, "git.branch", "Git: Create Branch...", [];
     GitPull, "git.pull", "Git: Pull", [];
