@@ -678,6 +678,16 @@ impl Workspace {
                     cx.background_executor().timer(Duration::from_millis(ms.parse().unwrap_or(500))).await;
                     continue;
                 }
+                // `menu:tab` opens the tab bar's "more" menu where its button is.
+                if token == "menu:tab" {
+                    if this.update(cx, |workspace, cx| {
+                        let g = workspace.focused_group;
+                        workspace.open_tab_menu(g, gpui::point(gpui::px(900.0), gpui::px(60.0)), cx);
+                    }).is_err() {
+                        return;
+                    }
+                    continue;
+                }
                 if token.starts_with("resize:") {
                     if this.update(cx, |workspace, cx| {
                         workspace.replay_resize(token);

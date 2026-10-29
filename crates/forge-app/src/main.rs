@@ -10,6 +10,7 @@ mod minimap;
 mod render;
 mod resize;
 mod host_support;
+mod icons;
 mod snippet_support;
 mod ext_support;
 mod file_icons;

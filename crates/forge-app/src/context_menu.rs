@@ -23,6 +23,8 @@ pub(crate) enum MenuAction {
     DeleteEntry,
     CopyPath { relative: bool },
     RevealEntry,
+    CloseOthers,
+    CloseAll,
 }
 
 pub(crate) enum MenuEntry {
@@ -99,6 +101,83 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The menu behind a file's "more actions" button in the tab bar of group `g`.
+    pub fn open_tab_menu(&mut self, g: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(doc) = self.groups.get(g).and_then(|gr| gr.views.get(gr.active)).map(|v| &self.docs[v.doc]) else { return };
+        // A generated document (a diff, a commit) has no file to copy the path of.
+        let on_disk = !doc.readonly && doc.path.is_file();
+        let target = on_disk.then(|| (doc.path.clone(), false));
+        let git = self.git.is_some() && on_disk;
+        let entries = vec![
+            self.menu_item("Copy Path", MenuAction::CopyPath { relative: false }, None, on_disk),
+            self.menu_item("Copy Relative Path", MenuAction::CopyPath { relative: true }, None, on_disk),
+            self.menu_item("Reveal in File Explorer", MenuAction::RevealEntry, None, on_disk),
+            MenuEntry::Separator,
+            self.command_item("Close", Command::CloseTab, true),
+            self.menu_item("Close Others", MenuAction::CloseOthers, None, self.groups[g].views.len() > 1),
+            self.menu_item("Close All", MenuAction::CloseAll, None, true),
+            MenuEntry::Separator,
+            self.command_item("Toggle Minimap", Command::ToggleMinimap, true),
+            self.command_item("Go to Line...", Command::GoToLine, true),
+            self.command_item("Command Palette...", Command::CommandPalette, true),
+            MenuEntry::Separator,
+            self.command_item("Git: Stage This File", Command::GitStageFile, git),
+            self.command_item("Git: Open Changes", Command::GitOpenChanges, git),
+            self.command_item("Git: Show Blame for Line", Command::GitBlame, git),
+            self.command_item("Git: View File History", Command::GitFileHistory, git),
+        ];
+        self.context_menu = Some(ContextMenu { position, entries, target });
+        cx.notify();
+    }
+
+    /// Close every tab of the focused group but the active one. Files with unsaved changes stay.
+    fn close_other_tabs(&mut self, cx: &mut Context<Self>) {
+        let g = self.focused_group;
+        let Some(active) = self.groups.get(g).map(|gr| gr.active) else { return };
+        let (closing, kept) = self.closable_tabs(g, Some(active));
+        for vi in closing.into_iter().rev() {
+            self.close_view(g, vi, cx);
+        }
+        self.report_kept(kept);
+    }
+
+    /// Close every tab of the focused group. Files with unsaved changes stay.
+    fn close_all_tabs(&mut self, cx: &mut Context<Self>) {
+        let g = self.focused_group;
+        let (closing, kept) = self.closable_tabs(g, None);
+        for vi in closing.into_iter().rev() {
+            if g >= self.groups.len() {
+                break;
+            }
+            self.close_view(g, vi, cx);
+        }
+        self.report_kept(kept);
+    }
+
+    /// The tabs of group `g` that can be closed without losing work (all but `except`), and how many were kept for that reason.
+    fn closable_tabs(&self, g: usize, except: Option<usize>) -> (Vec<usize>, usize) {
+        let Some(group) = self.groups.get(g) else { return (Vec::new(), 0) };
+        let (mut closing, mut kept) = (Vec::new(), 0);
+        for (vi, view) in group.views.iter().enumerate() {
+            if Some(vi) == except {
+                continue;
+            }
+            // Unsaved work is never discarded by a bulk close; another tab on the same file keeps it safe.
+            if self.docs[view.doc].dirty && self.views_of(view.doc).count() <= 1 {
+                kept += 1;
+            } else {
+                closing.push(vi);
+            }
+        }
+        (closing, kept)
+    }
+
+    fn report_kept(&mut self, kept: usize) {
+        if kept > 0 {
+            self.set_status(format!("{kept} tab{} with unsaved changes {} kept open", if kept == 1 { "" } else { "s" }, if kept == 1 { "was" } else { "were" }));
+        }
+    }
+
     /// The explorer's menu for row `ix`.
     pub fn open_explorer_menu(&mut self, ix: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(entry) = self.tree.entries.get(ix) else { return };
@@ -164,6 +243,8 @@ impl Workspace {
                     self.set_status(if relative { "Copied the relative path" } else { "Copied the path" });
                 }
             }
+            MenuAction::CloseOthers => self.close_other_tabs(cx),
+            MenuAction::CloseAll => self.close_all_tabs(cx),
             MenuAction::RevealEntry => {
                 if let Some((path, _)) = target {
                     match reveal_in_file_manager(&path) {

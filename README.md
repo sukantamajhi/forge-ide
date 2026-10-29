@@ -43,6 +43,9 @@ cargo build --release -p forge-app            # LTO; slow first build
   emphasis, links, lists and task lists, quotes, code blocks, tables and rules. Links are clickable (web and mail links open
   in your browser or mail app, links to project files open in Forge; `file:` and other schemes are refused), and the
   editor and preview scroll together. Raw HTML is not drawn.
+- **Editor buttons** at the right of the tab bar: Open Preview (Markdown files only), Split Editor, and a **...** menu with
+  Copy Path / Copy Relative Path / Reveal in File Explorer, Close / Close Others / Close All (files with unsaved changes stay
+  open), Toggle Minimap, Go to Line, Command Palette, and the file's Git actions.
 - **Resizable panels:** drag the edge of the sidebar, the top edge of the bottom panel, the left edge of the Markdown
   preview, the divider between split editors, or the dividers between the Debug panel's columns. The sidebar, bottom
   panel, preview and Debug columns are remembered in `%APPDATA%\Forge\ui-state.json`; split editors reset to equal shares.

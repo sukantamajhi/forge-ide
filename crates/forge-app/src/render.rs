@@ -127,8 +127,52 @@ impl Workspace {
                         }))
                         .child(if doc.dirty { "●" } else { "×" }),
                 )
-        });
-        div().flex().flex_row().flex_none().h(px(TAB_BAR_HEIGHT)).bg(rgb(t.sidebar)).overflow_hidden().children(tabs)
+        })
+        .collect::<Vec<_>>();
+        // Icon buttons for the file: its Markdown preview, a split, and a menu of everything else.
+        let button = |id: &'static str, icon: gpui::Div, active: bool, cx: &mut Context<Self>, press: Box<dyn Fn(&mut Workspace, &gpui::MouseDownEvent, &mut Context<Workspace>)>| {
+            div()
+                .id((id, g))
+                .w(rems(1.875))
+                .h(rems(1.875))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded_sm()
+                .cursor_pointer()
+                .when(active, |d| d.bg(rgb(t.border)))
+                .hover(|s| s.bg(rgb(t.border)))
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.focused_group = g;
+                    press(this, ev, cx);
+                    cx.notify();
+                }))
+                .child(icon)
+        };
+        let has_views = !group.views.is_empty();
+        let markdown = has_views && self.is_markdown(g);
+        let preview_on = self.preview_open && g == self.focused_group;
+        let actions = div()
+            .flex()
+            .flex_row()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .children((has_views && markdown).then(|| button("tab-preview", crate::icons::preview(if preview_on { t.text } else { t.dim }), preview_on, cx, Box::new(|w, _, _| w.toggle_markdown_preview()))))
+            .children(has_views.then(|| button("tab-split", crate::icons::split(t.dim), false, cx, Box::new(|w, _, cx| w.run_command(Command::SplitEditor, false, cx)))))
+            .children(has_views.then(|| button("tab-more", crate::icons::more(t.dim), false, cx, Box::new(move |w, ev, cx| w.open_tab_menu(g, ev.position, cx)))));
+        div()
+            .flex()
+            .flex_row()
+            .flex_none()
+            .items_center()
+            .h(px(TAB_BAR_HEIGHT))
+            .bg(rgb(t.sidebar))
+            .child(div().flex().flex_row().flex_1().min_w_0().h_full().overflow_hidden().children(tabs))
+            .child(actions)
     }
 
     fn render_breadcrumbs(&self, g: usize) -> impl IntoElement {
