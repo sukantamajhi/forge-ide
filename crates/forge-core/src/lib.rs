@@ -2,7 +2,9 @@
 //! text input, fuzzy matching, folding, project search and the terminal session.
 
 pub mod ai;
+pub mod cargo_build;
 pub mod commands;
+pub mod debug_install;
 pub mod ext_lang;
 pub mod fileops;
 pub mod find;
@@ -12,6 +14,7 @@ pub mod git;
 pub mod gutter;
 pub mod input;
 pub mod jsonc;
+pub mod markdown;
 pub mod project_search;
 pub mod quick;
 pub mod servers;
@@ -20,4 +23,5 @@ pub mod settings;
 pub mod terminal;
 pub mod textarea;
 pub mod theme;
+pub mod ui_state;
 pub mod vscode_theme;

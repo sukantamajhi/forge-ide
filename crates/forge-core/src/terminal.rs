@@ -19,6 +19,8 @@ pub struct Terminal {
     cols: u16,
     /// The most recent raw bytes from the shell, kept to explain a silent terminal.
     debug_tail: Vec<u8>,
+    /// Keep the tab after its process exits so the output can still be read (a debugged program's terminal).
+    pub keep_when_dead: bool,
 }
 
 /// A run of cells sharing one style. `None` colors mean the terminal default.
@@ -63,7 +65,7 @@ impl Terminal {
                 }
             }
         });
-        Ok(Self { parser: vt100::Parser::new(nz(rows), nz(cols), 2000), writer, output, master: pair.master, child, rows, cols, debug_tail: Vec::new() })
+        Ok(Self { parser: vt100::Parser::new(nz(rows), nz(cols), 2000), writer, output, master: pair.master, child, rows, cols, debug_tail: Vec::new(), keep_when_dead: false })
     }
 
     /// Feed any pending shell output to the screen. True if anything arrived.

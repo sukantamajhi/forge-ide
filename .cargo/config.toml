@@ -1,0 +1,4 @@
+# On Windows, antivirus/rust-analyzer often hold handles on target/debug/incremental,
+# making rustc fail to finalize its session dir ("Access is denied (os error 5)").
+[build]
+incremental = false

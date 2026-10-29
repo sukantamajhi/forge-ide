@@ -1,5 +1,6 @@
 //! Minimal Language Server Protocol client: framed JSON-RPC over a child's stdio.
 
+pub mod dap;
 mod framing;
 mod protocol;
 

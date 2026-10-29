@@ -38,13 +38,13 @@ pub(crate) const TICK: Duration = Duration::from_millis(50);
 pub(crate) const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// How long the pointer must rest on text before hover information is requested.
 pub(crate) const HOVER_DELAY: Duration = Duration::from_millis(500);
-pub(crate) const SIDEBAR_WIDTH: f32 = 300.0;
-pub(crate) const PANEL_HEIGHT: f32 = 250.0;
 pub(crate) const TAB_BAR_HEIGHT: f32 = 34.0;
 pub(crate) const BREADCRUMB_HEIGHT: f32 = 22.0;
 pub(crate) const LINE_NUMBER_WIDTH: f32 = 46.0;
 pub(crate) const FOLD_WIDTH: f32 = 16.0;
-pub(crate) const GUTTER_WIDTH: f32 = LINE_NUMBER_WIDTH + FOLD_WIDTH;
+/// The margin left of the line numbers: breakpoints and the current debug line.
+pub(crate) const GLYPH_WIDTH: f32 = 18.0;
+pub(crate) const GUTTER_WIDTH: f32 = GLYPH_WIDTH + LINE_NUMBER_WIDTH + FOLD_WIDTH;
 pub(crate) const TEXT_PAD: f32 = 8.0;
 pub(crate) const FONT: &str = "Consolas";
 
@@ -198,6 +198,10 @@ pub(crate) struct View {
     pub folds: Folds,
     pub folds_revision: u64,
     pub folds_lines: usize,
+    /// Which displayed row shows which part of which line, while word wrap is on.
+    pub wrap: Option<crate::wrap::WrapMap>,
+    /// The minimap's per-line bars, with the document revision they were built for.
+    pub minimap: Option<(u64, crate::minimap::LineStats)>,
 }
 
 impl View {
@@ -212,6 +216,8 @@ impl View {
             folds: Folds::default(),
             folds_revision: u64::MAX,
             folds_lines: 0,
+            wrap: None,
+            minimap: None,
         }
     }
 }
@@ -243,6 +249,7 @@ pub(crate) enum PanelView {
     Terminal,
     Problems,
     References,
+    Debug,
 }
 
 // ---- overlays (palette, quick open, prompts) ----
@@ -267,6 +274,8 @@ pub(crate) enum OverlayKind {
     GitCreateBranch,
     GitHistory,
     ConfirmDiscard { rel: String, untracked: bool },
+    /// Replace every search result: how many matches in how many files.
+    ConfirmReplace { matches: usize, files: usize },
     LanguageServers,
     /// Search text for Open VSX.
     ExtSearch,
@@ -314,6 +323,10 @@ pub(crate) struct Overlay {
 
 pub(crate) struct SearchPanel {
     pub query: LineInput,
+    /// The replacement text, and whether its row is shown and has the keyboard.
+    pub replace: LineInput,
+    pub replace_open: bool,
+    pub replace_focused: bool,
     pub options: forge_text::search::SearchOptions,
     pub hits: Vec<Hit>,
     pub running: bool,
@@ -433,6 +446,31 @@ pub(crate) struct Workspace {
     pub scm_message: forge_core::textarea::TextArea,
     /// A mouse drag is selecting text in the commit message box.
     pub scm_dragging: bool,
+    /// A drag on the minimap is scrolling the editor.
+    pub minimap_dragging: bool,
+    /// The Markdown preview is open beside the focused editor, and the last parse of the document.
+    /// Panel sizes the user can drag: the sidebar's width (at the default zoom), the bottom panel's
+    /// height, the preview's width (None = half), the shares of split editor groups and of the Debug
+    /// panel's three columns, the window size last drawn, and the drag in progress.
+    pub sidebar_base: f32,
+    pub panel_height: f32,
+    pub preview_px: Option<f32>,
+    pub group_fractions: Vec<f32>,
+    pub debug_cols: [f32; 3],
+    pub viewport: (f32, f32),
+    pub resize: Option<crate::resize::Drag>,
+    pub preview_open: bool,
+    pub md_cache: Option<(usize, u64, Vec<forge_core::markdown::Block>)>,
+    /// The preview's scroll state, and where the editor and preview were (as fractions of their height) at the last sync.
+    pub preview_scroll: gpui::ScrollHandle,
+    pub sync_last: (f32, f32),
+    /// The running debug session, and the breakpoints (0-based lines) set per file.
+    pub debug: Option<crate::debug_support::DebugSession>,
+    /// The console of the last finished session, kept so its output can still be read.
+    pub debug_console: Vec<(bool, String)>,
+    /// A `cargo build` for a Rust debug session is running on a background thread.
+    pub debug_build_rx: Option<Receiver<forge_core::cargo_build::BuildOutcome>>,
+    pub breakpoints: std::collections::BTreeMap<PathBuf, std::collections::BTreeSet<usize>>,
     /// Whether the Staged Changes and Changes sections are expanded.
     pub scm_staged_open: bool,
     pub scm_changes_open: bool,
@@ -440,6 +478,10 @@ pub(crate) struct Workspace {
     pub ai_pending: bool,
     /// Typed by the user; held in memory for this session and never written anywhere.
     pub ai_key: Option<String>,
+    /// The Settings page is showing, and the model field's text and focus.
+    pub settings_open: bool,
+    pub settings_model: LineInput,
+    pub settings_model_focus: bool,
     /// A language-server request made while the server was still starting: run it once it is ready.
     pub lsp_retry: Option<(String, RequestTag, Instant)>,
     /// The folder's languages have not been scanned for servers to start yet.
@@ -474,6 +516,8 @@ impl Focusable for Workspace {
 impl Workspace {
     pub fn new(root: PathBuf, initial_file: Option<&Path>, cx: &mut Context<Self>) -> Self {
         let settings = std::fs::read_to_string(config_dir().join("settings.json")).map(|t| Settings::parse(&t)).unwrap_or_default();
+        // The panel sizes the user left last time.
+        let saved_layout = forge_core::ui_state::UiState::load();
         let mut keymap = Keymap::default();
         let mut status = format!("Opened {}", root.display());
         if let Ok(text) = std::fs::read_to_string(config_dir().join("keybindings.json")) {
@@ -533,6 +577,9 @@ impl Workspace {
             context_menu: None,
             search: SearchPanel {
                 query: LineInput::default(),
+                replace: LineInput::default(),
+                replace_open: false,
+                replace_focused: false,
                 options: Default::default(),
                 hits: Vec::new(),
                 running: false,
@@ -555,10 +602,29 @@ impl Workspace {
             git_rx,
             scm_message: forge_core::textarea::TextArea::default(),
             scm_dragging: false,
+            minimap_dragging: false,
+            sidebar_base: saved_layout.sidebar,
+            panel_height: saved_layout.panel_height,
+            preview_px: saved_layout.preview_width,
+            group_fractions: Vec::new(),
+            debug_cols: saved_layout.debug_columns,
+            viewport: (1200.0, 800.0),
+            resize: None,
+            preview_open: false,
+            md_cache: None,
+            preview_scroll: gpui::ScrollHandle::new(),
+            sync_last: (0.0, 0.0),
+            debug: None,
+            debug_console: Vec::new(),
+            debug_build_rx: None,
+            breakpoints: Default::default(),
             scm_staged_open: true,
             scm_changes_open: true,
             ai_pending: false,
             ai_key: None,
+            settings_open: false,
+            settings_model: LineInput::default(),
+            settings_model_focus: false,
             lsp_retry: None,
             autostart_pending: false,
             scm_scroll: UniformListScrollHandle::new(),
@@ -610,6 +676,15 @@ impl Workspace {
             for token in script.split_whitespace() {
                 if let Some(ms) = token.strip_prefix("wait:") {
                     cx.background_executor().timer(Duration::from_millis(ms.parse().unwrap_or(500))).await;
+                    continue;
+                }
+                if token.starts_with("resize:") {
+                    if this.update(cx, |workspace, cx| {
+                        workspace.replay_resize(token);
+                        cx.notify();
+                    }).is_err() {
+                        return;
+                    }
                     continue;
                 }
                 let events: Vec<gpui::KeyDownEvent> = match token.strip_prefix("text:") {
@@ -745,13 +820,14 @@ impl Workspace {
     pub fn reveal_caret(&mut self, g: usize, vi: usize, center: bool) {
         let view = &mut self.groups[g].views[vi];
         let doc = &self.docs[view.doc];
-        let (line, _) = doc.buffer.offset_to_point(view.selections.primary().head);
+        let (line, col) = doc.buffer.offset_to_point(view.selections.primary().head);
         while view.folds.is_hidden(line) {
             if !view.folds.unfold_at(line) {
                 break;
             }
         }
-        let index = view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line);
+        let wrapped = view.wrap.as_ref().and_then(|w| w.row_of(line, forge_text::columns::display_width(&doc.buffer.line(line), col)));
+        let index = wrapped.unwrap_or_else(|| view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line));
         // Non-strict scrolling only moves when the line is off screen; `center` forces it.
         if center {
             view.scroll.scroll_to_item_strict(index, gpui::ScrollStrategy::Center);
@@ -789,7 +865,7 @@ impl Workspace {
     }
 
     /// Saving `settings.json` or `keybindings.json` applies it immediately.
-    fn reload_config_if_needed(&mut self, path: &Path) {
+    pub(crate) fn reload_config_if_needed(&mut self, path: &Path) {
         if same_path(path, &config_dir().join("settings.json")) {
             if let Ok(text) = std::fs::read_to_string(path) {
                 self.settings = Settings::parse(&text);
@@ -1048,6 +1124,13 @@ impl Workspace {
             changed |= terminal.pump();
         }
         changed |= self.poll_background();
+        changed |= self.debug_tick(cx);
+        // The editor scrolls during layout, after render has run, so the preview is kept in step here.
+        if self.preview_open {
+            if let Some((g, vi)) = self.active_ix().filter(|(g, _)| self.is_markdown(*g)) {
+                changed |= self.sync_preview_scroll(g, vi);
+            }
+        }
         changed |= self.poll_host(cx);
         changed |= self.check_hover_dwell();
         changed |= self.git_tick(cx);

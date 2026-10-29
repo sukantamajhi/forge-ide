@@ -82,7 +82,10 @@ Crates:
 | Source control: status/stage/commit/branches/push/pull/stash/history/blame through the `git` CLI on background threads, gutter diff, diff tabs, SCM view | implemented; engine tested against real temporary repos (incl. a local bare remote), UI observed in a real window on a sandbox repo |
 | Settings, themes (3), keybindings JSON, zoom | implemented; theme switch observed in a real window |
 | Context menus (editor, explorer; `context_menu.rs`) and the go-to-definition picker for several results | implemented; compiles and the workspace tests pass, not yet observed in a real window |
-| Minimap, word wrap, replace in files, debugger, settings UI | not built |
+| Replace in Files, word wrap (`wrap.rs`), minimap (`minimap.rs`), Settings page (`settings_view.rs`) | implemented; unit-tested, and observed in a real window (replace, wrapped rows with selection, minimap, settings page). Mouse interaction on the minimap and settings controls is not observed |
+| Resizable panels (`resize.rs`): sidebar, bottom panel, preview, split editor groups, Debug columns, by dragging their edges | implemented; the drag maths is unit-tested and each resulting layout was observed in a real window by replaying the same code path; actual mouse dragging and the handle hit areas are not observed. Sidebar, panel, preview and Debug column sizes are saved in `ui-state.json` and were seen to survive a relaunch; split-editor shares are not saved |
+| Markdown preview (`forge-core::markdown`, `markdown_view.rs`): CommonMark with tables, strikethrough and task lists, beside the editor, re-parsed on every edit | implemented; parser and link classification unit-tested; drawing and scroll sync observed in a real window (link clicks themselves are not observed). No images, heading anchors or raw HTML |
+| Debugger: DAP client (`forge-lsp::dap`), breakpoints, stepping, stack, variables, console | implemented for Python (debugpy) and JavaScript/Node (js-debug, with its child session) and Rust (CodeLLDB, after a `cargo build`); each protocol flow is tested against the real adapter and the editor flow was observed in a real window for each. C/C++, Go and other adapters are not built |
 | VS Code extension host (Node + `vscode` API shim) | planned; largest risk |
 
 ## Risks

@@ -87,6 +87,7 @@ commands! {
     FindNext, "editor.action.nextMatchFindAction", "Find Next", ["f3"];
     FindPrevious, "editor.action.previousMatchFindAction", "Find Previous", ["shift+f3"];
     FindInFiles, "workbench.action.findInFiles", "Find in Files", ["ctrl+shift+f"];
+    ReplaceInFiles, "workbench.action.replaceInFiles", "Replace in Files", ["ctrl+shift+h"];
     GoToLine, "workbench.action.gotoLine", "Go to Line/Column...", ["ctrl+g"];
     QuickOpen, "workbench.action.quickOpen", "Go to File...", ["ctrl+p"];
     CommandPalette, "workbench.action.showCommands", "Show All Commands", ["ctrl+shift+p", "f1"];
@@ -127,12 +128,24 @@ commands! {
     ZoomOut, "workbench.action.zoomOut", "Zoom Out", ["ctrl+-"];
     ZoomReset, "workbench.action.zoomReset", "Reset Zoom", ["ctrl+numpad0"];
     ToggleWordWrap, "editor.action.toggleWordWrap", "Toggle Word Wrap", ["alt+z"];
+    MarkdownPreview, "markdown.showPreviewToSide", "Markdown: Open Preview to the Side", ["ctrl+k v"];
+    ToggleMinimap, "editor.action.toggleMinimap", "View: Toggle Minimap", [];
 
-    OpenSettings, "workbench.action.openSettings", "Open User Settings (JSON)", ["ctrl+,"];
+    OpenSettings, "workbench.action.openSettings", "Open Settings", ["ctrl+,"];
+    OpenSettingsJson, "workbench.action.openSettingsJson", "Open User Settings (JSON)", [];
     OpenKeybindings, "workbench.action.openGlobalKeybindingsFile", "Open Keyboard Shortcuts (JSON)", ["ctrl+k ctrl+s"];
     ChangeTheme, "workbench.action.selectTheme", "Color Theme", ["ctrl+k ctrl+t"];
 
     GoToDefinition, "editor.action.revealDefinition", "Go to Definition", ["f12"];
+    DebugStart, "workbench.action.debug.start", "Debug: Start Debugging / Continue", ["f5"];
+    DebugStepOver, "workbench.action.debug.stepOver", "Debug: Step Over", ["f10"];
+    DebugStepInto, "workbench.action.debug.stepInto", "Debug: Step Into", ["f11"];
+    DebugStepOut, "workbench.action.debug.stepOut", "Debug: Step Out", ["shift+f11"];
+    DebugStop, "workbench.action.debug.stop", "Debug: Stop", ["shift+f5"];
+    DebugInstallJs, "forge.debug.installJavaScript", "Debug: Install JavaScript Debugger", [];
+    DebugInstallRust, "forge.debug.installRust", "Debug: Install Rust Debugger (CodeLLDB)", [];
+    ToggleBreakpoint, "editor.debug.action.toggleBreakpoint", "Debug: Toggle Breakpoint", ["f9"];
+    ClearBreakpoints, "workbench.debug.viewlet.action.removeAllBreakpoints", "Debug: Remove All Breakpoints", [];
     TriggerSuggest, "editor.action.triggerSuggest", "Trigger Suggest", ["ctrl+space"];
     TriggerParameterHints, "editor.action.triggerParameterHints", "Trigger Parameter Hints", ["ctrl+shift+space"];
     ShowHover, "editor.action.showHover", "Show or Focus Hover", ["ctrl+k ctrl+i"];

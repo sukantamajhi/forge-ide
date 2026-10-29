@@ -26,7 +26,8 @@ cargo build --release -p forge-app            # LTO; slow first build
   (syntax-tree based), cursor undo, sort lines, change case, trim whitespace, undo grouping, line-wise
   copy/cut/paste. Mouse: click, drag, double-click word, triple-click line, Shift+click, gutter line select.
 - **Find and replace:** Ctrl+F / Ctrl+H with match case, whole word and regex (capture groups in the
-  replacement), match highlighting, Find in Files (Ctrl+Shift+F, respects `.gitignore`).
+  replacement), match highlighting, Find in Files (Ctrl+Shift+F, respects `.gitignore`) and Replace in Files
+  (Ctrl+Shift+H: asks before changing anything, skips files with unsaved edits, keeps line endings).
 - **Navigation:** Quick Open (Ctrl+P; prefix `>` commands, `:` line, `@` symbols), Command Palette
   (Ctrl+Shift+P), Go to Line (Ctrl+G), Go to Symbol (Ctrl+Shift+O), bracket matching and jump, folding,
   breadcrumbs, next/previous problem (F8), tabs, split editor (Ctrl+\\).
@@ -38,6 +39,21 @@ cargo build --release -p forge-app            # LTO; slow first build
   stash, AI-written commit subjects (see below), branch create and checkout, file history and commit diffs, blame for a line, unified diff tabs,
   change markers in the editor gutter that update as you type, status decorations in the explorer, and the
   branch with ahead/behind in the status bar. Everything is also in the Command Palette as `Git: ...`.
+- **Markdown preview** (Ctrl+K V, or `Markdown: Open Preview to the Side`): a live preview beside the editor with headings,
+  emphasis, links, lists and task lists, quotes, code blocks, tables and rules. Links are clickable (web and mail links open
+  in your browser or mail app, links to project files open in Forge; `file:` and other schemes are refused), and the
+  editor and preview scroll together. Raw HTML is not drawn.
+- **Resizable panels:** drag the edge of the sidebar, the top edge of the bottom panel, the left edge of the Markdown
+  preview, the divider between split editors, or the dividers between the Debug panel's columns. The sidebar, bottom
+  panel, preview and Debug columns are remembered in `%APPDATA%\Forge\ui-state.json`; split editors reset to equal shares.
+- **View:** word wrap (Alt+Z or `"editor.wordWrap": "on"`; breaks at word boundaries), a minimap (click or drag to
+  scroll; `"editor.minimap.enabled"`), and a Settings page (Ctrl+,) that edits `settings.json` in place and keeps
+  its comments.
+- **Debugging (Python, JavaScript/Node and Rust):** F5 starts the active file under the debugger (debugpy for Python, Microsoft's
+  js-debug for Node, CodeLLDB for Rust, which builds with `cargo` first and shows the program's output in a terminal tab;
+  install them with `Debug: Install JavaScript Debugger` / `Debug: Install Rust Debugger (CodeLLDB)`, which verify checksums), F9 or a click in the margin sets a breakpoint,
+  F10 / F11 / Shift+F11 step, Shift+F5 stops. The Debug panel shows variables, the call stack and the console.
+  Uses `debugpy` from the project's `.venv`, your Python, or the copy bundled with VS Code's Python extension.
 - **Workbench:** right-click menus in the editor and explorer, explorer with new file/folder, rename (F2) and delete to the Recycle Bin, integrated
   terminal (Ctrl+`), bottom panel, sidebar toggle (Ctrl+B), zoom, three themes, settings and keybindings JSON.
 

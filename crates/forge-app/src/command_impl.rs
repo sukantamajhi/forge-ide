@@ -123,6 +123,11 @@ impl Workspace {
             FindNext => self.find_next(true, cx),
             FindPrevious => self.find_next(false, cx),
             FindInFiles => self.open_search_panel(),
+            ReplaceInFiles => {
+                self.open_search_panel();
+                self.search.replace_open = true;
+                self.search.replace_focused = true;
+            }
             GoToLine => self.open_overlay(OverlayKind::GoToLine, ""),
             QuickOpen => self.open_overlay(OverlayKind::QuickOpen, ""),
             CommandPalette => self.open_overlay(OverlayKind::Palette, ""),
@@ -185,8 +190,27 @@ impl Workspace {
             ZoomIn => self.settings.font_size = (self.settings.font_size + 1.0).min(40.0),
             ZoomOut => self.settings.font_size = (self.settings.font_size - 1.0).max(8.0),
             ZoomReset => self.settings.font_size = Settings::default().font_size,
-            ToggleWordWrap => self.set_status("Word wrap is not supported yet"),
-            OpenSettings => self.open_config_file("settings.json", &Settings::template(), cx),
+            DebugStart | DebugStepOver | DebugStepInto | DebugStepOut | DebugStop => self.debug_control(command, cx),
+            DebugInstallJs => self.install_debug_adapter(false),
+            DebugInstallRust => self.install_debug_adapter(true),
+            ToggleBreakpoint => self.toggle_breakpoint_at_caret(),
+            ClearBreakpoints => self.clear_all_breakpoints(),
+            MarkdownPreview => self.toggle_markdown_preview(),
+            ToggleMinimap => {
+                self.settings.minimap = !self.settings.minimap;
+                self.set_status(if self.settings.minimap { "Minimap on" } else { "Minimap off" });
+            }
+            ToggleWordWrap => {
+                self.settings.word_wrap = !self.settings.word_wrap;
+                self.set_status(if self.settings.word_wrap { "Word wrap on" } else { "Word wrap off" });
+                if let Some((g, vi)) = self.active_ix() {
+                    self.groups[g].views[vi].wrap = None;
+                    self.ensure_wrap(g, vi);
+                    self.reveal_caret(g, vi, false);
+                }
+            }
+            OpenSettings => self.open_settings_page(),
+            OpenSettingsJson => self.open_config_file("settings.json", &Settings::template(), cx),
             OpenKeybindings => self.open_config_file(
                 "keybindings.json",
                 "// Place your key bindings in this file to override the defaults.\n// Example: { \"key\": \"ctrl+shift+d\", \"command\": \"editor.action.copyLinesDownAction\" }\n// Prefix a command with - to remove a default: { \"key\": \"ctrl+d\", \"command\": \"-editor.action.addSelectionToNextFindMatch\" }\n[\n]\n",
@@ -733,6 +757,34 @@ impl Workspace {
     }
 
     /// Recompute fold regions when the text changed enough to matter.
+    /// Rebuild the word-wrap row map if the text, the editor's width or the folds changed.
+    pub fn ensure_wrap(&mut self, g: usize, vi: usize) {
+        let char_w = f32::from(self.char_width).max(1.0);
+        let enabled = self.settings.word_wrap;
+        let view = &mut self.groups[g].views[vi];
+        let doc = &self.docs[view.doc];
+        let total = doc.buffer.len_lines();
+        let width = f32::from(view.scroll.0.borrow().base_handle.bounds().size.width);
+        // Two columns of slack for the caret, the scrollbar and font measurement rounding.
+        let columns = ((width - crate::workspace::GUTTER_WIDTH - 2.0 * crate::workspace::TEXT_PAD) / char_w).floor() - 2.0;
+        // Very large files are left unwrapped: the map is rebuilt on every edit.
+        if !enabled || total > 50_000 || columns < 8.0 {
+            view.wrap = None;
+            return;
+        }
+        let visible = view.folds.visible_lines(total);
+        let key = (doc.revision, columns as usize, total, visible.as_ref().map_or(total, Vec::len));
+        if view.wrap.as_ref().is_some_and(|w| w.key == key) {
+            return;
+        }
+        let shown = |line: usize| (line, forge_text::columns::expand_tabs(&doc.buffer.line(line)));
+        let map = match &visible {
+            Some(v) => crate::wrap::WrapMap::build(key, total, v.iter().map(|l| shown(*l))),
+            None => crate::wrap::WrapMap::build(key, total, (0..total).map(shown)),
+        };
+        view.wrap = Some(map);
+    }
+
     pub fn ensure_folds(&mut self, g: usize, vi: usize, force: bool) {
         let view = &mut self.groups[g].views[vi];
         let doc = &self.docs[view.doc];

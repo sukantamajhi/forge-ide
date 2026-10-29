@@ -22,7 +22,7 @@ use gpui::{Context, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseM
 
 use crate::completion;
 use crate::workspace::{
-    Focus, Item, ItemAction, Overlay, OverlayKind, PanelView, SidebarView, Workspace, GUTTER_WIDTH,
+    Focus, Item, ItemAction, Overlay, OverlayKind, PanelView, SidebarView, Workspace, GLYPH_WIDTH, GUTTER_WIDTH,
     LINE_NUMBER_WIDTH, TEXT_PAD,
 };
 
@@ -48,6 +48,7 @@ pub(crate) struct Drag {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Gutter {
+    Glyph,
     LineNumber,
     Fold,
 }
@@ -82,6 +83,10 @@ impl Workspace {
             }
         }
         if self.overlay.is_some() && self.overlay_key(k, &pressed, cx) {
+            cx.notify();
+            return;
+        }
+        if self.settings_open && self.overlay.is_none() && self.settings_key(k) {
             cx.notify();
             return;
         }
@@ -202,12 +207,25 @@ impl Workspace {
             }
             let doc = &self.docs[view.doc];
             let row = ((pos.y - bounds.top() - offset.y) / px_f(line_h)).floor().max(0.0) as usize;
-            let line = match view.folds.visible_lines(doc.buffer.len_lines()) {
-                Some(visible) => *visible.get(row).or(visible.last())?,
-                None => row,
+            // The line under the pointer, and (when wrapped) which cells of it this row shows.
+            let (line, start_cell, end_cell) = match &view.wrap {
+                Some(map) => {
+                    let info = map.row(row.min(map.row_count().saturating_sub(1)))?;
+                    (info.line, info.start, info.end)
+                }
+                None => {
+                    let line = match view.folds.visible_lines(doc.buffer.len_lines()) {
+                        Some(visible) => *visible.get(row).or(visible.last())?,
+                        None => row,
+                    };
+                    (line, 0, None)
+                }
+            };
+            let line = line.min(doc.buffer.len_lines() - 1);
+            let mut cell_x = (pos.x - bounds.left() - px_f(GUTTER_WIDTH + TEXT_PAD)) / self.char_width + start_cell as f32;
+            if let Some(end) = end_cell {
+                cell_x = cell_x.min(end as f32 - 0.51);
             }
-            .min(doc.buffer.len_lines() - 1);
-            let cell_x = (pos.x - bounds.left() - px_f(GUTTER_WIDTH + TEXT_PAD)) / self.char_width;
             let col = if cell_x <= 0.0 { 0 } else { col_at_cell(&doc.buffer.line(line), cell_x) };
             return Some((g, line, col));
         }
@@ -218,9 +236,11 @@ impl Workspace {
         let view = self.groups.get(g)?.views.get(self.groups[g].active)?;
         let left = view.scroll.0.borrow().base_handle.bounds().left();
         let x = f32::from(pos.x - left);
-        if (0.0..LINE_NUMBER_WIDTH).contains(&x) {
+        if (0.0..GLYPH_WIDTH).contains(&x) {
+            Some(Gutter::Glyph)
+        } else if (GLYPH_WIDTH..GLYPH_WIDTH + LINE_NUMBER_WIDTH).contains(&x) {
             Some(Gutter::LineNumber)
-        } else if (LINE_NUMBER_WIDTH..GUTTER_WIDTH).contains(&x) {
+        } else if (GLYPH_WIDTH + LINE_NUMBER_WIDTH..GUTTER_WIDTH).contains(&x) {
             Some(Gutter::Fold)
         } else {
             None
@@ -274,10 +294,17 @@ impl Workspace {
         let Some(vi) = self.groups.get(g).map(|gr| gr.active) else { return };
 
         if let Some(zone) = self.gutter_zone(ev.position, g) {
+            if zone == Gutter::Glyph {
+                let path = self.docs[self.groups[g].views[vi].doc].path.clone();
+                self.toggle_breakpoint(path, line);
+                cx.notify();
+                return;
+            }
             self.ensure_folds(g, vi, true);
             let view = &mut self.groups[g].views[vi];
             let doc = &self.docs[view.doc];
             match zone {
+                Gutter::Glyph => {}
                 Gutter::Fold => {
                     view.folds.toggle_at(line);
                 }
@@ -340,6 +367,16 @@ impl Workspace {
     }
 
     pub fn on_mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        // A divider is being dragged: everything else waits.
+        if self.resize.is_some() {
+            if ev.pressed_button == Some(MouseButton::Left) {
+                self.apply_resize(ev.position);
+            } else {
+                self.end_resize();
+            }
+            cx.notify();
+            return;
+        }
         let moved_far = self.mouse.is_none_or(|p| (p.x - ev.position.x).abs() > px_f(2.0) || (p.y - ev.position.y).abs() > px_f(2.0));
         self.mouse = Some(ev.position);
         if moved_far {
@@ -391,6 +428,8 @@ impl Workspace {
     pub fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Context<Self>) {
         self.drag = None;
         self.scm_dragging = false;
+        self.minimap_dragging = false;
+        self.end_resize();
     }
 
     // ---- overlays ----
@@ -409,7 +448,7 @@ impl Workspace {
             OverlayKind::NewEntry { folder: false, .. } => "File name (a/b/c.txt creates folders)",
             OverlayKind::NewEntry { folder: true, .. } => "Folder name",
             OverlayKind::RenameEntry(_) => "New name",
-            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } => "",
+            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmReplace { .. } => "",
             OverlayKind::GitCheckout => "Select a branch to switch to",
             OverlayKind::GitCreateBranch => "New branch name",
             OverlayKind::GitHistory => "Select a commit to view its changes",
@@ -568,6 +607,14 @@ impl Workspace {
                 overlay.note = Some(format!("Press Enter to move '{}' to the Recycle Bin, Escape to cancel", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
                 Vec::new()
             }
+            OverlayKind::ConfirmReplace { matches, files } => {
+                let with = self.search.replace.text();
+                overlay.note = Some(format!(
+                    "Replace {matches} matches in {files} files with '{}'? Files with unsaved changes are skipped. Enter to replace, Escape to cancel",
+                    if with.is_empty() { "nothing (delete the matches)" } else { with }
+                ));
+                Vec::new()
+            }
             OverlayKind::ConfirmDiscard { rel, untracked } => {
                 overlay.note = Some(if *untracked {
                     format!("Press Enter to move the untracked file '{rel}' to the Recycle Bin, Escape to cancel")
@@ -703,7 +750,7 @@ impl Workspace {
                 }
             }
             _ => {
-                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. }) {
+                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmReplace { .. }) {
                     return true;
                 }
                 match overlay.input.apply(&k.key, ctrl, k.key_char.as_deref()) {
@@ -785,6 +832,7 @@ impl Workspace {
             OverlayKind::RenameEntry(path) => self.finish_rename_entry(&path, &text),
             OverlayKind::ConfirmDelete(path) => self.finish_delete_entry(&path, cx),
             OverlayKind::ConfirmDiscard { rel, untracked } => self.finish_discard(&rel, untracked),
+            OverlayKind::ConfirmReplace { .. } => self.finish_replace_all(),
             OverlayKind::ExtSearch => {
                 if !text.is_empty() {
                     self.start_ext_search(text);
@@ -1090,7 +1138,7 @@ impl Workspace {
         changed |= self.poll_ext();
         // A shell that exited closes its terminal.
         let before = self.terminals.len();
-        self.terminals.retain_mut(Terminal::is_alive);
+        self.terminals.retain_mut(|t| t.is_alive() || t.keep_when_dead);
         if self.terminals.len() != before {
             self.active_terminal = self.active_terminal.min(self.terminals.len().saturating_sub(1));
             if self.terminals.is_empty() {
@@ -1116,12 +1164,65 @@ impl Workspace {
         self.reveal_caret(g, vi, true);
     }
 
+    /// Ask to replace every search result with the replacement text.
+    pub fn prompt_replace_all(&mut self) {
+        let matches = self.search.hits.len();
+        if matches == 0 || self.search.error.is_some() {
+            self.set_status("Search first: there is nothing to replace");
+            return;
+        }
+        let files = self.search.hits.iter().map(|h| &h.path).collect::<std::collections::BTreeSet<_>>().len();
+        self.open_overlay(OverlayKind::ConfirmReplace { matches, files }, "");
+    }
+
+    fn finish_replace_all(&mut self) {
+        let finder = match Finder::new(self.search.query.text(), self.search.options) {
+            Ok(f) => f,
+            Err(message) => {
+                self.set_status(message);
+                return;
+            }
+        };
+        let mut files: Vec<PathBuf> = self.search.hits.iter().map(|h| h.path.clone()).collect();
+        files.dedup();
+        files.sort();
+        files.dedup();
+        // A file open with unsaved edits must not be overwritten underneath the editor.
+        let dirty: Vec<PathBuf> = self.docs.iter().filter(|d| d.dirty).map(|d| d.path.clone()).collect();
+        let skip = |path: &Path| dirty.iter().any(|d| crate::workspace::same_path(d, path));
+        let report = project_search::replace_in_files(&finder, self.search.replace.text(), &files, &skip);
+        self.reload_clean_docs();
+        self.tree.refresh();
+        self.start_search();
+        let mut message = format!("Replaced {} occurrences in {} files", report.replaced, report.files);
+        if !report.skipped.is_empty() {
+            message.push_str(&format!(" ({} skipped: unsaved changes)", report.skipped.len()));
+        }
+        if let Some((path, error)) = report.failed.first() {
+            message.push_str(&format!(". Could not write {}: {error}", path.display()));
+        }
+        self.set_status(message);
+    }
+
     fn search_key(&mut self, k: &Keystroke, pressed: &str, cx: &mut Context<Self>) -> bool {
         let m = k.modifiers;
         let ctrl = m.control || m.platform;
+        let in_replace = self.search.replace_open && self.search.replace_focused;
         match (k.key.as_str(), ctrl, m.alt) {
             ("escape", ..) => {
                 self.focus = Focus::Editor;
+                return true;
+            }
+            ("enter", true, true) => {
+                self.prompt_replace_all();
+                return true;
+            }
+            ("tab", false, false) if self.search.replace_open => {
+                self.search.replace_focused = !self.search.replace_focused;
+                return true;
+            }
+            ("enter", false, false) if in_replace => {
+                self.prompt_replace_all();
                 return true;
             }
             ("enter", false, false) => {
@@ -1158,13 +1259,14 @@ impl Workspace {
             }
             _ => {}
         }
+        let field = if in_replace { &mut self.search.replace } else { &mut self.search.query };
         if pressed == "ctrl+v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                self.search.query.insert(&text);
+                field.insert(&text);
             }
             return true;
         }
-        matches!(self.search.query.apply(&k.key, ctrl, k.key_char.as_deref()), Outcome::Edited | Outcome::Moved)
+        matches!(field.apply(&k.key, ctrl, k.key_char.as_deref()), Outcome::Edited | Outcome::Moved)
     }
 
     // ---- source control ----
@@ -1381,7 +1483,7 @@ impl Workspace {
     pub fn sync_terminal_size(&mut self, viewport_width: Pixels) {
         let sidebar = if self.sidebar_visible { self.sidebar_width() } else { 0.0 };
         let cols = (f32::from(viewport_width) - sidebar - 24.0) / f32::from(self.char_width).max(1.0);
-        let rows = (crate::workspace::PANEL_HEIGHT - 34.0) / self.line_height();
+        let rows = (self.panel_height - 34.0) / self.line_height();
         for terminal in &mut self.terminals {
             terminal.resize(rows.max(2.0) as u16, cols.max(10.0) as u16);
         }

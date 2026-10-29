@@ -1,16 +1,22 @@
 mod command_impl;
 mod completion;
 mod context_menu;
+mod debug_support;
 mod git_support;
 mod input_handling;
 mod lsp;
+mod markdown_view;
+mod minimap;
 mod render;
+mod resize;
 mod host_support;
 mod snippet_support;
 mod ext_support;
 mod file_icons;
 mod server_support;
+mod settings_view;
 mod tree;
+mod wrap;
 mod workspace;
 
 use std::path::PathBuf;

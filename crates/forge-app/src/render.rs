@@ -13,13 +13,14 @@ use forge_text::brackets::matching_bracket;
 use forge_text::columns::{display_width, expand_tabs_mapped, TAB_WIDTH};
 use forge_text::search::Match;
 use gpui::{
-    div, font, prelude::*, px, rems, rgb, rgba, uniform_list, AnyElement, App, Context, Div, FontWeight, HighlightStyle, MouseButton, MouseDownEvent, MouseMoveEvent,
+    div, font, prelude::*, px, relative, rems, rgb, rgba, uniform_list, AnyElement, App, Context, Div, FontWeight, HighlightStyle, MouseButton, MouseDownEvent, MouseMoveEvent,
     Pixels, StyledText, Window,
 };
 
+use crate::resize::{equal_shares, Edge, Resize};
 use crate::workspace::{
     Focus, OverlayKind, PanelView, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
-    LINE_NUMBER_WIDTH, PANEL_HEIGHT, SIDEBAR_WIDTH, TAB_BAR_HEIGHT, TEXT_PAD,
+    GLYPH_WIDTH, LINE_NUMBER_WIDTH, TAB_BAR_HEIGHT, TEXT_PAD,
 };
 
 /// Horizontal padding of the Git view, and of the text inside the commit message box.
@@ -36,6 +37,8 @@ struct LineCtx {
     matches: Vec<Match>,
     current_match: Option<Match>,
     focused: bool,
+    breakpoints: std::collections::BTreeSet<usize>,
+    debug_line: Option<usize>,
 }
 
 /// The small coloured file-type badge shown before a file's name.
@@ -57,7 +60,7 @@ impl Workspace {
         }
     }
 
-    fn render_input(&self, input: &LineInput, placeholder: &str, focused: bool) -> Div {
+    pub(crate) fn render_input(&self, input: &LineInput, placeholder: &str, focused: bool) -> Div {
         let t = &self.theme;
         let text = input.text();
         let split = text.char_indices().nth(input.cursor()).map_or(text.len(), |(b, _)| b);
@@ -149,11 +152,17 @@ impl Workspace {
         } else {
             self.render_welcome().into_any_element()
         };
-        let mut column = div().flex().flex_col().flex_1().min_w_0().h_full().bg(rgb(t.bg)).border_color(rgb(t.border));
+        let mut column = div().relative().flex().flex_col().min_w_0().h_full().bg(rgb(t.bg)).border_color(rgb(t.border));
+        // Split groups take their dragged shares of the width; a single group takes all of it.
+        column = match (self.groups.len() > 1).then(|| self.group_fractions.get(g).copied()).flatten() {
+            Some(share) => column.flex_none().w(relative(share)),
+            None => column.flex_1(),
+        };
         if g > 0 {
             column = column.border_l_1();
         }
         column
+            .when(g + 1 < self.groups.len(), |d| d.child(self.resize_handle(("resize-group", g), Resize::Groups(g), Edge::Right, cx)))
             .child(self.render_tabs(g, cx))
             .child(self.render_breadcrumbs(g))
             .child(div().relative().flex_1().min_h_0().child(body).children((g == self.focused_group && self.find.open && has_views).then(|| self.render_find_widget(cx))))
@@ -188,25 +197,39 @@ impl Workspace {
     fn render_editor(&mut self, g: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let vi = self.groups[g].active;
         self.ensure_folds(g, vi, false);
+        self.ensure_wrap(g, vi);
+        self.ensure_minimap_stats(g, vi);
+        if self.preview_open && g == self.focused_group && self.is_markdown(g) {
+            self.ensure_markdown(g);
+        }
         let doc_ix = self.groups[g].views[vi].doc;
         self.ensure_gutter(doc_ix);
         let view = &self.groups[g].views[vi];
         let doc = &self.docs[view.doc];
         let total = doc.buffer.len_lines();
         let visible = view.folds.visible_lines(total);
-        let count = visible.as_ref().map_or(total, Vec::len);
+        let count = match &view.wrap {
+            Some(map) => map.row_count(),
+            None => visible.as_ref().map_or(total, Vec::len),
+        };
         let scroll = view.scroll.clone();
         let focused = g == self.focused_group;
-        div().size_full().child(
-            uniform_list(
-                ("editor", g),
-                count,
-                cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
-            )
-            .track_scroll(scroll)
-            .size_full()
-            .when(!focused, |d| d.opacity(0.92)),
+        let minimap = self.render_minimap(g, count, cx);
+        let preview = self.render_markdown_preview(g, cx);
+        div().size_full().flex().flex_row().child(
+            div().flex_1().min_w_0().h_full().child(
+                uniform_list(
+                    ("editor", g),
+                    count,
+                    cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
+                )
+                .track_scroll(scroll)
+                .size_full()
+                .when(!focused, |d| d.opacity(0.92)),
+            ),
         )
+        .children(preview)
+        .children(minimap)
     }
 
     fn render_lines(&self, g: usize, range: Range<usize>) -> Vec<Div> {
@@ -214,11 +237,12 @@ impl Workspace {
         let doc = &self.docs[view.doc];
         let total = doc.buffer.len_lines();
         let visible = view.folds.visible_lines(total);
-        let lines: Vec<usize> = match &visible {
-            Some(v) => range.filter_map(|i| v.get(i).copied()).collect(),
-            None => range.filter(|i| *i < total).collect(),
+        let rows: Vec<crate::wrap::Row> = match (&view.wrap, &visible) {
+            (Some(map), _) => range.filter_map(|i| map.row(i)).collect(),
+            (None, Some(v)) => range.filter_map(|i| v.get(i).copied()).map(|line| crate::wrap::Row { line, k: 0, start: 0, end: None }).collect(),
+            (None, None) => range.filter(|i| *i < total).map(|line| crate::wrap::Row { line, k: 0, start: 0, end: None }).collect(),
         };
-        let (Some(&first), Some(&last)) = (lines.first(), lines.last()) else { return Vec::new() };
+        let (Some(first), Some(last)) = (rows.first().map(|r| r.line), rows.last().map(|r| r.line)) else { return Vec::new() };
         let focused = g == self.focused_group;
         let spans = match (doc.syntax.as_ref(), doc.tm.as_ref()) {
             (Some(s), _) => s.highlight_lines(doc.buffer.rope(), first..last + 1),
@@ -236,11 +260,12 @@ impl Workspace {
         } else {
             (Vec::new(), None)
         };
-        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused };
-        lines.into_iter().map(|line| self.render_line(view, line, &ctx)).collect()
+        let (breakpoints, debug_line) = self.debug_marks(&doc.path);
+        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused, breakpoints, debug_line };
+        rows.into_iter().map(|row| self.render_line(view, row.line, &ctx, row)).collect()
     }
 
-    fn render_line(&self, view: &crate::workspace::View, line: usize, ctx: &LineCtx) -> Div {
+    fn render_line(&self, view: &crate::workspace::View, line: usize, ctx: &LineCtx, row: crate::wrap::Row) -> Div {
         let t = &self.theme;
         let doc = &self.docs[view.doc];
         let text = doc.buffer.line(line);
@@ -249,7 +274,8 @@ impl Workspace {
         let line_end = doc.buffer.line_end(line);
         let char_w = ctx.char_w;
         let line_h = px(ctx.line_h);
-        let x_of = |col: usize| char_w * display_width(&text, col) as f32 + px(TEXT_PAD);
+        // A wrapped row shows the whole line shifted left by its start cell; the text area clips it.
+        let x_of = |col: usize| char_w * (display_width(&text, col) as f32 - row.start as f32) + px(TEXT_PAD);
 
         let runs: Vec<(Range<usize>, HighlightStyle)> = ctx
             .spans
@@ -298,7 +324,9 @@ impl Workspace {
                 let extra = usize::from(sel.end() > line_end);
                 layers.push(rect(from, display_width(&text, to) - display_width(&text, from) + extra, t.selection));
             }
-            if ctx.focused && doc.buffer.offset_to_point(sel.head).0 == line {
+            let head_cell = display_width(&text, sel.head.saturating_sub(line_start));
+            let in_row = head_cell >= row.start && row.end.is_none_or(|e| head_cell < e);
+            if ctx.focused && in_row && doc.buffer.offset_to_point(sel.head).0 == line {
                 layers.push(div().absolute().top_0().left(x_of(sel.head - line_start)).w(px(2.0)).h(line_h).bg(rgb(t.caret)));
             }
         }
@@ -321,7 +349,7 @@ impl Workspace {
         }
         // Indent guides.
         let lead_cells = display_width(&text, text.chars().take_while(|c| *c == ' ' || *c == '\t').count());
-        if !text.trim().is_empty() {
+        if !text.trim().is_empty() && row.k == 0 {
             for k in 1..(lead_cells / TAB_WIDTH.max(1)).max(1) {
                 if k * TAB_WIDTH < lead_cells {
                     layers.push(div().absolute().top_0().left(char_w * (k * TAB_WIDTH) as f32 + px(TEXT_PAD)).w(px(1.0)).h(line_h).bg(rgb(t.border)));
@@ -330,7 +358,7 @@ impl Workspace {
         }
         // Folded region marker.
         let collapsed = view.folds.collapsed_end(line).is_some();
-        if collapsed {
+        if collapsed && row.end.is_none() {
             let end_x = x_of(text.chars().count()) + char_w;
             layers.push(div().absolute().top(px(1.0)).left(end_x).h(line_h - px(2.0)).px_1().rounded_sm().bg(rgb(t.border)).text_color(rgb(t.dim)).child("…"));
         }
@@ -345,6 +373,8 @@ impl Workspace {
         let chevron = if view.folds.has_region_at(line) { if collapsed { "▸" } else { "▾" } } else { "" };
 
         let change = change_at(&doc.gutter, line);
+        let is_debug_line = ctx.debug_line == Some(line);
+        let has_breakpoint = ctx.breakpoints.contains(&line);
         div()
             .relative()
             .flex()
@@ -352,8 +382,29 @@ impl Workspace {
             .w_full()
             .h(line_h)
             .when(caret_line, |d| d.bg(rgb(t.line_highlight)))
+            .when(is_debug_line, |d| d.bg(crate::debug_support::tint(t.warning, 0x33)))
             .when_some(diff_style.and_then(|(c, tint)| tint.then_some(c)), |d, c| d.bg(rgba((c << 8) | 0x26)))
             .children(change.map(|kind| gutter_marker(t, kind, line_h)))
+            .child(
+                // The margin: a red dot for a breakpoint, an arrow where a paused program stopped.
+                div()
+                    .w(px(GLYPH_WIDTH))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(t.warning))
+                    .text_size(rems(0.75))
+                    .child(if row.k != 0 {
+                        div()
+                    } else if is_debug_line {
+                        div().child("▶")
+                    } else if has_breakpoint {
+                        div().w(px(10.0)).h(px(10.0)).rounded_full().bg(rgb(0xe51400))
+                    } else {
+                        div()
+                    }),
+            )
             .child(
                 div()
                     .w(px(LINE_NUMBER_WIDTH))
@@ -362,16 +413,29 @@ impl Workspace {
                     .flex()
                     .justify_end()
                     .text_color(rgb(number_color))
-                    .child((line + 1).to_string()),
+                    .child(if row.k == 0 { (line + 1).to_string() } else { String::new() }),
             )
-            .child(div().w(px(FOLD_WIDTH)).flex_none().text_color(rgb(t.dim)).text_xs().child(chevron))
+            .child(div().w(px(FOLD_WIDTH)).flex_none().text_color(rgb(t.dim)).text_xs().child(if row.k == 0 { chevron } else { "" }))
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .h(line_h)
-                    .children(layers)
-                    .child(div().absolute().top_0().left(px(TEXT_PAD)).whitespace_nowrap().child(StyledText::new(shown).with_highlights(runs))),
+                    .overflow_hidden()
+                    .child(
+                        // A row that wrapped early is narrower than the editor: clip it to its own cells so
+                        // the rest of the line does not show through beside it.
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .h(line_h)
+                            .when_some(row.end, |d, end| d.w(char_w * (end - row.start) as f32 + px(TEXT_PAD)))
+                            .when(row.end.is_none(), |d| d.w_full())
+                            .overflow_hidden()
+                            .children(layers)
+                            .child(div().absolute().top_0().left(px(TEXT_PAD) - char_w * row.start as f32).whitespace_nowrap().child(StyledText::new(shown).with_highlights(runs))),
+                    ),
             )
     }
 
@@ -534,9 +598,11 @@ impl Workspace {
             .flex_none()
             .w(px(self.sidebar_width()))
             .h_full()
+            .relative()
             .bg(rgb(t.sidebar))
             .border_r_1()
             .border_color(rgb(t.border))
+            .child(self.resize_handle(("resize", 0), Resize::Sidebar, Edge::Right, cx))
             .child(div().flex().flex_row().child(tab("EXPLORER".to_owned(), SidebarView::Explorer, cx)).child(tab("SEARCH".to_owned(), SidebarView::Search, cx)).child(tab(if changes > 0 { format!("GIT {changes}") } else { "GIT".to_owned() }, SidebarView::Git, cx)))
             .child(body)
     }
@@ -691,11 +757,68 @@ impl Workspace {
                         this.focus = Focus::Search;
                         cx.notify();
                     }))
-                    .child(div().flex_1().min_w_0().child(self.render_input(&s.query, "Search", self.focus == Focus::Search)))
+                    .child(
+                        div()
+                            .id("search-replace-toggle")
+                            .w(rems(1.5))
+                            .h(rems(1.625))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .text_color(rgb(t.dim))
+                            .hover(|s| s.bg(rgb(t.tab_active)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.search.replace_open = !this.search.replace_open;
+                                this.search.replace_focused = this.search.replace_open;
+                                this.focus = Focus::Search;
+                                cx.notify();
+                            }))
+                            .child(if s.replace_open { "▾" } else { "▸" }),
+                    )
+                    .child(div().flex_1().min_w_0().on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.search.replace_focused = false;
+                        this.focus = Focus::Search;
+                        cx.stop_propagation();
+                        cx.notify();
+                    })).child(self.render_input(&s.query, "Search", self.focus == Focus::Search && !s.replace_focused)))
                     .child(toggle("Aa", s.options.case_sensitive, 0, cx))
                     .child(toggle("ab", s.options.whole_word, 1, cx))
                     .child(toggle(".*", s.options.regex, 2, cx)),
             )
+            .children(s.replace_open.then(|| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .items_center()
+                    .pl(rems(1.75))
+                    .child(div().flex_1().min_w_0().on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.search.replace_focused = true;
+                        this.focus = Focus::Search;
+                        cx.stop_propagation();
+                        cx.notify();
+                    })).child(self.render_input(&s.replace, "Replace", self.focus == Focus::Search && s.replace_focused)))
+                    .child(
+                        div()
+                            .id("search-replace-all")
+                            .h(rems(1.625))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .rounded_sm()
+                            .text_sm()
+                            .when(!s.hits.is_empty(), |d| d.cursor_pointer().hover(|s| s.opacity(0.85)))
+                            .bg(rgb(if s.hits.is_empty() { t.tab_active } else { t.button }))
+                            .text_color(rgb(if s.hits.is_empty() { t.dim } else { t.button_text }))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.prompt_replace_all();
+                                cx.notify();
+                            }))
+                            .child("Replace All"),
+                    )
+            }))
             .child(div().text_xs().text_color(rgb(if s.error.is_some() { t.error } else { t.dim })).child(status))
             .child(
                 div().flex_1().min_h_0().child(
@@ -734,11 +857,6 @@ impl Workspace {
     }
 
     // ---- source control ----
-
-    /// The sidebar's width: 300px at the default zoom, growing and shrinking with it.
-    pub fn sidebar_width(&self) -> f32 {
-        SIDEBAR_WIDTH * (self.settings.font_size / 14.0).clamp(0.7, 3.0)
-    }
 
     /// Characters that fit on one row of the commit message box.
     pub fn scm_wrap_cols(&self) -> usize {
@@ -1215,12 +1333,14 @@ impl Workspace {
             PanelView::Terminal => self.render_terminal().into_any_element(),
             PanelView::Problems => self.render_problems(cx).into_any_element(),
             PanelView::References => self.render_references(cx).into_any_element(),
+            PanelView::Debug => self.render_debug_panel(cx),
         };
         div()
             .flex()
             .flex_col()
             .flex_none()
-            .h(px(PANEL_HEIGHT))
+            .h(px(self.panel_height))
+            .relative()
             .border_t_1()
             .border_color(rgb(t.border))
             .bg(rgb(t.bg))
@@ -1234,6 +1354,7 @@ impl Workspace {
                     .child(tab(format!("PROBLEMS {problem_count}"), PanelView::Problems, cx))
                     .child(tab("TERMINAL".to_owned(), PanelView::Terminal, cx))
                     .child(tab(format!("REFERENCES {}", self.references.len()), PanelView::References, cx))
+                    .child(tab("DEBUG".to_owned(), PanelView::Debug, cx))
                     .child(div().flex_1())
                     .child(
                         div()
@@ -1258,6 +1379,7 @@ impl Workspace {
                     ),
             )
             .child(div().flex_1().min_h_0().child(body))
+            .child(self.resize_handle(("resize", 1), Resize::Panel, Edge::Top, cx))
     }
 
     fn render_terminal(&self) -> impl IntoElement {
@@ -1412,9 +1534,11 @@ impl Workspace {
         if bounds.size.height <= px(0.0) {
             return None;
         }
-        let row = view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line);
         let text = doc.buffer.line(line);
-        let x = bounds.left() + px_f(GUTTER_WIDTH + TEXT_PAD) + self.char_width * display_width(&text, col) as f32;
+        let cell = display_width(&text, col);
+        let wrapped = view.wrap.as_ref().and_then(|w| w.row_of(line, cell).and_then(|r| w.row(r).map(|info| (r, info.start))));
+        let (row, start_cell) = wrapped.unwrap_or_else(|| (view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line), 0));
+        let x = bounds.left() + px_f(GUTTER_WIDTH + TEXT_PAD) + self.char_width * (cell - start_cell) as f32;
         let y = bounds.top() + offset.y + px_f(self.line_height()) * (row + 1) as f32;
         (y > bounds.top() - px(1.0) && y < bounds.bottom() + px_f(self.line_height())).then_some((x, y))
     }
@@ -1485,7 +1609,7 @@ impl Workspace {
     fn render_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
         let t = &self.theme;
         let overlay = self.overlay.as_ref()?;
-        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. });
+        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmReplace { .. });
         let start = overlay.selected.saturating_sub(11);
         let end = (start + 12).min(overlay.items.len());
         let rows = (start..end).map(|ix| {
@@ -1680,6 +1804,10 @@ impl Render for Workspace {
 
         let mut centre = div().flex().flex_col().flex_1().min_w_0().h_full();
         let group_count = self.groups.len();
+        if self.group_fractions.len() != group_count {
+            self.group_fractions = equal_shares(group_count);
+        }
+        self.viewport = (f32::from(window.viewport_size().width), f32::from(window.viewport_size().height));
         let mut groups = div().flex().flex_row().flex_1().min_h_0();
         for g in 0..group_count {
             groups = groups.child(self.render_group(g, cx));
@@ -1719,6 +1847,8 @@ impl Render for Workspace {
             .children(self.render_completion())
             .children(self.render_hover())
             .children(signature.as_ref().and_then(|s| self.render_signature(s)))
+            .children(self.render_settings(cx))
+            .children(self.render_debug_toolbar(f32::from(window.viewport_size().width), cx))
             .children(self.render_overlay(cx))
             .children(self.render_context_menu(window.viewport_size(), cx))
     }

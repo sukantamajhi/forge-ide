@@ -57,6 +57,55 @@ pub fn read_text_file(path: &Path) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// What a replace across files did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ReplaceReport {
+    pub replaced: usize,
+    pub files: usize,
+    /// Files left alone because the caller said so (open with unsaved edits).
+    pub skipped: Vec<PathBuf>,
+    pub failed: Vec<(PathBuf, String)>,
+}
+
+/// `text` with ascending, non-overlapping char-range `edits` applied.
+pub fn apply_replacements(text: &str, edits: &[(usize, usize, String)]) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (start, end, replacement) in edits {
+        out.extend(&chars[at..*start]);
+        out.push_str(replacement);
+        at = *end;
+    }
+    out.extend(&chars[at..]);
+    out
+}
+
+/// Replace every match of `finder` with `replacement` in `files`. Files for which `skip` is true are
+/// reported, not touched. In regex mode `$1` and `${name}` expand to capture groups.
+pub fn replace_in_files(finder: &Finder, replacement: &str, files: &[PathBuf], skip: &dyn Fn(&Path) -> bool) -> ReplaceReport {
+    let mut report = ReplaceReport::default();
+    for path in files {
+        if skip(path) {
+            report.skipped.push(path.clone());
+            continue;
+        }
+        let Some(text) = read_text_file(path) else { continue };
+        let edits = finder.replacements(&text, replacement);
+        if edits.is_empty() {
+            continue;
+        }
+        match std::fs::write(path, apply_replacements(&text, &edits)) {
+            Ok(()) => {
+                report.replaced += edits.len();
+                report.files += 1;
+            }
+            Err(e) => report.failed.push((path.clone(), e.to_string())),
+        }
+    }
+    report
+}
+
 /// Matches of `finder` in one text, as hits for `path`.
 pub fn hits_in_text(path: &Path, text: &str, finder: &Finder) -> Vec<Hit> {
     let matches = finder.find_all(text);
@@ -183,5 +232,32 @@ mod tests {
         let hits = hits_in_text(Path::new("x"), "é aa aa\nbb", &finder("aa"));
         assert_eq!(hits.iter().map(|h| (h.line, h.col)).collect::<Vec<_>>(), vec![(0, 2), (0, 5)]);
         assert_eq!(hits[0].len, 2);
+    }
+
+    #[test]
+    fn replace_in_files_rewrites_matches_skips_and_expands_captures() {
+        use forge_text::search::SearchOptions;
+        let dir = std::env::temp_dir().join(format!("forge-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b, c) = (dir.join("a.txt"), dir.join("b.txt"), dir.join("c.txt"));
+        std::fs::write(&a, "foo bar\r\nfoo\n").unwrap();
+        std::fs::write(&b, "foo unsaved\n").unwrap();
+        std::fs::write(&c, "nothing here\n").unwrap();
+
+        let finder = Finder::new("foo", SearchOptions::default()).unwrap();
+        let skip_b = |p: &Path| p.ends_with("b.txt");
+        let report = replace_in_files(&finder, "baz", &[a.clone(), b.clone(), c.clone()], &skip_b);
+        assert_eq!((report.replaced, report.files), (2, 1));
+        assert_eq!(report.skipped, vec![b.clone()]);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "baz bar\r\nbaz\n", "line endings are preserved");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "foo unsaved\n");
+
+        let regex = Finder::new(r"(\w+) bar", SearchOptions { regex: true, ..Default::default() }).unwrap();
+        let report = replace_in_files(&regex, "bar $1", &[a.clone()], &|_| false);
+        assert_eq!(report.replaced, 1);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "bar baz\r\nbaz\n");
+        assert_eq!(apply_replacements("héllo wörld", &[(1, 2, "e".into()), (7, 8, "o".into())]), "hello world");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

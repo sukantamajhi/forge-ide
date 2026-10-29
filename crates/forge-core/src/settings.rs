@@ -15,6 +15,10 @@ pub struct Settings {
     pub format_on_save: bool,
     /// `languageServers` in settings.json: VS Code language id to command and arguments.
     pub language_servers: std::collections::BTreeMap<String, (String, Vec<String>)>,
+    /// `editor.minimap.enabled`: the overview strip beside the editor.
+    pub minimap: bool,
+    /// `editor.wordWrap`: wrap long lines at the editor's width.
+    pub word_wrap: bool,
     /// `lsp.autoStart` in settings.json: start the servers for the languages found in the opened folder at launch.
     pub lsp_autostart: bool,
     /// `ai.model` in settings.json: the OpenAI model that writes commit messages.
@@ -32,6 +36,8 @@ impl Default for Settings {
             trim_trailing_whitespace: false,
             format_on_save: false,
             language_servers: Default::default(),
+            minimap: true,
+            word_wrap: false,
             lsp_autostart: true,
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
         }
@@ -120,6 +126,17 @@ impl Settings {
         if let Some(v) = map.get("editor.formatOnSave").and_then(Value::as_bool) {
             s.format_on_save = v;
         }
+        if let Some(v) = map.get("editor.minimap.enabled").and_then(Value::as_bool) {
+            s.minimap = v;
+        }
+        if let Some(v) = map.get("editor.wordWrap") {
+            // VS Code writes "on" / "off" (and "wordWrapColumn", "bounded"); booleans are accepted too.
+            s.word_wrap = match v {
+                Value::Bool(b) => *b,
+                Value::String(m) => m != "off",
+                _ => s.word_wrap,
+            };
+        }
         if let Some(v) = map.get("lsp.autoStart").and_then(Value::as_bool) {
             s.lsp_autostart = v;
         }
@@ -144,6 +161,67 @@ impl Settings {
             d.font_size, d.tab_size, d.insert_spaces, d.theme, d.trim_trailing_whitespace, d.format_on_save
         )
     }
+}
+
+/// `text` (the contents of settings.json) with `key` set to `json_value` (already valid JSON).
+///
+/// Edits in place so comments, ordering and every other key survive: an existing `"key": value`
+/// has just its value replaced, and a new key is added before the final `}`. Only when the file
+/// cannot be edited safely this way (a trailing line comment on the last entry) is it rewritten
+/// from its parsed content, which drops comments.
+pub fn set_value(text: &str, key: &str, json_value: &str) -> String {
+    let needle = format!("\"{key}\"");
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with("//") {
+            if let Some(at) = line.find(&needle) {
+                let after = &line[at + needle.len()..];
+                let colon = after.trim_start();
+                if let Some(rest) = colon.strip_prefix(':') {
+                    let value_start = offset + at + needle.len() + (after.len() - colon.len()) + 1 + (rest.len() - rest.trim_start().len());
+                    let value_end = offset + at + needle.len() + (after.len() - colon.len()) + 1 + value_length(rest);
+                    return format!("{}{}{}", &text[..value_start], json_value, &text[value_end..]);
+                }
+            }
+        }
+        offset += line.len();
+    }
+    let Some(close) = text.rfind('}') else {
+        return format!("{{\n    {needle}: {json_value}\n}}\n");
+    };
+    let before = text[..close].trim_end();
+    let last_line = before.rsplit('\n').next().unwrap_or("");
+    if last_line.contains("//") {
+        let mut map = match crate::jsonc::parse(text) {
+            Ok(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        map.insert(key.to_owned(), serde_json::from_str(json_value).unwrap_or(Value::Null));
+        return serde_json::to_string_pretty(&Value::Object(map)).unwrap_or_default() + "\n";
+    }
+    let comma = if before.ends_with('{') || before.ends_with(',') { "" } else { "," };
+    format!("{before}{comma}\n    {needle}: {json_value}\n{}", &text[close..])
+}
+
+/// Byte length of the JSON value at the start of `rest` (after the colon): a string, or a bare
+/// number/boolean/null up to the next `,`, `}` or line end.
+fn value_length(rest: &str) -> usize {
+    let lead = rest.len() - rest.trim_start().len();
+    let body = &rest[lead..];
+    if let Some(inner) = body.strip_prefix('"') {
+        let mut escaped = false;
+        for (i, c) in inner.char_indices() {
+            match c {
+                '\\' if !escaped => escaped = true,
+                '"' if !escaped => return lead + i + 2,
+                _ => escaped = false,
+            }
+        }
+        return rest.len();
+    }
+    let end = body.find([',', '}', '\n', '/']).unwrap_or(body.len());
+    lead + body[..end].trim_end().len()
 }
 
 /// Where user configuration lives: `%APPDATA%\Forge` on Windows, `~/.config/forge` elsewhere
@@ -219,5 +297,37 @@ mod tests {
         assert_eq!(strip_json_comments(r#"{"a": "x//y" // c
 }"#), "{\"a\": \"x//y\" \n}");
         assert_eq!(strip_json_comments(r#""q\"//still string""#), r#""q\"//still string""#);
+    }
+
+    #[test]
+    fn set_value_replaces_in_place_and_keeps_comments() {
+        let text = "{\n    // size in pixels\n    \"editor.fontSize\": 14, // keep\n    \"workbench.colorTheme\": \"Forge Dark\",\n    \"editor.insertSpaces\": true\n}\n";
+        let out = set_value(text, "editor.fontSize", "18");
+        assert_eq!(out, "{\n    // size in pixels\n    \"editor.fontSize\": 18, // keep\n    \"workbench.colorTheme\": \"Forge Dark\",\n    \"editor.insertSpaces\": true\n}\n");
+        let out = set_value(&out, "workbench.colorTheme", "\"Forge Light\"");
+        assert!(out.contains("\"workbench.colorTheme\": \"Forge Light\","), "{out}");
+        let out = set_value(&out, "editor.insertSpaces", "false");
+        assert!(out.contains("\"editor.insertSpaces\": false\n}"), "{out}");
+        assert_eq!(Settings::parse(&out).font_size, 18.0);
+        assert!(!Settings::parse(&out).insert_spaces);
+    }
+
+    #[test]
+    fn set_value_ignores_commented_out_keys_and_adds_new_ones() {
+        let text = "{\n    // \"editor.tabSize\": 8,\n    \"editor.fontSize\": 14\n}\n";
+        let out = set_value(text, "editor.tabSize", "2");
+        assert!(out.contains("// \"editor.tabSize\": 8,"), "the comment is untouched: {out}");
+        assert!(out.contains("\"editor.fontSize\": 14,\n    \"editor.tabSize\": 2\n}"), "{out}");
+        assert_eq!(Settings::parse(&out).tab_size, 2);
+        let empty = set_value("{}", "ai.model", "\"gpt-5-nano\"");
+        assert_eq!(empty, "{\n    \"ai.model\": \"gpt-5-nano\"\n}");
+        assert_eq!(Settings::parse(&set_value("", "ai.model", "\"x\"")).ai_model, "x");
+    }
+
+    #[test]
+    fn set_value_falls_back_to_a_rewrite_when_the_last_entry_has_a_comment() {
+        let out = set_value("{\n    \"editor.fontSize\": 14 // last\n}\n", "editor.tabSize", "2");
+        let parsed = Settings::parse(&out);
+        assert_eq!((parsed.font_size, parsed.tab_size), (14.0, 2), "{out}");
     }
 }

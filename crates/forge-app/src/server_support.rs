@@ -111,6 +111,23 @@ impl Workspace {
         self.set_status("Installing language servers in the background...");
     }
 
+    /// Download and install a debug adapter on a background thread (only when the user asked):
+    /// CodeLLDB for Rust if `rust`, otherwise js-debug for JavaScript.
+    pub fn install_debug_adapter(&mut self, rust: bool) {
+        if self.install_rx.is_some() {
+            self.set_status("An install is already running");
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let dir = forge_core::settings::config_dir().join("servers");
+        std::thread::spawn(move || {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = tx.send(if rust { forge_core::debug_install::install_codelldb(&dir) } else { forge_core::debug_install::install_js_debug(&dir) });
+        });
+        self.install_rx = Some(rx);
+        self.set_status(if rust { "Downloading CodeLLDB from github.com/vadimcn/codelldb (about 50 MB)..." } else { "Downloading the JavaScript debugger from github.com/microsoft/vscode-js-debug..." });
+    }
+
     /// Pick up a finished install and start servers that were waiting for it.
     pub fn poll_install(&mut self) -> bool {
         let Some(rx) = &self.install_rx else { return false };
