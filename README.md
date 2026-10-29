@@ -27,14 +27,14 @@ cargo build --release -p forge-app            # LTO; slow first build
   (Ctrl+Shift+P), Go to Line (Ctrl+G), Go to Symbol (Ctrl+Shift+O), bracket matching and jump, folding,
   breadcrumbs, next/previous problem (F8), tabs, split editor (Ctrl+\\).
 - **Language features** (through a language server): diagnostics, completion, hover, signature help,
-  go to definition (F12 / Ctrl+click), references (Shift+F12), rename (F2), quick fix (Ctrl+.), format
+  go to definition (F12 / Ctrl+click; several results open a picker), references (Shift+F12), rename (F2), quick fix (Ctrl+.), format
   document (Shift+Alt+F), outline, Problems panel.
 - **Source control** (Ctrl+Shift+G; uses your `git`): changed-files view with staged / unstaged groups,
   stage, unstage, discard (untracked files go to the Recycle Bin), commit, commit all, pull, push, fetch,
   stash, branch create and checkout, file history and commit diffs, blame for a line, unified diff tabs,
   change markers in the editor gutter that update as you type, status decorations in the explorer, and the
   branch with ahead/behind in the status bar. Everything is also in the Command Palette as `Git: ...`.
-- **Workbench:** explorer with new file/folder, rename (F2) and delete to the Recycle Bin, integrated
+- **Workbench:** right-click menus in the editor and explorer, explorer with new file/folder, rename (F2) and delete to the Recycle Bin, integrated
   terminal (Ctrl+`), bottom panel, sidebar toggle (Ctrl+B), zoom, three themes, settings and keybindings JSON.
 
 Every command has a VS Code id and is listed in the Command Palette with its shortcut. Syntax

@@ -556,6 +556,13 @@ impl Workspace {
                                             }
                                             cx.notify();
                                         }))
+                                        .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                            // The workspace-level right click is for the editor only.
+                                            cx.stop_propagation();
+                                            this.focus = Focus::Explorer;
+                                            this.explorer_selected = Some(ix);
+                                            this.open_explorer_menu(ix, ev.position, cx);
+                                        }))
                                         .flex()
                                         .flex_row()
                                         .justify_between()
@@ -1368,6 +1375,7 @@ impl Render for Workspace {
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, ev, _w, cx| this.on_key_down(ev, cx)))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _w, cx| this.on_mouse_down(ev, cx)))
+            .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _w, cx| this.on_right_mouse_down(ev, cx)))
             .on_mouse_move(cx.listener(|this, ev, _w, cx| this.on_mouse_move(ev, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, ev, _w, cx| this.on_mouse_up(ev, cx)))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, ev, _w, cx| this.on_mouse_up(ev, cx)))
@@ -1385,6 +1393,7 @@ impl Render for Workspace {
             .children(self.render_hover())
             .children(signature.as_ref().and_then(|s| self.render_signature(s)))
             .children(self.render_overlay(cx))
+            .children(self.render_context_menu(window.viewport_size(), cx))
     }
 }
 

@@ -255,6 +255,8 @@ pub(crate) enum OverlayKind {
     Symbols,
     Theme,
     CodeActions,
+    /// Several definitions for one symbol (trait impls, overloads): pick where to go.
+    Definitions,
     Rename,
     NewEntry { dir: PathBuf, folder: bool },
     RenameEntry(PathBuf),
@@ -279,6 +281,7 @@ pub(crate) enum ItemAction {
     File(PathBuf),
     Theme(String),
     CodeAction(usize),
+    Definition(usize),
     Symbol(usize, usize),
     GitBranch(usize),
     GitCommit(usize),
@@ -399,6 +402,8 @@ pub(crate) struct Workspace {
     pub symbols: Vec<Symbol>,
     pub code_actions: Vec<CodeAction>,
     pub references: Vec<RefEntry>,
+    /// The candidates offered by the Definitions picker.
+    pub definitions: Vec<RefEntry>,
     pub reference_selected: usize,
     pub problem_selected: usize,
     pub problems_scroll: UniformListScrollHandle,
@@ -407,6 +412,7 @@ pub(crate) struct Workspace {
     pub find: FindState,
     pub find_revision: (usize, u64),
     pub overlay: Option<Overlay>,
+    pub context_menu: Option<crate::context_menu::ContextMenu>,
     pub search: SearchPanel,
     pub file_index: Option<Vec<PathBuf>>,
     pub file_index_rx: Option<Receiver<Vec<PathBuf>>>,
@@ -499,6 +505,7 @@ impl Workspace {
             symbols: Vec::new(),
             code_actions: Vec::new(),
             references: Vec::new(),
+            definitions: Vec::new(),
             reference_selected: 0,
             problem_selected: 0,
             problems_scroll: UniformListScrollHandle::new(),
@@ -506,6 +513,7 @@ impl Workspace {
             find: FindState::default(),
             find_revision: (usize::MAX, 0),
             overlay: None,
+            context_menu: None,
             search: SearchPanel {
                 query: LineInput::default(),
                 options: Default::default(),
@@ -921,13 +929,29 @@ impl Workspace {
     // ---- language servers ----
 
     pub fn attach_lsp(&mut self, doc_ix: usize) {
-        let Some(language) = self.docs[doc_ix].language.filter(|l| self.lsp.key_for(*l).is_some()) else { return };
+        let Some(language) = self.docs[doc_ix].language.filter(|l| self.lsp.key_for(*l).is_some()) else {
+            eprintln!("[lsp] {}: no language server for this file (language {:?})", self.docs[doc_ix].path.display(), self.docs[doc_ix].language);
+            return;
+        };
         match self.lsp.start(language) {
-            Err(reason) => self.set_status(reason),
+            Err(reason) => {
+                eprintln!("[lsp] {}: cannot start a server: {reason}", self.docs[doc_ix].path.display());
+                self.set_status(reason)
+            }
             Ok(()) => {
                 let doc = &mut self.docs[doc_ix];
                 doc.lsp_open = self.lsp.did_open(language, &doc.path, doc.lsp_version, &doc.buffer.text());
+                eprintln!("[lsp] {}: opened on server = {}", doc.path.display(), doc.lsp_open);
             }
+        }
+    }
+
+    /// Why the active file has no language server to ask, in words for the status bar.
+    pub fn lsp_unavailable_reason(&self) -> String {
+        let Some(doc) = self.active_doc() else { return "no file is open".to_owned() };
+        match doc.language {
+            None => "Forge does not recognise this file type".to_owned(),
+            Some(language) => self.lsp.unavailable_reason(language),
         }
     }
 
@@ -964,9 +988,12 @@ impl Workspace {
 
     pub fn request_at(&mut self, method: &str, tag: RequestTag) {
         let Some((language, uri, at)) = self.lsp_target() else {
-            self.set_status("Language server is not ready");
+            let reason = self.lsp_unavailable_reason();
+            eprintln!("[lsp] {method}: no target: {reason}");
+            self.set_status(format!("Language server unavailable: {reason}"));
             return;
         };
+        eprintln!("[lsp] {method} at {}:{} in {uri}", at.line, at.character);
         let params = match method {
             "textDocument/references" => forge_lsp::references_params(&uri, at),
             _ => text_document_position(&uri, at),
@@ -1031,7 +1058,10 @@ impl Workspace {
                 self.show_completions(parse_completion(&result));
             }
             RequestTag::Completion(_) => {}
-            RequestTag::Definition => self.go_to_locations(parse_locations(&result), cx),
+            RequestTag::Definition => {
+                eprintln!("[lsp] definition result: {result}");
+                self.go_to_locations(parse_locations(&result), cx)
+            }
             RequestTag::Hover(id) => {
                 if let (Some((want, line, col)), Some(text)) = (self.hover_request, parse_hover(&result).map(|t| collapse_blank_lines(&t))) {
                     if want == id {
@@ -1132,12 +1162,37 @@ impl Workspace {
     }
 
     pub fn go_to_locations(&mut self, locations: Vec<Location>, cx: &mut Context<Self>) {
-        // Several definitions (e.g. trait impls) are not offered as a list yet: take the first.
-        let Some(location) = locations.into_iter().next() else {
-            self.set_status("No definition found");
-            return;
-        };
-        self.open_file(&location.path, Some((location.range.start.line, location.range.start.character)), cx);
+        let mut unique: Vec<Location> = Vec::new();
+        for location in locations {
+            let seen = unique.iter().any(|u| same_path(&u.path, &location.path) && u.range.start == location.range.start);
+            if !seen {
+                unique.push(location);
+            }
+        }
+        match unique.len() {
+            0 => self.set_status("No definition found"),
+            1 => {
+                let location = &unique[0];
+                self.open_file(&location.path, Some((location.range.start.line, location.range.start.character)), cx);
+            }
+            _ => {
+                self.definitions = unique
+                    .into_iter()
+                    .take(200)
+                    .map(|location| {
+                        let preview = self.line_preview(&location);
+                        RefEntry { location, preview }
+                    })
+                    .collect();
+                self.open_overlay(OverlayKind::Definitions, "");
+                self.set_status(format!("{} definitions", self.definitions.len()));
+            }
+        }
+    }
+
+    /// `path` relative to the project root when it is inside it.
+    pub fn display_path(&self, path: &Path) -> String {
+        path.strip_prefix(self.root()).unwrap_or(path).to_string_lossy().replace('\\', "/")
     }
 
     /// Hover requests start when the pointer has rested over text.

@@ -87,6 +87,21 @@ impl LspManager {
         self.spec(language).map(|s| s.key)
     }
 
+    /// Why a file in `language` has no running server to talk to, for status messages and logs.
+    pub fn unavailable_reason(&self, language: Language) -> String {
+        let Some(spec) = self.spec(language) else {
+            return format!("no language server is configured for {}", language.name());
+        };
+        if let Some(reason) = self.unavailable.get(&spec.key) {
+            return format!("{} could not start: {reason}", spec.title);
+        }
+        match self.servers.get(&spec.key) {
+            Some(server) if matches!(server.state, State::Ready) => format!("{} is running but this file was not opened on it", spec.title),
+            Some(_) => format!("{} is still starting; try again in a moment", spec.title),
+            None => format!("{} has not been started", spec.title),
+        }
+    }
+
     /// Allow servers that failed to start to be tried again (after an install).
     pub fn forget_unavailable(&mut self) {
         self.unavailable.clear();
@@ -152,10 +167,20 @@ impl LspManager {
     }
 
     pub fn request(&mut self, language: Language, method: &str, params: Value, tag: RequestTag) {
-        let Some(key) = self.key_for(language) else { return };
-        let Some(server) = self.servers.get_mut(&key).filter(|s| matches!(s.state, State::Ready)) else { return };
-        if let Ok(response) = server.client.request(method, params) {
-            self.pending.push((key, tag, response));
+        let Some(key) = self.key_for(language) else {
+            eprintln!("[lsp] {method}: no server configured for {language:?}");
+            return;
+        };
+        let Some(server) = self.servers.get_mut(&key).filter(|s| matches!(s.state, State::Ready)) else {
+            eprintln!("[lsp] {method}: server {key} is not ready");
+            return;
+        };
+        match server.client.request(method, params) {
+            Ok(response) => {
+                eprintln!("[lsp] {method} sent to {key}");
+                self.pending.push((key, tag, response));
+            }
+            Err(err) => eprintln!("[lsp] {method}: could not send to {key}: {err}"),
         }
     }
 
@@ -237,7 +262,18 @@ impl LspManager {
                 false
             }
             // An error reply (e.g. "content modified") just means no answer this time.
-            Ok(Err(_)) | Err(TryRecvError::Disconnected) => false,
+            Ok(Err(error)) => {
+                eprintln!("[lsp] {tag:?} failed: {error}");
+                if *tag == RequestTag::Definition {
+                    // Null parses to no locations, so the status bar says "No definition found".
+                    events.push(Event::Response { tag: *tag, result: Value::Null });
+                }
+                false
+            }
+            Err(TryRecvError::Disconnected) => {
+                eprintln!("[lsp] {tag:?} dropped: server closed the reply channel");
+                false
+            }
             Err(TryRecvError::Empty) => true,
         });
         events

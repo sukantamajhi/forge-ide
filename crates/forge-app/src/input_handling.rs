@@ -74,6 +74,13 @@ impl Workspace {
         self.hover_request = None;
         let pressed = chord(m.control, m.shift, m.alt, m.platform, &k.key);
 
+        // Any key dismisses a context menu; Escape is only that.
+        if self.context_menu.take().is_some() {
+            cx.notify();
+            if k.key == "escape" {
+                return;
+            }
+        }
         if self.overlay.is_some() && self.overlay_key(k, &pressed, cx) {
             cx.notify();
             return;
@@ -220,7 +227,37 @@ impl Workspace {
         }
     }
 
+    /// Right click in the editor text: place the caret (unless inside a selection) and open the menu.
+    pub fn on_right_mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
+        self.context_menu = None;
+        if self.overlay.is_some() {
+            return;
+        }
+        let Some((g, line, col)) = self.point_at(ev.position) else { return };
+        if self.gutter_zone(ev.position, g).is_some() {
+            return;
+        }
+        self.focused_group = g;
+        self.focus = Focus::Editor;
+        self.completion = None;
+        self.hover = None;
+        self.signature = None;
+        let Some(vi) = self.groups.get(g).map(|gr| gr.active) else { return };
+        let view = &mut self.groups[g].views[vi];
+        let offset = self.docs[view.doc].buffer.point_to_offset(line, col);
+        let inside = view.selections.as_slice().iter().any(|s| !s.is_empty() && s.start() <= offset && offset <= s.end());
+        if !inside {
+            view.selections = SelectionSet::single(Selection::caret(offset));
+        }
+        self.open_editor_menu(ev.position, cx);
+    }
+
     pub fn on_mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
+        // A click anywhere else only closes an open context menu.
+        if self.context_menu.take().is_some() {
+            cx.notify();
+            return;
+        }
         if ev.button != MouseButton::Left || self.overlay.is_some() {
             if self.overlay.is_some() {
                 self.overlay = None;
@@ -291,8 +328,13 @@ impl Workspace {
         if view.selections != before {
             view.history.push(before);
         }
-        if ev.modifiers.control && ev.click_count == 1 {
-            self.run_command(Command::GoToDefinition, false, cx);
+        if ev.modifiers.control {
+            eprintln!("[click] ctrl+click at line {line} col {col}, click_count {}", ev.click_count);
+            if ev.click_count == 1 {
+                self.run_command(Command::GoToDefinition, false, cx);
+            } else {
+                self.set_status("Ctrl+click needs a single click (it counted as a repeat click)");
+            }
         }
         cx.notify();
     }
@@ -360,6 +402,7 @@ impl Workspace {
             OverlayKind::Symbols => "Go to symbol in editor",
             OverlayKind::Theme => "Select a color theme",
             OverlayKind::CodeActions => "Select a code action to apply",
+            OverlayKind::Definitions => "Select a definition to go to",
             OverlayKind::Rename => "New name for the symbol",
             OverlayKind::NewEntry { folder: false, .. } => "File name (a/b/c.txt creates folders)",
             OverlayKind::NewEntry { folder: true, .. } => "Folder name",
@@ -467,6 +510,18 @@ impl Workspace {
                             _ => String::new(),
                         };
                         Item { label: a.title.clone(), detail, positions: m.positions, action: ItemAction::CodeAction(i) }
+                    })
+                    .collect()
+            }
+            OverlayKind::Definitions => {
+                let labels: Vec<String> = self.definitions.iter().map(|d| if d.preview.is_empty() { self.display_path(&d.location.path) } else { d.preview.clone() }).collect();
+                let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+                rank(&text, &refs, 50)
+                    .into_iter()
+                    .map(|(i, m)| {
+                        let d = &self.definitions[i];
+                        let detail = format!("{}:{}", self.display_path(&d.location.path), d.location.range.start.line + 1);
+                        Item { label: labels[i].clone(), detail, positions: m.positions, action: ItemAction::Definition(i) }
                     })
                     .collect()
             }
@@ -719,6 +774,11 @@ impl Workspace {
                     self.apply_workspace_edit(action.edit, cx);
                 } else if let Some(command) = action.command {
                     self.set_status(format!("The server command '{command}' cannot be run by Forge"));
+                }
+            }
+            ItemAction::Definition(i) => {
+                if let Some(location) = self.definitions.get(i).map(|d| d.location.clone()) {
+                    self.open_file(&location.path, Some((location.range.start.line, location.range.start.character)), cx);
                 }
             }
             ItemAction::Symbol(line, col) => self.place_caret_utf16(line, col),

@@ -1,5 +1,6 @@
 mod command_impl;
 mod completion;
+mod context_menu;
 mod git_support;
 mod input_handling;
 mod lsp;

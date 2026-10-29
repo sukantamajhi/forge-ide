@@ -81,7 +81,8 @@ Crates:
 | Integrated terminal (ConPTY + VT parser) | implemented; a real shell ran in a real window |
 | Source control: status/stage/commit/branches/push/pull/stash/history/blame through the `git` CLI on background threads, gutter diff, diff tabs, SCM view | implemented; engine tested against real temporary repos (incl. a local bare remote), UI observed in a real window on a sandbox repo |
 | Settings, themes (3), keybindings JSON, zoom | implemented; theme switch observed in a real window |
-| Minimap, word wrap, replace in files, debugger, settings UI, context menus | not built |
+| Context menus (editor, explorer; `context_menu.rs`) and the go-to-definition picker for several results | implemented; compiles and the workspace tests pass, not yet observed in a real window |
+| Minimap, word wrap, replace in files, debugger, settings UI | not built |
 | VS Code extension host (Node + `vscode` API shim) | planned; largest risk |
 
 ## Risks
