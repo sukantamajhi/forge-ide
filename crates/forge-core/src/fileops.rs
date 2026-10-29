@@ -1,0 +1,131 @@
+//! Explorer file operations. Deleting moves to the Recycle Bin / Trash and never removes
+//! permanently, and nothing here overwrites an existing path.
+
+use std::path::{Path, PathBuf};
+
+/// Why a name cannot be used for a new file or folder.
+pub fn validate_name(name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A name must be provided.".to_owned());
+    }
+    if name == "." || name == ".." {
+        return Err(format!("'{name}' is not a valid name."));
+    }
+    if let Some(bad) = name.chars().find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '/' | '\\') || c.is_control()) {
+        return Err(format!("The name contains the character '{bad}', which is not allowed."));
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Err("A name cannot end with a dot or a space.".to_owned());
+    }
+    Ok(())
+}
+
+/// Split `a/b/c.rs` into its folders and final name, validating each part.
+fn split_relative(name: &str) -> Result<Vec<String>, String> {
+    let parts: Vec<String> = name.trim().split(['/', '\\']).map(|p| p.trim().to_owned()).collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return Err("A name must be provided.".to_owned());
+    }
+    for part in &parts {
+        validate_name(part)?;
+    }
+    Ok(parts)
+}
+
+/// Create an empty file at `name` (which may include subfolders) under `dir`.
+pub fn create_file(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let parts = split_relative(name)?;
+    let path = parts.iter().fold(dir.to_path_buf(), |p, part| p.join(part));
+    if path.exists() {
+        return Err(format!("A file or folder '{}' already exists at this location.", path.display()));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+pub fn create_dir(dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let parts = split_relative(name)?;
+    let path = parts.iter().fold(dir.to_path_buf(), |p, part| p.join(part));
+    if path.exists() {
+        return Err(format!("A file or folder '{}' already exists at this location.", path.display()));
+    }
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Rename `path` to `new_name` within the same folder. Refuses to replace anything.
+pub fn rename(path: &Path, new_name: &str) -> Result<PathBuf, String> {
+    let new_name = new_name.trim();
+    validate_name(new_name)?;
+    let target = path.with_file_name(new_name);
+    if target == path {
+        return Ok(target);
+    }
+    // On a case-insensitive filesystem a case-only rename names the same entry; allow it.
+    let case_only = target.to_string_lossy().eq_ignore_ascii_case(&path.to_string_lossy());
+    if target.exists() && !case_only {
+        return Err(format!("A file or folder '{new_name}' already exists at this location."));
+    }
+    std::fs::rename(path, &target).map_err(|e| e.to_string())?;
+    Ok(target)
+}
+
+/// Move to the Recycle Bin / Trash. Fails rather than deleting permanently.
+pub fn move_to_trash(path: &Path) -> Result<(), String> {
+    trash::delete(path).map_err(|e| format!("Could not move to the Recycle Bin: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("forge-fileops-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn names_are_validated() {
+        assert!(validate_name("main.rs").is_ok());
+        assert!(validate_name(".gitignore").is_ok());
+        for bad in ["", "  ", "..", "a?b", "a:b", "a*", "name.", "tab\\there"] {
+            assert!(validate_name(bad).is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn create_file_makes_parents_and_never_overwrites() {
+        let dir = scratch("create");
+        let made = create_file(&dir, "a/b/c.txt").unwrap();
+        assert!(made.is_file() && made.ends_with("c.txt"));
+        std::fs::write(&made, "keep").unwrap();
+        assert!(create_file(&dir, "a/b/c.txt").unwrap_err().contains("already exists"));
+        assert_eq!(std::fs::read_to_string(&made).unwrap(), "keep");
+        assert!(create_file(&dir, "a//b").is_err());
+        assert!(create_file(&dir, "bad|name").is_err());
+        assert!(create_dir(&dir, "x/y").unwrap().is_dir());
+        assert!(create_dir(&dir, "x/y").is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_moves_within_the_folder_and_refuses_to_replace() {
+        let dir = scratch("rename");
+        std::fs::write(dir.join("one.txt"), "1").unwrap();
+        std::fs::write(dir.join("two.txt"), "2").unwrap();
+        assert!(rename(&dir.join("one.txt"), "two.txt").unwrap_err().contains("already exists"));
+        assert_eq!(std::fs::read_to_string(dir.join("two.txt")).unwrap(), "2");
+        let moved = rename(&dir.join("one.txt"), "three.txt").unwrap();
+        assert_eq!(std::fs::read_to_string(moved).unwrap(), "1");
+        assert!(rename(&dir.join("three.txt"), "a/b").is_err(), "a rename cannot move between folders");
+        assert!(dir.join("three.txt").exists());
+        assert_eq!(rename(&dir.join("three.txt"), "three.txt").unwrap(), dir.join("three.txt"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

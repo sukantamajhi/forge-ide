@@ -1,0 +1,19 @@
+[package]
+name = "forge-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "forge"
+path = "src/main.rs"
+
+[dependencies]
+forge-text = { path = "../forge-text" }
+forge-core = { path = "../forge-core" }
+forge-syntax = { path = "../forge-syntax" }
+forge-lsp = { path = "../forge-lsp" }
+forge-ext-host = { path = "../forge-ext-host" }
+gpui = "=0.2.2"
+anyhow.workspace = true
+serde_json.workspace = true

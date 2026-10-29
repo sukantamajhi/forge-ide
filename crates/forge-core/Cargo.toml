@@ -1,0 +1,17 @@
+[package]
+name = "forge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+forge-text = { path = "../forge-text" }
+forge-syntax = { path = "../forge-syntax" }
+ropey.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+ignore = "0.4"
+portable-pty = "0.9"
+vt100 = "0.18"
+trash = "5"
+similar = "3"

@@ -1,0 +1,20 @@
+﻿[workspace]
+resolver = "2"
+members = ["crates/forge-text", "crates/forge-core", "crates/forge-syntax", "crates/forge-lsp", "crates/forge-ext-host", "crates/forge-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+ropey = "1.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

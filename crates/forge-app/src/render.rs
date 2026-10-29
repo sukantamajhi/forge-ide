@@ -1,0 +1,1388 @@
+//! Drawing. Everything here reads state and builds elements; input lives elsewhere.
+
+use std::ops::Range;
+
+use forge_core::commands::Command;
+use forge_core::git::Change;
+use forge_core::gutter::{change_at, ChangeKind};
+use forge_core::input::LineInput;
+use forge_core::theme::Theme;
+use forge_lsp::{Severity, SignatureHelp};
+use forge_syntax::Span;
+use forge_text::brackets::matching_bracket;
+use forge_text::columns::{display_width, expand_tabs_mapped, TAB_WIDTH};
+use forge_text::search::Match;
+use gpui::{
+    div, font, prelude::*, px, rgb, rgba, uniform_list, AnyElement, App, Context, Div, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
+    Pixels, StyledText, Window,
+};
+
+use crate::workspace::{
+    Focus, OverlayKind, PanelView, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
+    LINE_NUMBER_WIDTH, PANEL_HEIGHT, SIDEBAR_WIDTH, TAB_BAR_HEIGHT, TEXT_PAD,
+};
+
+/// Per-frame values every visible line needs.
+struct LineCtx {
+    char_w: Pixels,
+    line_h: f32,
+    spans: Vec<Vec<Span>>,
+    first_line: usize,
+    bracket: Option<(usize, usize)>,
+    matches: Vec<Match>,
+    current_match: Option<Match>,
+    focused: bool,
+}
+
+fn px_f(v: f32) -> Pixels {
+    px(v)
+}
+
+impl Workspace {
+    pub fn measure_font(&mut self, cx: &App) {
+        let system = cx.text_system();
+        let id = system.resolve_font(&font(FONT));
+        if let Ok(size) = system.advance(id, px(self.settings.font_size), 'm') {
+            self.char_width = size.width;
+        }
+    }
+
+    fn render_input(&self, input: &LineInput, placeholder: &str, focused: bool) -> Div {
+        let t = &self.theme;
+        let text = input.text();
+        let split = text.char_indices().nth(input.cursor()).map_or(text.len(), |(b, _)| b);
+        let (before, after) = text.split_at(split);
+        let row = div().flex().flex_row().items_center().h(px(22.0)).px_2().bg(rgb(t.bg)).border_1().border_color(rgb(if focused { t.info } else { t.border })).rounded_sm().overflow_hidden().whitespace_nowrap();
+        if text.is_empty() {
+            return row.child(div().w(px(1.0)).h(px(14.0)).bg(rgb(if focused { t.caret } else { t.bg }))).child(div().text_color(rgb(t.dim)).child(placeholder.to_owned()));
+        }
+        let selected = input.is_all_selected();
+        row.child(div().when(selected, |d| d.bg(rgb(t.selection))).child(before.to_owned()))
+            .child(div().w(px(1.0)).h(px(14.0)).bg(rgb(if focused && !selected { t.caret } else { t.bg })))
+            .child(div().when(selected, |d| d.bg(rgb(t.selection))).child(after.to_owned()))
+    }
+
+    // ---- tabs and groups ----
+
+    fn render_tabs(&self, g: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let group = &self.groups[g];
+        let focused_group = g == self.focused_group;
+        let tabs = group.views.iter().enumerate().map(|(vi, view)| {
+            let doc = &self.docs[view.doc];
+            let active = group.active == vi;
+            let problems = doc.diagnostics.iter().filter(|d| d.severity == Severity::Error).count();
+            div()
+                .id(("tab", g * 1000 + vi))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .h(px(TAB_BAR_HEIGHT))
+                .cursor_pointer()
+                .border_r_1()
+                .border_color(rgb(t.border))
+                .border_t_2()
+                .border_color(rgb(if active && focused_group { t.info } else if active { t.border } else { t.sidebar }))
+                .bg(rgb(if active { t.bg } else { t.sidebar }))
+                .text_color(rgb(if problems > 0 { t.error } else if active { t.text } else { t.dim }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.focused_group = g;
+                    this.groups[g].active = vi;
+                    this.focus = Focus::Editor;
+                    this.completion = None;
+                    cx.notify();
+                }))
+                .child(doc.name())
+                .child(
+                    div()
+                        .id(("close", g * 1000 + vi))
+                        .text_color(rgb(if doc.dirty { t.accent } else { t.dim }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.close_view(g, vi, cx);
+                        }))
+                        .child(if doc.dirty { "●" } else { "×" }),
+                )
+        });
+        div().flex().flex_row().flex_none().h(px(TAB_BAR_HEIGHT)).bg(rgb(t.sidebar)).overflow_hidden().children(tabs)
+    }
+
+    fn render_breadcrumbs(&self, g: usize) -> impl IntoElement {
+        let t = &self.theme;
+        let crumbs = self.groups[g].views.get(self.groups[g].active).map(|v| {
+            let doc = &self.docs[v.doc];
+            if doc.readonly {
+                return doc.name();
+            }
+            let path = &doc.path;
+            path.strip_prefix(self.root()).unwrap_or(path).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("  ›  ")
+        });
+        div().flex().flex_row().items_center().flex_none().h(px(BREADCRUMB_HEIGHT)).px_3().text_xs().text_color(rgb(t.dim)).bg(rgb(t.bg)).child(crumbs.unwrap_or_default())
+    }
+
+    fn render_group(&mut self, g: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme.clone();
+        let has_views = !self.groups[g].views.is_empty();
+        let body: AnyElement = if has_views {
+            self.render_editor(g, cx).into_any_element()
+        } else {
+            self.render_welcome().into_any_element()
+        };
+        let mut column = div().flex().flex_col().flex_1().min_w_0().h_full().bg(rgb(t.bg)).border_color(rgb(t.border));
+        if g > 0 {
+            column = column.border_l_1();
+        }
+        column
+            .child(self.render_tabs(g, cx))
+            .child(self.render_breadcrumbs(g))
+            .child(div().relative().flex_1().min_h_0().child(body).children((g == self.focused_group && self.find.open && has_views).then(|| self.render_find_widget(cx))))
+    }
+
+    fn render_welcome(&self) -> impl IntoElement {
+        let t = &self.theme;
+        let rows: Vec<(String, Option<String>)> = [
+            (forge_core::commands::Command::QuickOpen, "Go to File"),
+            (forge_core::commands::Command::CommandPalette, "Show All Commands"),
+            (forge_core::commands::Command::FindInFiles, "Find in Files"),
+            (forge_core::commands::Command::ToggleTerminal, "Toggle Terminal"),
+            (forge_core::commands::Command::OpenFolder, "Open Folder"),
+        ]
+        .into_iter()
+        .map(|(c, label)| (label.to_owned(), self.keymap.shortcut_label(c)))
+        .collect();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .text_color(rgb(t.dim))
+            .child(div().text_2xl().text_color(rgb(t.text)).child("Forge"))
+            .children(rows.into_iter().map(|(label, key)| div().flex().flex_row().gap_4().child(div().w(px(170.0)).child(label)).child(div().text_color(rgb(t.text)).child(key.unwrap_or_default()))))
+    }
+
+    // ---- the editor ----
+
+    fn render_editor(&mut self, g: usize, cx: &mut Context<Self>) -> impl IntoElement {
+        let vi = self.groups[g].active;
+        self.ensure_folds(g, vi, false);
+        let doc_ix = self.groups[g].views[vi].doc;
+        self.ensure_gutter(doc_ix);
+        let view = &self.groups[g].views[vi];
+        let doc = &self.docs[view.doc];
+        let total = doc.buffer.len_lines();
+        let visible = view.folds.visible_lines(total);
+        let count = visible.as_ref().map_or(total, Vec::len);
+        let scroll = view.scroll.clone();
+        let focused = g == self.focused_group;
+        div().size_full().child(
+            uniform_list(
+                ("editor", g),
+                count,
+                cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
+            )
+            .track_scroll(scroll)
+            .size_full()
+            .when(!focused, |d| d.opacity(0.92)),
+        )
+    }
+
+    fn render_lines(&self, g: usize, range: Range<usize>) -> Vec<Div> {
+        let Some(view) = self.groups.get(g).and_then(|gr| gr.views.get(gr.active)) else { return Vec::new() };
+        let doc = &self.docs[view.doc];
+        let total = doc.buffer.len_lines();
+        let visible = view.folds.visible_lines(total);
+        let lines: Vec<usize> = match &visible {
+            Some(v) => range.filter_map(|i| v.get(i).copied()).collect(),
+            None => range.filter(|i| *i < total).collect(),
+        };
+        let (Some(&first), Some(&last)) = (lines.first(), lines.last()) else { return Vec::new() };
+        let focused = g == self.focused_group;
+        let spans = doc.syntax.as_ref().map(|s| s.highlight_lines(doc.buffer.rope(), first..last + 1)).unwrap_or_default();
+        let caret = view.selections.primary().head;
+        let bracket = if focused { matching_bracket(doc.buffer.rope(), caret) } else { None };
+        let (matches, current_match) = if focused && self.find.open && self.find_revision.0 == view.doc {
+            let line_lo = doc.buffer.line_start(first);
+            let line_hi = doc.buffer.line_end(last);
+            let lo = self.find.matches.partition_point(|m| m.end <= line_lo);
+            let visible_matches: Vec<Match> = self.find.matches[lo..].iter().take_while(|m| m.start <= line_hi).copied().collect();
+            (visible_matches, self.find.current_match())
+        } else {
+            (Vec::new(), None)
+        };
+        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused };
+        lines.into_iter().map(|line| self.render_line(view, line, &ctx)).collect()
+    }
+
+    fn render_line(&self, view: &crate::workspace::View, line: usize, ctx: &LineCtx) -> Div {
+        let t = &self.theme;
+        let doc = &self.docs[view.doc];
+        let text = doc.buffer.line(line);
+        let (shown, byte_of_col) = expand_tabs_mapped(&text);
+        let line_start = doc.buffer.line_start(line);
+        let line_end = doc.buffer.line_end(line);
+        let char_w = ctx.char_w;
+        let line_h = px(ctx.line_h);
+        let x_of = |col: usize| char_w * display_width(&text, col) as f32 + px(TEXT_PAD);
+
+        let runs: Vec<(Range<usize>, HighlightStyle)> = ctx
+            .spans
+            .get(line - ctx.first_line)
+            .map(|spans| {
+                spans
+                    .iter()
+                    .filter(|s| s.end_col < byte_of_col.len())
+                    .map(|s| (byte_of_col[s.start_col]..byte_of_col[s.end_col], HighlightStyle { color: Some(rgb(t.syntax_color(s.class)).into()), ..Default::default() }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Generated diffs are colored by their line prefix instead of by syntax.
+        let diff_style = if doc.diff { diff_line_style(t, &text) } else { None };
+        let runs = match diff_style {
+            Some((color, _)) if !shown.is_empty() => vec![(0..shown.len(), HighlightStyle { color: Some(rgb(color).into()), ..Default::default() })],
+            _ if doc.diff => Vec::new(),
+            _ => runs,
+        };
+
+        let mut layers: Vec<Div> = Vec::new();
+        let rect = |from: usize, cells: usize, color: u32| div().absolute().top_0().left(x_of(from)).w(char_w * cells as f32).h(line_h).bg(rgb(color));
+
+        // Find matches.
+        for m in ctx.matches.iter().filter(|m| m.start <= line_end && m.end > line_start) {
+            let from = m.start.max(line_start) - line_start;
+            let to = m.end.min(line_end) - line_start;
+            let cells = (display_width(&text, to) - display_width(&text, from)).max(1);
+            let current = ctx.current_match == Some(*m);
+            layers.push(rect(from, cells, if current { t.find_current } else { t.find_match }));
+        }
+        // Matching brackets.
+        if let Some((a, b)) = ctx.bracket {
+            for pos in [a, b] {
+                if (line_start..line_end).contains(&pos) {
+                    layers.push(rect(pos - line_start, 1, t.bracket_match));
+                }
+            }
+        }
+        // Selections and carets.
+        for sel in view.selections.as_slice() {
+            if !sel.is_empty() && sel.start() <= line_end && sel.end() > line_start {
+                let from = sel.start().max(line_start) - line_start;
+                let to = sel.end().min(line_end) - line_start;
+                // A selection running past the line end also covers its newline cell.
+                let extra = usize::from(sel.end() > line_end);
+                layers.push(rect(from, display_width(&text, to) - display_width(&text, from) + extra, t.selection));
+            }
+            if ctx.focused && doc.buffer.offset_to_point(sel.head).0 == line {
+                layers.push(div().absolute().top_0().left(x_of(sel.head - line_start)).w(px(2.0)).h(line_h).bg(rgb(t.caret)));
+            }
+        }
+        // Diagnostics underlines.
+        let mut worst: Option<Severity> = None;
+        for d in doc.diagnostics_on(line) {
+            worst = Some(match worst {
+                Some(w) if (w as u8) <= (d.severity as u8) => w,
+                _ => d.severity,
+            });
+            let from = if d.range.start.line == line { doc.buffer.offset_from_utf16(line, d.range.start.character) - line_start } else { 0 };
+            let to = if d.range.end.line == line { doc.buffer.offset_from_utf16(line, d.range.end.character) - line_start } else { line_end - line_start };
+            let cells = (display_width(&text, to.max(from + 1)) - display_width(&text, from)).max(1);
+            let color = match d.severity {
+                Severity::Error => t.error,
+                Severity::Warning => t.warning,
+                _ => t.info,
+            };
+            layers.push(div().absolute().bottom_0().left(x_of(from)).w(char_w * cells as f32).h(px(2.0)).bg(rgb(color)));
+        }
+        // Indent guides.
+        let lead_cells = display_width(&text, text.chars().take_while(|c| *c == ' ' || *c == '\t').count());
+        if !text.trim().is_empty() {
+            for k in 1..(lead_cells / TAB_WIDTH.max(1)).max(1) {
+                if k * TAB_WIDTH < lead_cells {
+                    layers.push(div().absolute().top_0().left(char_w * (k * TAB_WIDTH) as f32 + px(TEXT_PAD)).w(px(1.0)).h(line_h).bg(rgb(t.border)));
+                }
+            }
+        }
+        // Folded region marker.
+        let collapsed = view.folds.collapsed_end(line).is_some();
+        if collapsed {
+            let end_x = x_of(text.chars().count()) + char_w;
+            layers.push(div().absolute().top(px(1.0)).left(end_x).h(line_h - px(2.0)).px_1().rounded_sm().bg(rgb(t.border)).text_color(rgb(t.dim)).child("…"));
+        }
+
+        let caret_line = ctx.focused && view.selections.primary().is_empty() && doc.buffer.offset_to_point(view.selections.primary().head).0 == line;
+        let number_color = match worst {
+            Some(Severity::Error) => t.error,
+            Some(Severity::Warning) => t.warning,
+            _ if caret_line => t.text,
+            _ => t.dim,
+        };
+        let chevron = if view.folds.has_region_at(line) { if collapsed { "▸" } else { "▾" } } else { "" };
+
+        let change = change_at(&doc.gutter, line);
+        div()
+            .relative()
+            .flex()
+            .flex_row()
+            .w_full()
+            .h(line_h)
+            .when(caret_line, |d| d.bg(rgb(t.line_highlight)))
+            .when_some(diff_style.and_then(|(c, tint)| tint.then_some(c)), |d, c| d.bg(rgba((c << 8) | 0x26)))
+            .children(change.map(|kind| gutter_marker(t, kind, line_h)))
+            .child(
+                div()
+                    .w(px(LINE_NUMBER_WIDTH))
+                    .flex_none()
+                    .pr_2()
+                    .flex()
+                    .justify_end()
+                    .text_color(rgb(number_color))
+                    .child((line + 1).to_string()),
+            )
+            .child(div().w(px(FOLD_WIDTH)).flex_none().text_color(rgb(t.dim)).text_xs().child(chevron))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .h(line_h)
+                    .children(layers)
+                    .child(div().absolute().top_0().left(px(TEXT_PAD)).whitespace_nowrap().child(StyledText::new(shown).with_highlights(runs))),
+            )
+    }
+
+    // ---- find widget ----
+
+    fn render_find_widget(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let f = &self.find;
+        let toggle = |label: &'static str, on: bool, which: u8, cx: &mut Context<Self>| {
+            div()
+                .id(("find-toggle", which as usize))
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .bg(rgb(if on { t.selection } else { t.popup }))
+                .text_color(rgb(if on { t.text } else { t.dim }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    match which {
+                        0 => this.find.options.case_sensitive = !this.find.options.case_sensitive,
+                        1 => this.find.options.whole_word = !this.find.options.whole_word,
+                        _ => this.find.options.regex = !this.find.options.regex,
+                    }
+                    this.refresh_find();
+                    cx.notify();
+                }))
+                .child(label)
+        };
+        let step = |label: &'static str, forward: bool, cx: &mut Context<Self>| {
+            div()
+                .id(("find-step", usize::from(forward)))
+                .px_1()
+                .cursor_pointer()
+                .text_color(rgb(t.text))
+                .on_click(cx.listener(move |this, _, _, cx| this.find_next(forward, cx)))
+                .child(label)
+        };
+        let status = f.status_label();
+        let error = f.error.is_some() || (status == "No results");
+        let mut widget = div()
+            .absolute()
+            .top(px(4.0))
+            .right(px(24.0))
+            .w(px(440.0))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_1()
+            .bg(rgb(t.popup))
+            .border_1()
+            .border_color(rgb(t.border))
+            .rounded_md()
+            .shadow_lg()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.focus = Focus::Find;
+                cx.stop_propagation();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(div().flex_1().min_w_0().child(self.render_input(&f.query, "Find", self.focus == Focus::Find && !f.focus_replace)))
+                    .child(toggle("Aa", f.options.case_sensitive, 0, cx))
+                    .child(toggle("ab", f.options.whole_word, 1, cx))
+                    .child(toggle(".*", f.options.regex, 2, cx))
+                    .child(div().w(px(70.0)).text_xs().text_color(rgb(if error { t.error } else { t.dim })).child(status))
+                    .child(step("↑", false, cx))
+                    .child(step("↓", true, cx))
+                    .child(
+                        div()
+                            .id("find-close")
+                            .px_1()
+                            .cursor_pointer()
+                            .text_color(rgb(t.dim))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.find.open = false;
+                                this.focus = Focus::Editor;
+                                cx.notify();
+                            }))
+                            .child("×"),
+                    ),
+            );
+        if f.replace_visible {
+            widget = widget.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(div().flex_1().min_w_0().child(self.render_input(&f.replacement, "Replace", self.focus == Focus::Find && f.focus_replace)))
+                    .child(div().id("replace-one").px_1().cursor_pointer().text_xs().text_color(rgb(t.text)).on_click(cx.listener(|this, _, _, cx| {
+                        this.find.focus_replace = true;
+                        this.replace_current(cx);
+                    })).child("Replace"))
+                    .child(div().id("replace-all").px_1().cursor_pointer().text_xs().text_color(rgb(t.text)).on_click(cx.listener(|this, _, _, cx| this.replace_all(cx))).child("All")),
+            );
+        }
+        widget
+    }
+
+    // ---- sidebar ----
+
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let changes = self.git.as_ref().map_or(0, |g| g.status.changes.len());
+        let tab = |label: String, view: SidebarView, cx: &mut Context<Self>| {
+            let active = self.sidebar_view == view;
+            div()
+                .id(("sidebar-tab", view as usize))
+                .px_3()
+                .py_2()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(rgb(if active { t.text } else { t.dim }))
+                .border_b_1()
+                .border_color(rgb(if active { t.info } else { t.sidebar }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.sidebar_view = view;
+                    this.focus = match view {
+                        SidebarView::Search => Focus::Search,
+                        SidebarView::Git => Focus::Scm,
+                        SidebarView::Explorer => Focus::Explorer,
+                    };
+                    cx.notify();
+                }))
+                .child(label)
+        };
+        let body: AnyElement = match self.sidebar_view {
+            SidebarView::Explorer => self.render_explorer(cx).into_any_element(),
+            SidebarView::Search => self.render_search(cx).into_any_element(),
+            SidebarView::Git => self.render_scm(cx),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(SIDEBAR_WIDTH))
+            .h_full()
+            .bg(rgb(t.sidebar))
+            .border_r_1()
+            .border_color(rgb(t.border))
+            .child(div().flex().flex_row().child(tab("EXPLORER".to_owned(), SidebarView::Explorer, cx)).child(tab("SEARCH".to_owned(), SidebarView::Search, cx)).child(tab(if changes > 0 { format!("GIT {changes}") } else { "GIT".to_owned() }, SidebarView::Git, cx)))
+            .child(body)
+    }
+
+    fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let root_name = self.root().file_name().map(|n| n.to_string_lossy().to_uppercase()).unwrap_or_else(|| self.root().display().to_string());
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(div().px_3().py_1().text_xs().text_color(rgb(t.dim)).child(root_name))
+            .child(
+                div().flex_1().min_h_0().child(
+                    uniform_list(
+                        "tree",
+                        self.tree.entries.len(),
+                        cx.processor(|this, range: Range<usize>, _window, cx| {
+                            let t = this.theme.clone();
+                            let line_h = this.line_height().max(22.0);
+                            range
+                                .map(|ix| {
+                                    let entry = this.tree.entries[ix].clone();
+                                    let marker = match (entry.is_dir, entry.expanded) {
+                                        (true, true) => "▾ ",
+                                        (true, false) => "▸ ",
+                                        (false, _) => "  ",
+                                    };
+                                    let selected = this.explorer_selected == Some(ix);
+                                    let open = this.active_doc().is_some_and(|d| crate::workspace::same_path(&d.path, &entry.path));
+                                    let (path, is_dir) = (entry.path.clone(), entry.is_dir);
+                                    let decor = this.git.as_ref().and_then(|g| g.decor.get(&entry.path)).copied();
+                                    let name_color = match decor {
+                                        Some('U' | 'A') => t.git_added,
+                                        Some('D') => t.git_deleted,
+                                        Some('!') => t.error,
+                                        Some(_) => t.git_modified,
+                                        None => t.text,
+                                    };
+                                    let badge = decor.filter(|c| *c != '•').map(|c| c.to_string()).unwrap_or_default();
+                                    div()
+                                        .id(("entry", ix))
+                                        .h(px(line_h))
+                                        .pl(px(8.0 + entry.depth as f32 * 14.0))
+                                        .cursor_pointer()
+                                        .whitespace_nowrap()
+                                        .when(selected, |d| d.bg(rgb(if this.focus == Focus::Explorer { t.selection } else { t.tab_active })))
+                                        .when(open && !selected, |d| d.bg(rgb(t.tab_active)))
+                                        .hover(|s| s.bg(rgb(t.tab_active)))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.focus = Focus::Explorer;
+                                            this.explorer_selected = Some(ix);
+                                            if is_dir {
+                                                this.tree.toggle(&path);
+                                            } else {
+                                                this.open_file(&path, None, cx);
+                                            }
+                                            cx.notify();
+                                        }))
+                                        .flex()
+                                        .flex_row()
+                                        .justify_between()
+                                        .pr_2()
+                                        .child(div().text_color(rgb(name_color)).child(format!("{marker}{}", entry.name)))
+                                        .child(div().text_xs().text_color(rgb(name_color)).child(badge))
+                                })
+                                .collect()
+                        }),
+                    )
+                    .track_scroll(self.explorer_scroll.clone())
+                    .size_full(),
+                ),
+            )
+    }
+
+    fn render_search(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let s = &self.search;
+        let toggle = |label: &'static str, on: bool, which: usize, cx: &mut Context<Self>| {
+            div()
+                .id(("search-toggle", which))
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .bg(rgb(if on { t.selection } else { t.sidebar }))
+                .text_color(rgb(if on { t.text } else { t.dim }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    match which {
+                        0 => this.search.options.case_sensitive = !this.search.options.case_sensitive,
+                        1 => this.search.options.whole_word = !this.search.options.whole_word,
+                        _ => this.search.options.regex = !this.search.options.regex,
+                    }
+                    this.start_search();
+                    cx.notify();
+                }))
+                .child(label)
+        };
+        let files = s.hits.iter().map(|h| &h.path).collect::<std::collections::BTreeSet<_>>().len();
+        let status = if let Some(e) = &s.error {
+            e.clone()
+        } else if s.running {
+            format!("Searching... {} results", s.hits.len())
+        } else if s.query.text().is_empty() {
+            "Type a query and press Enter".to_owned()
+        } else if s.hits.is_empty() {
+            "No results found".to_owned()
+        } else {
+            format!("{} results in {files} files{}", s.hits.len(), if s.capped { " (limit reached)" } else { "" })
+        };
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .gap_1()
+            .p_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .items_center()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.focus = Focus::Search;
+                        cx.notify();
+                    }))
+                    .child(div().flex_1().min_w_0().child(self.render_input(&s.query, "Search", self.focus == Focus::Search)))
+                    .child(toggle("Aa", s.options.case_sensitive, 0, cx))
+                    .child(toggle("ab", s.options.whole_word, 1, cx))
+                    .child(toggle(".*", s.options.regex, 2, cx)),
+            )
+            .child(div().text_xs().text_color(rgb(if s.error.is_some() { t.error } else { t.dim })).child(status))
+            .child(
+                div().flex_1().min_h_0().child(
+                    uniform_list(
+                        "search-results",
+                        s.hits.len(),
+                        cx.processor(|this, range: Range<usize>, _window, cx| {
+                            let t = this.theme.clone();
+                            range
+                                .map(|ix| {
+                                    let hit = &this.search.hits[ix];
+                                    let rel = hit.path.strip_prefix(this.root()).unwrap_or(&hit.path).to_string_lossy().replace('\\', "/");
+                                    let preview = hit.preview.trim_start().to_owned();
+                                    div()
+                                        .id(("hit", ix))
+                                        .h(px(36.0))
+                                        .px_1()
+                                        .flex()
+                                        .flex_col()
+                                        .cursor_pointer()
+                                        .overflow_hidden()
+                                        .when(this.search.selected == ix, |d| d.bg(rgb(t.selection)))
+                                        .hover(|s| s.bg(rgb(t.tab_active)))
+                                        .on_click(cx.listener(move |this, _, _, cx| this.open_hit(ix, cx)))
+                                        .child(div().text_xs().text_color(rgb(t.dim)).whitespace_nowrap().child(format!("{rel}:{}", hit.line + 1)))
+                                        .child(div().whitespace_nowrap().child(preview))
+                                })
+                                .collect()
+                        }),
+                    )
+                    .track_scroll(s.scroll.clone())
+                    .size_full(),
+                ),
+            )
+    }
+
+    // ---- source control ----
+
+    fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = &self.theme;
+        let Some(git) = self.git.as_ref() else {
+            return div()
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .text_color(rgb(t.dim))
+                .child("The folder currently open doesn't have a git repository.")
+                .child(
+                    div()
+                        .id("git-init")
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .bg(rgb(t.selection))
+                        .text_color(rgb(t.text))
+                        .on_click(cx.listener(|this, _, _, cx| this.run_command(Command::GitInit, false, cx)))
+                        .child("Initialize Repository"),
+                )
+                .into_any_element();
+        };
+        #[derive(Clone)]
+        enum Row {
+            Header(&'static str, usize, bool),
+            File(Change, bool),
+        }
+        let staged: Vec<Change> = git.status.staged().cloned().collect();
+        let unstaged: Vec<Change> = git.status.unstaged().cloned().collect();
+        let mut rows: Vec<Row> = Vec::new();
+        if !staged.is_empty() {
+            rows.push(Row::Header("STAGED CHANGES", staged.len(), true));
+            rows.extend(staged.iter().cloned().map(|c| Row::File(c, true)));
+        }
+        if !unstaged.is_empty() {
+            rows.push(Row::Header("CHANGES", unstaged.len(), false));
+            rows.extend(unstaged.iter().cloned().map(|c| Row::File(c, false)));
+        }
+        let branch = git.status.branch.clone().unwrap_or_else(|| format!("detached at {}", git.status.head));
+        let sync = if git.status.upstream.is_some() { format!("  ↓{} ↑{}", git.status.behind, git.status.ahead) } else { String::new() };
+        let can_commit = !staged.is_empty();
+        let nothing = rows.is_empty();
+
+        let button = |id: &'static str, label: &'static str, command: Command, primary: bool, enabled: bool, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px_2()
+                .py_1()
+                .rounded_sm()
+                .text_xs()
+                .cursor_pointer()
+                .bg(rgb(if primary && enabled { t.selection } else { t.tab_active }))
+                .text_color(rgb(if enabled { t.text } else { t.dim }))
+                .on_click(cx.listener(move |this, _, _, cx| this.run_command(command, false, cx)))
+                .child(label)
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .gap_1()
+            .p_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_center()
+                    .text_xs()
+                    .child(div().text_color(rgb(t.text)).child(format!("⎇ {branch}{sync}")))
+                    .child(button("git-refresh", "⟳", Command::GitRefresh, false, true, cx)),
+            )
+            .child(
+                div()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.focus = Focus::Scm;
+                        cx.notify();
+                    }))
+                    .child(self.render_input(&self.scm_message, "Message (Enter to commit)", self.focus == Focus::Scm)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .child(button("git-commit", "✓ Commit", Command::GitCommit, true, can_commit, cx))
+                    .child(button("git-pull", "↓ Pull", Command::GitPull, false, true, cx))
+                    .child(button("git-push", "↑ Push", Command::GitPush, false, true, cx))
+                    .child(button("git-fetch", "Fetch", Command::GitFetch, false, true, cx)),
+            )
+            .children(nothing.then(|| div().pt_2().text_xs().text_color(rgb(t.dim)).child("No changes detected.")))
+            .child(
+                div().flex_1().min_h_0().child(
+                    uniform_list(
+                        "scm",
+                        rows.len(),
+                        cx.processor(move |this, range: Range<usize>, _window, cx| {
+                            let t = this.theme.clone();
+                            range
+                                .filter_map(|i| rows.get(i).cloned().map(|r| (i, r)))
+                                .map(|(i, row)| match row {
+                                    Row::Header(label, count, is_staged) => {
+                                        let (glyph, command) = if is_staged { ("−", Command::GitUnstageAll) } else { ("+", Command::GitStageAll) };
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .justify_between()
+                                            .items_center()
+                                            .px_1()
+                                            .h(px(24.0))
+                                            .text_xs()
+                                            .text_color(rgb(t.dim))
+                                            .child(format!("{label}  {count}"))
+                                            .child(
+                                                div()
+                                                    .id(("scm-bulk", usize::from(is_staged)))
+                                                    .px_2()
+                                                    .cursor_pointer()
+                                                    .text_color(rgb(t.text))
+                                                    .on_click(cx.listener(move |this, _, _, cx| this.run_command(command, false, cx)))
+                                                    .child(glyph),
+                                            )
+                                            .into_any_element()
+                                    }
+                                    Row::File(change, is_staged) => {
+                                        let letter = if is_staged { change.index.map_or('?', |k| k.letter()) } else { change.letter() };
+                                        let color = match letter {
+                                            'U' | 'A' => t.git_added,
+                                            'D' => t.git_deleted,
+                                            '!' => t.error,
+                                            _ => t.git_modified,
+                                        };
+                                        let (name, dir) = match change.path.rsplit_once('/') {
+                                            Some((d, n)) => (n.to_owned(), d.to_owned()),
+                                            None => (change.path.clone(), String::new()),
+                                        };
+                                        let untracked = change.untracked;
+                                        let (open_rel, stage_rel, discard_rel) = (change.path.clone(), change.path.clone(), change.path.clone());
+                                        let action = |id: usize, glyph: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace) + 'static>| {
+                                            div()
+                                                .id(("scm-action", i * 4 + id))
+                                                .px_1()
+                                                .cursor_pointer()
+                                                .text_color(rgb(t.text))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    f(this);
+                                                    cx.notify();
+                                                }))
+                                                .child(glyph)
+                                        };
+                                        let mut file = div()
+                                            .id(("scm-file", i))
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_2()
+                                            .px_1()
+                                            .h(px(24.0))
+                                            .cursor_pointer()
+                                            .whitespace_nowrap()
+                                            .hover(|s| s.bg(rgb(t.tab_active)))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.git_open_diff(open_rel.clone(), is_staged, untracked);
+                                                cx.notify();
+                                            }))
+                                            .child(div().w(px(12.0)).flex_none().text_xs().text_color(rgb(color)).child(letter.to_string()))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .overflow_hidden()
+                                                    .flex()
+                                                    .flex_row()
+                                                    .gap_2()
+                                                    .child(div().text_color(rgb(color)).child(name))
+                                                    .child(div().text_xs().text_color(rgb(t.dim)).child(dir)),
+                                            );
+                                        if is_staged {
+                                            let rel = stage_rel.clone();
+                                            file = file.child(action(1, "−", cx, Box::new(move |w| w.scm_unstage(rel.clone()))));
+                                        } else {
+                                            let rel = discard_rel.clone();
+                                            file = file.child(action(0, "↩", cx, Box::new(move |w| w.scm_confirm_discard(rel.clone(), untracked))));
+                                            let rel = stage_rel.clone();
+                                            file = file.child(action(1, "+", cx, Box::new(move |w| w.scm_stage(rel.clone()))));
+                                        }
+                                        file.into_any_element()
+                                    }
+                                })
+                                .collect::<Vec<AnyElement>>()
+                        }),
+                    )
+                    .track_scroll(self.scm_scroll.clone())
+                    .size_full(),
+                ),
+            )
+            .into_any_element()
+    }
+
+    // ---- bottom panel ----
+
+    fn render_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let problem_count: usize = self.docs.iter().map(|d| d.diagnostics.iter().filter(|x| x.severity != Severity::Hint).count()).sum();
+        let tab = |label: String, view: PanelView, cx: &mut Context<Self>| {
+            let active = self.panel_view == view;
+            div()
+                .id(("panel-tab", view as usize))
+                .px_3()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(rgb(if active { t.text } else { t.dim }))
+                .border_b_1()
+                .border_color(rgb(if active { t.info } else { t.sidebar }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.panel_view = view;
+                    if view == PanelView::Terminal {
+                        if this.terminals.is_empty() {
+                            this.new_terminal();
+                        }
+                        this.focus = Focus::Terminal;
+                    }
+                    cx.notify();
+                }))
+                .child(label)
+        };
+        let body: AnyElement = match self.panel_view {
+            PanelView::Terminal => self.render_terminal().into_any_element(),
+            PanelView::Problems => self.render_problems(cx).into_any_element(),
+            PanelView::References => self.render_references(cx).into_any_element(),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .h(px(PANEL_HEIGHT))
+            .border_t_1()
+            .border_color(rgb(t.border))
+            .bg(rgb(t.bg))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .h(px(26.0))
+                    .bg(rgb(t.sidebar))
+                    .child(tab(format!("PROBLEMS {problem_count}"), PanelView::Problems, cx))
+                    .child(tab("TERMINAL".to_owned(), PanelView::Terminal, cx))
+                    .child(tab(format!("REFERENCES {}", self.references.len()), PanelView::References, cx))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("panel-close")
+                            .px_3()
+                            .cursor_pointer()
+                            .text_color(rgb(t.dim))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.panel_visible = false;
+                                if this.focus == Focus::Terminal {
+                                    this.focus = Focus::Editor;
+                                }
+                                cx.notify();
+                            }))
+                            .child("×"),
+                    ),
+            )
+            .child(div().flex_1().min_h_0().child(body))
+    }
+
+    fn render_terminal(&self) -> impl IntoElement {
+        let t = &self.theme;
+        let Some(terminal) = self.terminals.get(self.active_terminal) else {
+            return div().p_3().text_color(rgb(t.dim)).child("No terminal is running. Press Ctrl+` to start one.").into_any_element();
+        };
+        let (rows, _) = terminal.size();
+        let (cur_row, cur_col, cur_visible) = terminal.cursor();
+        let line_h = px(self.line_height());
+        let focused = self.focus == Focus::Terminal;
+        let mut lines: Vec<Div> = Vec::with_capacity(rows as usize);
+        for row in 0..rows {
+            let runs = terminal.row_runs(row);
+            let mut text = String::new();
+            let mut styles: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
+            for run in &runs {
+                let start = text.len();
+                text.push_str(&run.text);
+                if run.fg.is_some() || run.bg.is_some() || run.bold || run.underline {
+                    styles.push((
+                        start..text.len(),
+                        HighlightStyle {
+                            color: run.fg.map(|c| rgb(c).into()),
+                            background_color: run.bg.map(|c| rgb(c).into()),
+                            font_weight: run.bold.then_some(FontWeight::BOLD),
+                            underline: run.underline.then(|| gpui::UnderlineStyle { thickness: px(1.0), ..Default::default() }),
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+            let mut line = div().relative().h(line_h).whitespace_nowrap().child(StyledText::new(text).with_highlights(styles));
+            if focused && cur_visible && row == cur_row {
+                line = line.child(div().absolute().top_0().left(self.char_width * f32::from(cur_col)).w(self.char_width).h(line_h).bg(rgb(t.caret)).opacity(0.6));
+            }
+            lines.push(line);
+        }
+        div().size_full().px_2().py_1().overflow_hidden().children(lines).into_any_element()
+    }
+
+    fn render_problems(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let mut rows: Vec<(std::path::PathBuf, usize, usize, Severity, String)> = Vec::new();
+        for doc in &self.docs {
+            for d in doc.diagnostics.iter().filter(|d| d.severity != Severity::Hint) {
+                rows.push((doc.path.clone(), d.range.start.line, d.range.start.character, d.severity, d.message.lines().next().unwrap_or_default().to_owned()));
+            }
+        }
+        rows.sort_by(|a, b| (a.3 as u8, &a.0, a.1).cmp(&(b.3 as u8, &b.0, b.1)));
+        if rows.is_empty() {
+            return div().p_3().text_color(rgb(t.dim)).child("No problems have been detected in the open files.").into_any_element();
+        }
+        let count = rows.len();
+        let selected = self.problem_selected;
+        uniform_list(
+            "problems",
+            count,
+            cx.processor(move |this, range: Range<usize>, _window, cx| {
+                let t = this.theme.clone();
+                range
+                    .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
+                    .map(|(ix, (path, line, col, severity, message))| {
+                        let color = match severity {
+                            Severity::Error => t.error,
+                            Severity::Warning => t.warning,
+                            _ => t.info,
+                        };
+                        let rel = path.strip_prefix(this.root()).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+                        div()
+                            .id(("problem", ix))
+                            .flex()
+                            .flex_row()
+                            .gap_2()
+                            .px_2()
+                            .h(px(22.0))
+                            .items_center()
+                            .cursor_pointer()
+                            .whitespace_nowrap()
+                            .when(selected == ix, |d| d.bg(rgb(t.selection)))
+                            .hover(|s| s.bg(rgb(t.tab_active)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.problem_selected = ix;
+                                this.open_file(&path, Some((line, col)), cx);
+                            }))
+                            .child(div().text_color(rgb(color)).child(if severity == Severity::Error { "✖" } else { "⚠" }))
+                            .child(message)
+                            .child(div().text_color(rgb(t.dim)).text_xs().child(format!("{rel} [{}:{}]", line + 1, col + 1)))
+                    })
+                    .collect()
+            }),
+        )
+        .track_scroll(self.problems_scroll.clone())
+        .size_full()
+        .into_any_element()
+    }
+
+    fn render_references(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        if self.references.is_empty() {
+            return div().p_3().text_color(rgb(t.dim)).child("No references. Put the cursor on a symbol and press Shift+F12.").into_any_element();
+        }
+        uniform_list(
+            "references",
+            self.references.len(),
+            cx.processor(|this, range: Range<usize>, _window, cx| {
+                let t = this.theme.clone();
+                range
+                    .map(|ix| {
+                        let entry = &this.references[ix];
+                        let loc = entry.location.clone();
+                        let rel = loc.path.strip_prefix(this.root()).unwrap_or(&loc.path).to_string_lossy().replace('\\', "/");
+                        div()
+                            .id(("reference", ix))
+                            .flex()
+                            .flex_row()
+                            .gap_3()
+                            .px_2()
+                            .h(px(22.0))
+                            .items_center()
+                            .cursor_pointer()
+                            .whitespace_nowrap()
+                            .when(this.reference_selected == ix, |d| d.bg(rgb(t.selection)))
+                            .hover(|s| s.bg(rgb(t.tab_active)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.reference_selected = ix;
+                                this.open_file(&loc.path, Some((loc.range.start.line, loc.range.start.character)), cx);
+                            }))
+                            .child(entry.preview.clone())
+                            .child(div().text_color(rgb(t.dim)).text_xs().child(format!("{rel}:{}", entry.location.range.start.line + 1)))
+                    })
+                    .collect()
+            }),
+        )
+        .track_scroll(self.references_scroll.clone())
+        .size_full()
+        .into_any_element()
+    }
+
+    // ---- popups ----
+
+    /// Window position of the bottom-left of `(line, col)` in the focused editor, if visible.
+    fn caret_position(&self, line: usize, col: usize) -> Option<(Pixels, Pixels)> {
+        let view = self.active_view()?;
+        let doc = &self.docs[view.doc];
+        let (bounds, offset) = {
+            let state = view.scroll.0.borrow();
+            (state.base_handle.bounds(), state.base_handle.offset())
+        };
+        if bounds.size.height <= px(0.0) {
+            return None;
+        }
+        let row = view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line);
+        let text = doc.buffer.line(line);
+        let x = bounds.left() + px_f(GUTTER_WIDTH + TEXT_PAD) + self.char_width * display_width(&text, col) as f32;
+        let y = bounds.top() + offset.y + px_f(self.line_height()) * (row + 1) as f32;
+        (y > bounds.top() - px(1.0) && y < bounds.bottom() + px_f(self.line_height())).then_some((x, y))
+    }
+
+    fn render_completion(&self) -> Option<Div> {
+        let t = &self.theme;
+        let state = self.completion.as_ref()?;
+        let view = self.active_view()?;
+        let doc = self.active_doc()?;
+        let (line, col) = doc.buffer.offset_to_point(view.selections.primary().head);
+        let (x, y) = self.caret_position(line, col)?;
+        let rows = state.visible_window().map(|ix| {
+            let item = &state.items[ix];
+            div()
+                .flex()
+                .flex_row()
+                .gap_3()
+                .px_2()
+                .h(px(22.0))
+                .items_center()
+                .whitespace_nowrap()
+                .bg(rgb(if ix == state.selected { t.selection } else { t.popup }))
+                .child(item.label.clone())
+                .children(item.detail.clone().map(|d| div().text_color(rgb(t.dim)).text_xs().child(d)))
+        });
+        Some(div().absolute().left(x).top(y).min_w(px(280.0)).max_w(px(560.0)).py_1().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().occlude().children(rows))
+    }
+
+    fn render_hover(&self) -> Option<Div> {
+        let t = &self.theme;
+        let hover = self.hover.as_ref()?;
+        let doc = self.active_doc()?;
+        let (x, y) = self.caret_position(hover.line, hover.col)?;
+        let mut sections: Vec<Div> = doc
+            .diagnostics_on(hover.line)
+            .map(|d| {
+                let color = if d.severity == Severity::Error { t.error } else { t.warning };
+                div().text_color(rgb(color)).child(d.message.clone())
+            })
+            .collect();
+        if !hover.text.is_empty() {
+            let text: String = hover.text.lines().take(14).collect::<Vec<_>>().join("\n");
+            sections.push(div().child(text));
+        }
+        if sections.is_empty() {
+            return None;
+        }
+        Some(div().absolute().left(x).top(y + px(4.0)).max_w(px(560.0)).flex().flex_col().gap_2().p_2().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().text_sm().occlude().children(sections))
+    }
+
+    fn render_signature(&self, help: &SignatureHelp) -> Option<Div> {
+        let t = &self.theme;
+        let view = self.active_view()?;
+        let doc = self.active_doc()?;
+        let (line, col) = doc.buffer.offset_to_point(view.selections.primary().head);
+        let (x, y) = self.caret_position(line, col)?;
+        // Sit above the caret line, like VS Code's parameter hints.
+        let top = y - px_f(self.line_height() * 2.0 + 8.0);
+        let label = help.label.clone();
+        let highlights = help.active.map(|(s, e)| {
+            let byte = |c: usize| label.char_indices().nth(c).map_or(label.len(), |(b, _)| b);
+            vec![(byte(s)..byte(e), HighlightStyle { color: Some(rgb(t.info).into()), font_weight: Some(FontWeight::BOLD), ..Default::default() })]
+        });
+        let text = StyledText::new(label).with_highlights(highlights.unwrap_or_default());
+        Some(div().absolute().left(x).top(top).max_w(px(640.0)).px_2().py_1().bg(rgb(t.popup)).border_1().border_color(rgb(t.border)).rounded_md().shadow_lg().whitespace_nowrap().child(text))
+    }
+
+    fn render_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let t = &self.theme;
+        let overlay = self.overlay.as_ref()?;
+        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. });
+        let start = overlay.selected.saturating_sub(11);
+        let end = (start + 12).min(overlay.items.len());
+        let rows = (start..end).map(|ix| {
+            let item = &overlay.items[ix];
+            let selected = ix == overlay.selected;
+            let label_style: Vec<(Range<usize>, HighlightStyle)> = item
+                .positions
+                .iter()
+                .filter_map(|p| item.label.char_indices().nth(*p).map(|(b, c)| (b..b + c.len_utf8(), HighlightStyle { color: Some(rgb(t.info).into()), font_weight: Some(FontWeight::BOLD), ..Default::default() })))
+                .collect();
+            div()
+                .id(("overlay-item", ix))
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .px_2()
+                .h(px(24.0))
+                .cursor_pointer()
+                .whitespace_nowrap()
+                .bg(rgb(if selected { t.selection } else { t.popup }))
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    if let Some(o) = this.overlay.as_mut() {
+                        o.selected = ix;
+                    }
+                    this.accept_overlay(cx);
+                }))
+                .child(StyledText::new(item.label.clone()).with_highlights(label_style))
+                .child(div().text_color(rgb(t.dim)).text_xs().child(item.detail.clone()))
+        });
+        Some(
+            div()
+                .absolute()
+                .top(px(48.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .w(px(640.0))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .p_1()
+                        .bg(rgb(t.popup))
+                        .border_1()
+                        .border_color(rgb(t.border))
+                        .rounded_md()
+                        .shadow_lg()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+                        .when(show_input, |d| d.child(self.render_input(&overlay.input, &overlay.placeholder, true)))
+                        .children(overlay.note.clone().map(|n| div().px_2().py_1().text_xs().text_color(rgb(t.dim)).child(n)))
+                        .children(rows),
+                ),
+        )
+    }
+
+    // ---- status bar ----
+
+    fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = &self.theme;
+        let doc = self.active_doc();
+        let view = self.active_view();
+        let (message, color) = doc
+            .zip(view)
+            .and_then(|(doc, view)| {
+                let (line, _) = doc.buffer.offset_to_point(view.selections.primary().head);
+                doc.diagnostics_on(line).min_by_key(|d| d.severity as u8).map(|d| {
+                    (d.message.lines().next().unwrap_or_default().to_owned(), if d.severity == Severity::Error { t.error } else { t.warning })
+                })
+            })
+            .unwrap_or_else(|| (self.status.to_string(), t.dim));
+        let (errors, warnings) = self.docs.iter().fold((0, 0), |(e, w), d| {
+            (e + d.diagnostics.iter().filter(|x| x.severity == Severity::Error).count(), w + d.diagnostics.iter().filter(|x| x.severity == Severity::Warning).count())
+        });
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(p) = &self.lsp_progress {
+            parts.push(p.clone());
+        }
+        if let (Some(doc), Some(view)) = (doc, view) {
+            let (line, col) = doc.buffer.offset_to_point(view.selections.primary().head);
+            let selected: usize = view.selections.as_slice().iter().map(|s| s.end() - s.start()).sum();
+            let cursors = view.selections.as_slice().len();
+            let mut pos = format!("Ln {}, Col {}", line + 1, col + 1);
+            if selected > 0 {
+                pos.push_str(&format!(" ({selected} selected)"));
+            }
+            if cursors > 1 {
+                pos.push_str(&format!(" [{cursors} cursors]"));
+            }
+            parts.push(pos);
+            parts.push(if self.settings.insert_spaces { format!("Spaces: {}", self.settings.tab_size) } else { "Tab Size: ".to_owned() + &self.settings.tab_size.to_string() });
+            parts.push("UTF-8".to_owned());
+            parts.push(if doc.buffer.eol() == "\r\n" { "CRLF" } else { "LF" }.to_owned());
+            parts.push(doc.syntax.as_ref().map_or("Plain Text", |s| s.language().name()).to_owned());
+        }
+        div()
+            .flex()
+            .flex_row()
+            .flex_none()
+            .justify_between()
+            .items_center()
+            .gap_4()
+            .px_3()
+            .h(px(24.0))
+            .text_xs()
+            .bg(rgb(t.sidebar))
+            .border_t_1()
+            .border_color(rgb(t.border))
+            .text_color(rgb(t.dim))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_3()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .children(self.git.as_ref().map(|g| {
+                        let dirty = if g.status.changes.is_empty() { "" } else { "*" };
+                        let branch = g.status.branch.clone().unwrap_or_else(|| format!("({})", g.status.head));
+                        let sync = if g.status.ahead + g.status.behind > 0 { format!(" ↓{} ↑{}", g.status.behind, g.status.ahead) } else { String::new() };
+                        let busy = g.job.as_ref().map(|j| format!("  {j}")).unwrap_or_default();
+                        div()
+                            .id("status-branch")
+                            .flex_none()
+                            .cursor_pointer()
+                            .text_color(rgb(t.text))
+                            .on_click(cx.listener(|this, _, _, cx| this.run_command(Command::GitCheckout, false, cx)))
+                            .child(format!("⎇ {branch}{dirty}{sync}{busy}"))
+                    }))
+                    .child(
+                        div()
+                            .id("status-problems")
+                            .flex_none()
+                            .cursor_pointer()
+                            .text_color(rgb(if errors > 0 { t.error } else { t.dim }))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.panel_view = PanelView::Problems;
+                                this.panel_visible = true;
+                                cx.notify();
+                            }))
+                            .child(format!("✖ {errors}  ⚠ {warnings}")),
+                    )
+                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_color(rgb(color)).child(message)),
+            )
+            .child(div().flex_none().whitespace_nowrap().child(parts.join("    ")))
+    }
+}
+
+impl Render for Workspace {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.measure_font(cx);
+        self.sync_terminal_size(window.viewport_size().width);
+        let t = self.theme.clone();
+
+        let mut centre = div().flex().flex_col().flex_1().min_w_0().h_full();
+        let group_count = self.groups.len();
+        let mut groups = div().flex().flex_row().flex_1().min_h_0();
+        for g in 0..group_count {
+            groups = groups.child(self.render_group(g, cx));
+        }
+        centre = centre.child(groups);
+        if self.panel_visible {
+            centre = centre.child(self.render_panel(cx));
+        }
+
+        let mut main = div().flex().flex_row().flex_1().min_h_0();
+        if self.sidebar_visible {
+            main = main.child(self.render_sidebar(cx));
+        }
+        main = main.child(centre);
+
+        let signature = self.signature.clone();
+        div()
+            .id("workspace")
+            .key_context("Workspace")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, ev, _w, cx| this.on_key_down(ev, cx)))
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _w, cx| this.on_mouse_down(ev, cx)))
+            .on_mouse_move(cx.listener(|this, ev, _w, cx| this.on_mouse_move(ev, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, ev, _w, cx| this.on_mouse_up(ev, cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, ev, _w, cx| this.on_mouse_up(ev, cx)))
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(t.bg))
+            .text_color(rgb(t.text))
+            .font_family(FONT)
+            .text_size(px(self.settings.font_size))
+            .child(main)
+            .child(self.render_status(cx))
+            .children(self.render_completion())
+            .children(self.render_hover())
+            .children(signature.as_ref().and_then(|s| self.render_signature(s)))
+            .children(self.render_overlay(cx))
+    }
+}
+
+/// Color of a unified-diff line and whether it gets a tinted background.
+fn diff_line_style(t: &Theme, text: &str) -> Option<(u32, bool)> {
+    const HEADERS: [&str; 10] = ["+++", "---", "diff ", "index ", "new file", "deleted file", "similarity", "rename ", "commit ", "Author:"];
+    if HEADERS.iter().any(|h| text.starts_with(h)) || text.starts_with("Date:") {
+        return Some((t.dim, false));
+    }
+    match text.chars().next()? {
+        '+' => Some((t.git_added, true)),
+        '-' => Some((t.git_deleted, true)),
+        '@' => Some((t.info, false)),
+        _ => None,
+    }
+}
+
+/// The colored bar in the gutter beside a changed line.
+fn gutter_marker(t: &Theme, kind: ChangeKind, line_h: Pixels) -> Div {
+    match kind {
+        ChangeKind::Added => div().absolute().left(px(1.0)).top_0().w(px(3.0)).h(line_h).bg(rgb(t.git_added)),
+        ChangeKind::Modified => div().absolute().left(px(1.0)).top_0().w(px(3.0)).h(line_h).bg(rgb(t.git_modified)),
+        ChangeKind::Removed => div().absolute().left(px(0.0)).bottom_0().w(px(9.0)).h(px(2.0)).bg(rgb(t.git_deleted)),
+    }
+}

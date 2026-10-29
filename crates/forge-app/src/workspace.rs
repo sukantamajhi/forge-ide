@@ -1,0 +1,1185 @@
+//! The editor's state and the logic that keeps its parts consistent. Input handling is
+//! in `input_handling.rs`, commands in `command_impl.rs`, drawing in `render.rs`.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use forge_core::commands::{Command, Keymap};
+use forge_core::find::FindState;
+use forge_core::git::{Blame, Branch, Commit, Status};
+use forge_core::gutter::LineChange;
+use forge_core::folds::Folds;
+use forge_core::input::LineInput;
+use forge_core::project_search::Hit;
+use forge_core::settings::{config_dir, Settings};
+use forge_core::terminal::Terminal;
+use forge_core::theme::Theme;
+use forge_lsp::{
+    parse_code_actions, parse_completion, parse_document_symbols, parse_hover, parse_locations,
+    parse_signature_help, parse_text_edits, parse_workspace_edit, path_to_uri, text_document_position,
+    CodeAction, CompletionItem, ContentChange, Diagnostic, Location, Position, Range as LspRange, SignatureHelp,
+    Symbol, TextEditSpec,
+};
+use forge_syntax::{Language, Syntax};
+use forge_text::{Buffer, IndentStyle, Selection, SelectionSet, TextEdit};
+use gpui::{px, App, Context, FocusHandle, Focusable, Pixels, SharedString, UniformListScrollHandle};
+
+use crate::completion::{filter_items, identifier_start, CompletionState};
+use crate::lsp::{Event, LspManager, RequestTag};
+use crate::tree::FileTree;
+
+/// How often background work (language servers, terminals, searches) is drained.
+pub(crate) const TICK: Duration = Duration::from_millis(50);
+/// Files larger than this are refused instead of stalling the UI thread on load.
+pub(crate) const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// How long the pointer must rest on text before hover information is requested.
+pub(crate) const HOVER_DELAY: Duration = Duration::from_millis(500);
+pub(crate) const SIDEBAR_WIDTH: f32 = 260.0;
+pub(crate) const PANEL_HEIGHT: f32 = 250.0;
+pub(crate) const TAB_BAR_HEIGHT: f32 = 34.0;
+pub(crate) const BREADCRUMB_HEIGHT: f32 = 22.0;
+pub(crate) const LINE_NUMBER_WIDTH: f32 = 46.0;
+pub(crate) const FOLD_WIDTH: f32 = 16.0;
+pub(crate) const GUTTER_WIDTH: f32 = LINE_NUMBER_WIDTH + FOLD_WIDTH;
+pub(crate) const TEXT_PAD: f32 = 8.0;
+pub(crate) const FONT: &str = "Consolas";
+
+pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        let norm = |p: &Path| p.to_string_lossy().replace('/', "\\");
+        norm(a).eq_ignore_ascii_case(&norm(b))
+    } else {
+        a == b
+    }
+}
+
+// ---- documents and views ----
+
+/// A file's text and everything derived from it, shared by every view of the file.
+pub(crate) struct Doc {
+    pub path: PathBuf,
+    pub buffer: Buffer,
+    pub dirty: bool,
+    pub syntax: Option<Syntax>,
+    pub language: Option<Language>,
+    pub lsp_open: bool,
+    pub lsp_version: i32,
+    pub diagnostics: Vec<Diagnostic>,
+    /// Bumped on every edit; caches compare against it.
+    pub revision: u64,
+    /// Generated content (a diff, a commit) that cannot be edited or saved.
+    pub readonly: bool,
+    /// Tab title for generated documents.
+    pub title: Option<String>,
+    /// Colors lines by their unified-diff prefix.
+    pub diff: bool,
+    /// Lines changed relative to HEAD, and the `(revision, git epoch)` they were computed for.
+    pub gutter: Vec<LineChange>,
+    pub gutter_key: (u64, u64),
+    /// The file began with a UTF-8 byte-order mark. It is kept out of the text (language
+    /// servers choke on it) and written back on save.
+    pub bom: bool,
+}
+
+/// Decode file contents, splitting a leading UTF-8 byte-order mark off the text.
+pub(crate) fn decode_utf8(bytes: Vec<u8>) -> Option<(String, bool)> {
+    let mut text = String::from_utf8(bytes).ok()?;
+    let bom = text.starts_with('\u{FEFF}');
+    if bom {
+        text.drain(..'\u{FEFF}'.len_utf8());
+    }
+    Some((text, bom))
+}
+
+impl Doc {
+    pub fn new(path: PathBuf, text: &str) -> Self {
+        let buffer = Buffer::new(text);
+        let language = Language::from_path(&path);
+        let syntax = language.and_then(Syntax::new).map(|mut syntax| {
+            syntax.parse(buffer.rope(), &[]);
+            syntax
+        });
+        Self {
+            path,
+            buffer,
+            dirty: false,
+            syntax,
+            language,
+            lsp_open: false,
+            lsp_version: 1,
+            diagnostics: Vec::new(),
+            revision: 0,
+            readonly: false,
+            title: None,
+            diff: false,
+            gutter: Vec::new(),
+            gutter_key: (u64::MAX, 0),
+            bom: false,
+        }
+    }
+
+    /// A read-only generated document (a diff or commit). Never gets syntax or a server.
+    pub fn new_virtual(path: PathBuf, title: &str, text: &str, diff: bool) -> Self {
+        let mut doc = Self::new(PathBuf::from("virtual"), text);
+        doc.path = path;
+        doc.language = None;
+        doc.syntax = None;
+        doc.readonly = true;
+        doc.title = Some(title.to_owned());
+        doc.diff = diff;
+        doc
+    }
+
+    pub fn name(&self) -> String {
+        self.title.clone().unwrap_or_else(|| self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+    }
+
+    /// Feed pending edits to the syntax tree and return them. Edits are drained even
+    /// without a grammar so the buffer's log cannot grow unbounded.
+    pub fn sync_syntax(&mut self) -> Vec<TextEdit> {
+        let edits = self.buffer.take_edits();
+        if let (Some(syntax), false) = (self.syntax.as_mut(), edits.is_empty()) {
+            syntax.parse(self.buffer.rope(), &edits);
+        }
+        edits
+    }
+
+    pub fn diagnostics_on(&self, line: usize) -> impl Iterator<Item = &Diagnostic> {
+        self.diagnostics.iter().filter(move |d| d.severity != forge_lsp::Severity::Hint && d.range.start.line <= line && line <= d.range.end.line)
+    }
+}
+
+/// One open tab: a document plus this tab's own cursors, scroll and folds.
+pub(crate) struct View {
+    pub doc: usize,
+    pub selections: SelectionSet,
+    /// Column kept across vertical moves through short lines.
+    pub goal: Option<usize>,
+    /// Earlier selections for Cursor Undo (Ctrl+U).
+    pub history: Vec<SelectionSet>,
+    /// Selections before each Expand Selection, for Shrink.
+    pub expand: Vec<SelectionSet>,
+    pub scroll: UniformListScrollHandle,
+    pub folds: Folds,
+    pub folds_revision: u64,
+    pub folds_lines: usize,
+}
+
+impl View {
+    pub fn new(doc: usize) -> Self {
+        Self {
+            doc,
+            selections: SelectionSet::single(Selection::caret(0)),
+            goal: None,
+            history: Vec::new(),
+            expand: Vec::new(),
+            scroll: UniformListScrollHandle::new(),
+            folds: Folds::default(),
+            folds_revision: u64::MAX,
+            folds_lines: 0,
+        }
+    }
+}
+
+pub(crate) struct Group {
+    pub views: Vec<View>,
+    pub active: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Focus {
+    Editor,
+    Explorer,
+    Find,
+    Search,
+    Scm,
+    Terminal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SidebarView {
+    Explorer,
+    Search,
+    Git,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PanelView {
+    Terminal,
+    Problems,
+    References,
+}
+
+// ---- overlays (palette, quick open, prompts) ----
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum OverlayKind {
+    Palette,
+    QuickOpen,
+    GoToLine,
+    Symbols,
+    Theme,
+    CodeActions,
+    Rename,
+    NewEntry { dir: PathBuf, folder: bool },
+    RenameEntry(PathBuf),
+    ConfirmDelete(PathBuf),
+    GitCheckout,
+    GitCreateBranch,
+    GitHistory,
+    ConfirmDiscard { rel: String, untracked: bool },
+    LanguageServers,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ItemAction {
+    Command(Command),
+    File(PathBuf),
+    Theme(String),
+    CodeAction(usize),
+    Symbol(usize, usize),
+    GitBranch(usize),
+    GitCommit(usize),
+    Server(usize),
+    ServersInstallAll,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Item {
+    pub label: String,
+    pub detail: String,
+    pub positions: Vec<usize>,
+    pub action: ItemAction,
+}
+
+pub(crate) struct Overlay {
+    pub kind: OverlayKind,
+    pub input: LineInput,
+    pub items: Vec<Item>,
+    pub selected: usize,
+    pub placeholder: String,
+    pub note: Option<String>,
+}
+
+pub(crate) struct SearchPanel {
+    pub query: LineInput,
+    pub options: forge_text::search::SearchOptions,
+    pub hits: Vec<Hit>,
+    pub running: bool,
+    pub capped: bool,
+    pub error: Option<String>,
+    pub rx: Option<Receiver<crate::input_handling::SearchMsg>>,
+    pub cancel: Arc<AtomicBool>,
+    pub scroll: UniformListScrollHandle,
+    pub selected: usize,
+}
+
+pub(crate) struct RefEntry {
+    pub location: Location,
+    pub preview: String,
+}
+
+pub(crate) struct HoverInfo {
+    pub text: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Results of git work done on background threads.
+pub(crate) enum GitMsg {
+    Status(Result<Status, String>),
+    Head(PathBuf, Option<String>),
+    Done { label: String, result: Result<String, String> },
+    Diff { key: String, title: String, result: Result<String, String> },
+    Branches(Result<Vec<Branch>, String>),
+    History(Result<Vec<Commit>, String>),
+    Blame(Result<Blame, String>),
+}
+
+pub(crate) struct GitState {
+    pub root: PathBuf,
+    pub status: Status,
+    /// A status request is in flight.
+    pub refreshing: bool,
+    pub refresh_wanted: bool,
+    pub last_refresh: Instant,
+    /// File contents at HEAD by absolute path; `None` = not in HEAD (new or untracked).
+    pub head: HashMap<PathBuf, Option<String>>,
+    pub head_pending: HashSet<PathBuf>,
+    /// Bumped whenever the HEAD cache changes so gutters recompute.
+    pub epoch: u64,
+    /// Letter shown beside a path in the explorer; folders get a dot.
+    pub decor: HashMap<PathBuf, char>,
+    /// Name of an operation running in the background ("Pulling"...).
+    pub job: Option<String>,
+}
+
+pub(crate) struct Workspace {
+    pub tree: FileTree,
+    pub docs: Vec<Doc>,
+    pub groups: Vec<Group>,
+    pub focused_group: usize,
+    pub focus_handle: FocusHandle,
+    pub focus: Focus,
+
+    pub settings: Settings,
+    pub theme: Theme,
+    pub keymap: Keymap,
+    /// First keys of a multi-step chord already pressed (e.g. `ctrl+k`).
+    pub pending_chord: String,
+    pub status: SharedString,
+    pub char_width: Pixels,
+    pub clipboard_lines: Option<String>,
+    pub last_typing: Option<Instant>,
+    pub close_armed: Option<(usize, usize)>,
+
+    pub sidebar_visible: bool,
+    pub sidebar_view: SidebarView,
+    pub panel_visible: bool,
+    pub panel_view: PanelView,
+    pub explorer_scroll: UniformListScrollHandle,
+    pub explorer_selected: Option<usize>,
+
+    pub lsp: LspManager,
+    pub lsp_progress: Option<String>,
+    pub completion: Option<CompletionState>,
+    pub completion_request: Option<u64>,
+    pub signature: Option<SignatureHelp>,
+    pub hover: Option<HoverInfo>,
+    pub hover_request: Option<(u64, usize, usize)>,
+    pub next_request: u64,
+    pub mouse: Option<gpui::Point<Pixels>>,
+    pub mouse_moved: Instant,
+    pub symbols: Vec<Symbol>,
+    pub code_actions: Vec<CodeAction>,
+    pub references: Vec<RefEntry>,
+    pub reference_selected: usize,
+    pub problem_selected: usize,
+    pub problems_scroll: UniformListScrollHandle,
+    pub references_scroll: UniformListScrollHandle,
+
+    pub find: FindState,
+    pub find_revision: (usize, u64),
+    pub overlay: Option<Overlay>,
+    pub search: SearchPanel,
+    pub file_index: Option<Vec<PathBuf>>,
+    pub file_index_rx: Option<Receiver<Vec<PathBuf>>>,
+    pub recent_files: Vec<PathBuf>,
+    pub recent_commands: Vec<Command>,
+
+    pub terminals: Vec<Terminal>,
+    pub active_terminal: usize,
+    pub drag: Option<crate::input_handling::Drag>,
+
+    pub git: Option<GitState>,
+    pub git_tx: Sender<GitMsg>,
+    pub git_rx: Receiver<GitMsg>,
+    pub scm_message: LineInput,
+    pub scm_scroll: UniformListScrollHandle,
+    pub branches: Vec<Branch>,
+    pub history: Vec<Commit>,
+    pub history_path: Option<String>,
+    /// Result of a language-server install running in the background.
+    pub install_rx: Option<Receiver<Result<String, String>>>,
+}
+
+impl Focusable for Workspace {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Workspace {
+    pub fn new(root: PathBuf, initial_file: Option<&Path>, cx: &mut Context<Self>) -> Self {
+        let settings = std::fs::read_to_string(config_dir().join("settings.json")).map(|t| Settings::parse(&t)).unwrap_or_default();
+        let mut keymap = Keymap::default();
+        let mut status = format!("Opened {}", root.display());
+        if let Ok(text) = std::fs::read_to_string(config_dir().join("keybindings.json")) {
+            let warnings = keymap.apply_user(&text);
+            if let Some(first) = warnings.first() {
+                status = format!("keybindings.json: {first}");
+            }
+        }
+        let theme = Theme::by_name(&settings.theme);
+        let (git_tx, git_rx) = mpsc::channel();
+        let mut workspace = Self {
+            lsp: LspManager::new(root.clone()),
+            tree: FileTree::new(root),
+            docs: Vec::new(),
+            groups: vec![Group { views: Vec::new(), active: 0 }],
+            focused_group: 0,
+            focus_handle: cx.focus_handle(),
+            focus: Focus::Editor,
+            char_width: px(settings.font_size * 0.55),
+            settings,
+            theme,
+            keymap,
+            pending_chord: String::new(),
+            status: status.into(),
+            clipboard_lines: None,
+            last_typing: None,
+            close_armed: None,
+            sidebar_visible: true,
+            sidebar_view: SidebarView::Explorer,
+            panel_visible: false,
+            panel_view: PanelView::Terminal,
+            explorer_scroll: UniformListScrollHandle::new(),
+            explorer_selected: None,
+            lsp_progress: None,
+            completion: None,
+            completion_request: None,
+            signature: None,
+            hover: None,
+            hover_request: None,
+            next_request: 0,
+            mouse: None,
+            mouse_moved: Instant::now(),
+            symbols: Vec::new(),
+            code_actions: Vec::new(),
+            references: Vec::new(),
+            reference_selected: 0,
+            problem_selected: 0,
+            problems_scroll: UniformListScrollHandle::new(),
+            references_scroll: UniformListScrollHandle::new(),
+            find: FindState::default(),
+            find_revision: (usize::MAX, 0),
+            overlay: None,
+            search: SearchPanel {
+                query: LineInput::default(),
+                options: Default::default(),
+                hits: Vec::new(),
+                running: false,
+                capped: false,
+                error: None,
+                rx: None,
+                cancel: Arc::new(AtomicBool::new(false)),
+                scroll: UniformListScrollHandle::new(),
+                selected: 0,
+            },
+            file_index: None,
+            file_index_rx: None,
+            recent_files: Vec::new(),
+            recent_commands: Vec::new(),
+            terminals: Vec::new(),
+            active_terminal: 0,
+            drag: None,
+            git: None,
+            git_tx,
+            git_rx,
+            scm_message: LineInput::default(),
+            scm_scroll: UniformListScrollHandle::new(),
+            branches: Vec::new(),
+            history: Vec::new(),
+            history_path: None,
+            install_rx: None,
+        };
+        workspace.lsp.set_overrides(workspace.settings.language_servers.clone());
+        workspace.init_git();
+        if let Some(file) = initial_file {
+            workspace.open_file(file, None, cx);
+        }
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(TICK).await;
+            if this.update(cx, |workspace, cx| workspace.tick(cx)).is_err() {
+                break;
+            }
+        })
+        .detach();
+        if let Ok(script) = std::env::var("FORGE_REPLAY") {
+            workspace.start_replay(script, cx);
+        }
+        workspace
+    }
+
+    /// Debugging and testing aid: `FORGE_REPLAY="ctrl+p text:main enter"` feeds keystrokes
+    /// through the normal key handler, one per 120 ms. Tokens are chords (`ctrl+shift+p`,
+    /// `down`, `f2`), `text:...` to type characters, `wait:MS`, and `status:` is ignored.
+    fn start_replay(&mut self, script: String, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            // Let the window and language server settle before the first key.
+            let delay = std::env::var("FORGE_REPLAY_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(3000u64);
+            cx.background_executor().timer(Duration::from_millis(delay)).await;
+            for token in script.split_whitespace() {
+                if let Some(ms) = token.strip_prefix("wait:") {
+                    cx.background_executor().timer(Duration::from_millis(ms.parse().unwrap_or(500))).await;
+                    continue;
+                }
+                let events: Vec<gpui::KeyDownEvent> = match token.strip_prefix("text:") {
+                    Some(text) => text.chars().map(|c| replay_event(&c.to_string(), c.is_uppercase(), Some(c.to_string()))).collect(),
+                    None => vec![replay_event_from_chord(token)],
+                };
+                for event in events {
+                    if this.update(cx, |workspace, cx| workspace.on_key_down(&event, cx)).is_err() {
+                        return;
+                    }
+                    cx.background_executor().timer(Duration::from_millis(120)).await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    // ---- accessors ----
+
+    pub fn root(&self) -> &Path {
+        self.tree.root()
+    }
+
+    pub fn line_height(&self) -> f32 {
+        (self.settings.font_size * 1.45).round()
+    }
+
+    pub fn indent_style(&self) -> IndentStyle {
+        IndentStyle { tab_size: self.settings.tab_size, use_spaces: self.settings.insert_spaces }
+    }
+
+    /// `(group, view)` of the focused editor tab.
+    pub fn active_ix(&self) -> Option<(usize, usize)> {
+        let group = self.groups.get(self.focused_group)?;
+        (group.active < group.views.len()).then_some((self.focused_group, group.active))
+    }
+
+    pub fn active_view(&self) -> Option<&View> {
+        let (g, v) = self.active_ix()?;
+        self.groups[g].views.get(v)
+    }
+
+    pub fn active_doc(&self) -> Option<&Doc> {
+        self.docs.get(self.active_view()?.doc)
+    }
+
+    pub fn set_status(&mut self, text: impl Into<SharedString>) {
+        self.status = text.into();
+    }
+
+    pub fn doc_index(&self, path: &Path) -> Option<usize> {
+        self.docs.iter().position(|d| same_path(&d.path, path))
+    }
+
+    pub fn views_of(&self, doc: usize) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.groups.iter().enumerate().flat_map(move |(g, group)| {
+            group.views.iter().enumerate().filter(move |(_, v)| v.doc == doc).map(move |(vi, _)| (g, vi))
+        })
+    }
+
+    // ---- opening, saving, closing ----
+
+    /// Open `path` in the focused group (or switch to it). `at` is a `(line, UTF-16 column)`.
+    pub fn open_file(&mut self, path: &Path, at: Option<(usize, usize)>, cx: &mut Context<Self>) {
+        let group = self.focused_group;
+        if let Some(vi) = self.groups[group].views.iter().position(|v| same_path(&self.docs[v.doc].path, path)) {
+            self.groups[group].active = vi;
+        } else if let Some(doc) = self.doc_index(path) {
+            self.groups[group].views.push(View::new(doc));
+            self.groups[group].active = self.groups[group].views.len() - 1;
+        } else {
+            match Self::read_file(path) {
+                Ok((text, bom)) => {
+                    let mut new_doc = Doc::new(path.to_path_buf(), &text);
+                    new_doc.bom = bom;
+                    self.docs.push(new_doc);
+                    let doc = self.docs.len() - 1;
+                    self.groups[group].views.push(View::new(doc));
+                    self.groups[group].active = self.groups[group].views.len() - 1;
+                    self.attach_lsp(doc);
+                }
+                Err(err) => {
+                    self.set_status(format!("Cannot open: {err}"));
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        self.completion = None;
+        self.hover = None;
+        self.signature = None;
+        self.focus = Focus::Editor;
+        self.recent_files.retain(|p| !same_path(p, path));
+        self.recent_files.insert(0, path.to_path_buf());
+        self.recent_files.truncate(20);
+        self.tree.reveal(path);
+        if let Some((line, col)) = at {
+            self.place_caret_utf16(line, col);
+        }
+        self.set_status(format!("Opened {}", path.display()));
+        cx.notify();
+    }
+
+    fn read_file(path: &Path) -> Result<(String, bool), String> {
+        let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+        if meta.len() > MAX_FILE_BYTES {
+            return Err(format!("{} is larger than {} MiB", path.display(), MAX_FILE_BYTES >> 20));
+        }
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        decode_utf8(bytes).ok_or_else(|| format!("{} is not valid UTF-8", path.display()))
+    }
+
+    pub fn place_caret_utf16(&mut self, line: usize, col: usize) {
+        let Some((g, vi)) = self.active_ix() else { return };
+        let view = &mut self.groups[g].views[vi];
+        let doc = &self.docs[view.doc];
+        let offset = doc.buffer.offset_from_utf16(line, col);
+        view.selections = SelectionSet::single(Selection::caret(offset));
+        self.reveal_caret(g, vi, true);
+    }
+
+    pub fn place_caret_offset(&mut self, offset: usize) {
+        let Some((g, vi)) = self.active_ix() else { return };
+        self.groups[g].views[vi].selections = SelectionSet::single(Selection::caret(offset));
+        self.reveal_caret(g, vi, true);
+    }
+
+    /// Scroll so the primary caret is visible, unfolding anything that hides it.
+    pub fn reveal_caret(&mut self, g: usize, vi: usize, center: bool) {
+        let view = &mut self.groups[g].views[vi];
+        let doc = &self.docs[view.doc];
+        let (line, _) = doc.buffer.offset_to_point(view.selections.primary().head);
+        while view.folds.is_hidden(line) {
+            if !view.folds.unfold_at(line) {
+                break;
+            }
+        }
+        let index = view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line);
+        // Non-strict scrolling only moves when the line is off screen; `center` forces it.
+        if center {
+            view.scroll.scroll_to_item_strict(index, gpui::ScrollStrategy::Center);
+        } else {
+            view.scroll.scroll_to_item(index, gpui::ScrollStrategy::Center);
+        }
+    }
+
+    pub fn write_doc(&mut self, doc_ix: usize) {
+        let Some(doc) = self.docs.get_mut(doc_ix) else { return };
+        if doc.readonly {
+            self.set_status("This document is read-only");
+            return;
+        }
+        let mut contents = doc.buffer.text();
+        if doc.bom {
+            contents.insert(0, '\u{FEFF}');
+        }
+        match std::fs::write(&doc.path, contents) {
+            Ok(()) => {
+                doc.dirty = false;
+                let path = doc.path.clone();
+                let language = doc.language;
+                let open = doc.lsp_open;
+                self.set_status(format!("Saved {}", path.display()));
+                if let (Some(language), true) = (language, open) {
+                    self.lsp.did_save(language, &path);
+                }
+                self.reload_config_if_needed(&path);
+                self.file_index = None;
+                self.git_request_refresh();
+            }
+            Err(err) => self.set_status(format!("Save failed: {err}")),
+        }
+    }
+
+    /// Saving `settings.json` or `keybindings.json` applies it immediately.
+    fn reload_config_if_needed(&mut self, path: &Path) {
+        if same_path(path, &config_dir().join("settings.json")) {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                self.settings = Settings::parse(&text);
+                self.theme = Theme::by_name(&self.settings.theme);
+                self.lsp.set_overrides(self.settings.language_servers.clone());
+                for ix in 0..self.docs.len() {
+                    if !self.docs[ix].lsp_open {
+                        self.attach_lsp(ix);
+                    }
+                }
+                self.set_status("Settings reloaded");
+            }
+        } else if same_path(path, &config_dir().join("keybindings.json")) {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let mut keymap = Keymap::default();
+                let warnings = keymap.apply_user(&text);
+                self.keymap = keymap;
+                self.set_status(match warnings.first() {
+                    Some(w) => format!("keybindings.json: {w}"),
+                    None => "Keybindings reloaded".to_owned(),
+                });
+            }
+        }
+    }
+
+    /// Close a tab. A modified document with no other tab needs a second request.
+    pub fn close_view(&mut self, g: usize, vi: usize, cx: &mut Context<Self>) {
+        let Some(view) = self.groups.get(g).and_then(|gr| gr.views.get(vi)) else { return };
+        let doc_ix = view.doc;
+        let others = self.views_of(doc_ix).count() > 1;
+        if self.docs[doc_ix].dirty && !others && self.close_armed != Some((g, vi)) {
+            self.close_armed = Some((g, vi));
+            let name = self.docs[doc_ix].name();
+            self.set_status(format!("{name} has unsaved changes: Ctrl+S to save, or close again to discard"));
+            cx.notify();
+            return;
+        }
+        self.close_armed = None;
+        self.completion = None;
+        self.hover = None;
+        let group = &mut self.groups[g];
+        group.views.remove(vi);
+        group.active = group.active.min(group.views.len().saturating_sub(1));
+        if self.groups[g].views.is_empty() && self.groups.len() > 1 {
+            self.groups.remove(g);
+            self.focused_group = self.focused_group.min(self.groups.len() - 1);
+        }
+        if self.views_of(doc_ix).next().is_none() {
+            let doc = self.docs.remove(doc_ix);
+            if let (Some(language), true) = (doc.language, doc.lsp_open) {
+                self.lsp.did_close(language, &doc.path);
+            }
+            for view in self.groups.iter_mut().flat_map(|g| g.views.iter_mut()) {
+                if view.doc > doc_ix {
+                    view.doc -= 1;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    // ---- the edit pipeline ----
+
+    /// Run an edit on the focused view's buffer and propagate its effects.
+    pub fn mutate(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Buffer, &SelectionSet) -> SelectionSet) {
+        let Some((g, vi)) = self.active_ix() else { return };
+        if self.docs[self.groups[g].views[vi].doc].readonly {
+            self.set_status("This document is read-only");
+            return;
+        }
+        let view = &mut self.groups[g].views[vi];
+        let doc = &mut self.docs[view.doc];
+        let before = view.selections.clone();
+        let after = f(&mut doc.buffer, &before);
+        if after != before {
+            view.history.push(before);
+            if view.history.len() > 100 {
+                view.history.remove(0);
+            }
+        }
+        view.selections = after;
+        view.goal = None;
+        view.expand.clear();
+        let doc_ix = view.doc;
+        let edits = doc.sync_syntax();
+        if !edits.is_empty() {
+            self.after_edits(doc_ix, Some((g, vi)), &edits);
+        }
+        self.reveal_caret(g, vi, false);
+        cx.notify();
+    }
+
+    /// Update everything that depends on a document's text after `edits`.
+    pub fn after_edits(&mut self, doc_ix: usize, origin: Option<(usize, usize)>, edits: &[TextEdit]) {
+        self.docs[doc_ix].dirty = true;
+        self.docs[doc_ix].revision += 1;
+        for (g, vi) in self.views_of(doc_ix).collect::<Vec<_>>() {
+            let view = &mut self.groups[g].views[vi];
+            if Some((g, vi)) != origin {
+                view.selections = view.selections.map_through_edits(edits);
+            }
+            for e in edits {
+                view.folds.apply_edit(e.start_point.0, e.old_end_point.0, e.new_end_point.0);
+            }
+        }
+        self.send_changes(doc_ix, edits);
+        self.hover = None;
+        self.hover_request = None;
+        if self.find.open {
+            self.refresh_find();
+        }
+    }
+
+    fn send_changes(&mut self, doc_ix: usize, edits: &[TextEdit]) {
+        let Some(doc) = self.docs.get_mut(doc_ix) else { return };
+        let (Some(language), true, false) = (doc.language, doc.lsp_open, edits.is_empty()) else { return };
+        doc.lsp_version += 1;
+        let changes: Vec<ContentChange> = edits
+            .iter()
+            .map(|e| ContentChange {
+                range: LspRange {
+                    start: Position { line: e.start_utf16.0, character: e.start_utf16.1 },
+                    end: Position { line: e.old_end_utf16.0, character: e.old_end_utf16.1 },
+                },
+                text: e.inserted.clone(),
+            })
+            .collect();
+        self.lsp.did_change(language, &doc.path, doc.lsp_version, &changes);
+    }
+
+    /// Apply a server's text edits to a document as one undoable change.
+    pub fn apply_text_edits(&mut self, doc_ix: usize, edits: &[TextEditSpec], cx: &mut Context<Self>) {
+        let doc = &mut self.docs[doc_ix];
+        let mut reps: Vec<(usize, usize, String)> = edits
+            .iter()
+            .map(|e| {
+                (
+                    doc.buffer.offset_from_utf16(e.range.start.line, e.range.start.character),
+                    doc.buffer.offset_from_utf16(e.range.end.line, e.range.end.character),
+                    e.new_text.clone(),
+                )
+            })
+            .collect();
+        reps.sort_by_key(|r| (r.0, r.1));
+        // Overlapping edits from a misbehaving server are dropped rather than corrupting text.
+        let mut kept: Vec<(usize, usize, String)> = Vec::new();
+        for rep in reps {
+            if kept.last().is_none_or(|last| last.1 <= rep.0) {
+                kept.push(rep);
+            }
+        }
+        if kept.is_empty() {
+            return;
+        }
+        let anchor = self.views_of(doc_ix).next().map(|(g, vi)| self.groups[g].views[vi].selections.clone()).unwrap_or_else(|| SelectionSet::single(Selection::caret(0)));
+        let doc = &mut self.docs[doc_ix];
+        doc.buffer.edit_many(&anchor, &kept, |_, _| anchor.clone());
+        let applied = doc.sync_syntax();
+        self.after_edits(doc_ix, None, &applied);
+        cx.notify();
+    }
+
+    // ---- language servers ----
+
+    pub fn attach_lsp(&mut self, doc_ix: usize) {
+        let Some(language) = self.docs[doc_ix].language.filter(|l| self.lsp.key_for(*l).is_some()) else { return };
+        match self.lsp.start(language) {
+            Err(reason) => self.set_status(reason),
+            Ok(()) => {
+                let doc = &mut self.docs[doc_ix];
+                doc.lsp_open = self.lsp.did_open(language, &doc.path, doc.lsp_version, &doc.buffer.text());
+            }
+        }
+    }
+
+    pub fn lsp_target(&self) -> Option<(Language, String, Position)> {
+        let doc = self.active_doc()?;
+        if !doc.lsp_open {
+            return None;
+        }
+        let view = self.active_view()?;
+        let (line, character) = doc.buffer.utf16_point(view.selections.primary().head);
+        Some((doc.language?, path_to_uri(&doc.path)?, Position { line, character }))
+    }
+
+    pub fn next_id(&mut self) -> u64 {
+        self.next_request += 1;
+        self.next_request
+    }
+
+    pub fn request_completion(&mut self) {
+        let Some((language, uri, at)) = self.lsp_target() else {
+            self.set_status("Language server is not ready");
+            return;
+        };
+        let id = self.next_id();
+        self.completion_request = Some(id);
+        self.lsp.request(language, "textDocument/completion", text_document_position(&uri, at), RequestTag::Completion(id));
+    }
+
+    pub fn request_signature(&mut self) {
+        let Some((language, uri, at)) = self.lsp_target() else { return };
+        let id = self.next_id();
+        self.lsp.request(language, "textDocument/signatureHelp", text_document_position(&uri, at), RequestTag::Signature(id));
+    }
+
+    pub fn request_at(&mut self, method: &str, tag: RequestTag) {
+        let Some((language, uri, at)) = self.lsp_target() else {
+            self.set_status("Language server is not ready");
+            return;
+        };
+        let params = match method {
+            "textDocument/references" => forge_lsp::references_params(&uri, at),
+            _ => text_document_position(&uri, at),
+        };
+        self.lsp.request(language, method, params, tag);
+    }
+
+    /// Drain background work. Called on a timer; re-renders only if something changed.
+    pub fn tick(&mut self, cx: &mut Context<Self>) {
+        let mut changed = false;
+        for event in self.lsp.poll() {
+            self.handle_lsp_event(event, cx);
+            changed = true;
+        }
+        for terminal in &mut self.terminals {
+            changed |= terminal.pump();
+        }
+        changed |= self.poll_background();
+        changed |= self.check_hover_dwell();
+        changed |= self.git_tick(cx);
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn handle_lsp_event(&mut self, event: Event, cx: &mut Context<Self>) {
+        match event {
+            Event::Ready { key } => {
+                for ix in 0..self.docs.len() {
+                    let serves = self.docs[ix].language.and_then(|l| self.lsp.key_for(l)).as_deref() == Some(key.as_str());
+                    if serves && !self.docs[ix].lsp_open {
+                        self.attach_lsp(ix);
+                    }
+                }
+            }
+            Event::Diagnostics { path, diagnostics } => {
+                if let Some(ix) = self.doc_index(&path) {
+                    self.docs[ix].diagnostics = diagnostics;
+                }
+            }
+            Event::Progress { title, text } => {
+                let short = title.split(" (").next().unwrap_or(&title).to_owned();
+                self.lsp_progress = text.map(|t| format!("{short}: {t}"));
+            }
+            Event::Failed { key, title, message } => {
+                self.set_status(format!("{title}: {message}"));
+                self.lsp_progress = None;
+                self.completion = None;
+                for doc in self.docs.iter_mut().filter(|d| d.language.and_then(|l| self.lsp.key_for(l)).as_deref() == Some(key.as_str())) {
+                    doc.lsp_open = false;
+                    doc.diagnostics.clear();
+                }
+            }
+            Event::Response { tag, result } => self.handle_response(tag, result, cx),
+        }
+    }
+
+    fn handle_response(&mut self, tag: RequestTag, result: serde_json::Value, cx: &mut Context<Self>) {
+        match tag {
+            RequestTag::Completion(id) if self.completion_request == Some(id) => {
+                self.show_completions(parse_completion(&result));
+            }
+            RequestTag::Completion(_) => {}
+            RequestTag::Definition => self.go_to_locations(parse_locations(&result), cx),
+            RequestTag::Hover(id) => {
+                if let (Some((want, line, col)), Some(text)) = (self.hover_request, parse_hover(&result).map(|t| collapse_blank_lines(&t))) {
+                    if want == id {
+                        self.hover = Some(HoverInfo { text, line, col });
+                    }
+                }
+            }
+            RequestTag::Signature(_) => self.signature = parse_signature_help(&result),
+            RequestTag::References => {
+                let locations = parse_locations(&result);
+                if locations.is_empty() {
+                    self.set_status("No references found");
+                    return;
+                }
+                self.references = locations
+                    .into_iter()
+                    .take(500)
+                    .map(|location| {
+                        let preview = self.line_preview(&location);
+                        RefEntry { location, preview }
+                    })
+                    .collect();
+                self.reference_selected = 0;
+                self.panel_view = PanelView::References;
+                self.panel_visible = true;
+                self.set_status(format!("{} references", self.references.len()));
+            }
+            RequestTag::Rename => {
+                let edits = parse_workspace_edit(&result);
+                self.apply_workspace_edit(edits, cx);
+            }
+            RequestTag::CodeActions => {
+                self.code_actions = parse_code_actions(&result);
+                if self.code_actions.is_empty() {
+                    self.overlay = None;
+                    self.set_status("No code actions available");
+                } else {
+                    self.refresh_overlay();
+                }
+            }
+            RequestTag::Format { then_save } => {
+                let edits = parse_text_edits(&result);
+                if let Some((g, vi)) = self.active_ix() {
+                    let doc_ix = self.groups[g].views[vi].doc;
+                    if !edits.is_empty() {
+                        self.apply_text_edits(doc_ix, &edits, cx);
+                    }
+                    if then_save {
+                        self.write_doc(doc_ix);
+                    } else if edits.is_empty() {
+                        self.set_status("No formatting changes");
+                    }
+                }
+            }
+            RequestTag::Symbols => {
+                self.symbols = parse_document_symbols(&result);
+                self.refresh_overlay();
+            }
+        }
+    }
+
+    fn line_preview(&self, location: &Location) -> String {
+        if let Some(doc) = self.doc_index(&location.path).map(|i| &self.docs[i]) {
+            return doc.buffer.line(location.range.start.line.min(doc.buffer.len_lines() - 1)).trim().to_owned();
+        }
+        forge_core::project_search::read_text_file(&location.path)
+            .and_then(|t| t.lines().nth(location.range.start.line).map(|l| l.trim().to_owned()))
+            .unwrap_or_default()
+    }
+
+    pub fn apply_workspace_edit(&mut self, files: Vec<(PathBuf, Vec<TextEditSpec>)>, cx: &mut Context<Self>) {
+        if files.is_empty() {
+            self.set_status("Nothing to change");
+            return;
+        }
+        let (mut total, mut count) = (0, 0);
+        for (path, edits) in files {
+            if edits.is_empty() {
+                continue;
+            }
+            self.open_file(&path, None, cx);
+            if let Some(ix) = self.doc_index(&path) {
+                total += edits.len();
+                count += 1;
+                self.apply_text_edits(ix, &edits, cx);
+            }
+        }
+        self.set_status(format!("Applied {total} edits in {count} files (unsaved)"));
+    }
+
+    fn show_completions(&mut self, items: Vec<CompletionItem>) {
+        let Some(view) = self.active_view() else { return };
+        let doc = &self.docs[view.doc];
+        let caret = view.selections.primary().head;
+        let prefix = doc.buffer.rope().slice(identifier_start(&doc.buffer, caret)..caret).to_string();
+        let items = filter_items(items, &prefix);
+        self.completion = (!items.is_empty()).then(|| CompletionState::new(items));
+    }
+
+    pub fn go_to_locations(&mut self, locations: Vec<Location>, cx: &mut Context<Self>) {
+        // Several definitions (e.g. trait impls) are not offered as a list yet: take the first.
+        let Some(location) = locations.into_iter().next() else {
+            self.set_status("No definition found");
+            return;
+        };
+        self.open_file(&location.path, Some((location.range.start.line, location.range.start.character)), cx);
+    }
+
+    /// Hover requests start when the pointer has rested over text.
+    fn check_hover_dwell(&mut self) -> bool {
+        if self.mouse.is_none() || self.mouse_moved.elapsed() < HOVER_DELAY || self.hover.is_some() || self.hover_request.is_some() || self.overlay.is_some() {
+            return false;
+        }
+        let Some(pos) = self.mouse else { return false };
+        let Some((_, line, col)) = self.point_at(pos) else { return false };
+        let Some(doc) = self.active_doc() else { return false };
+        // Diagnostics show even without a server answer.
+        if doc.diagnostics_on(line).next().is_some() && !doc.lsp_open {
+            self.hover = Some(HoverInfo { text: String::new(), line, col });
+            return true;
+        }
+        let Some((language, uri, _)) = self.lsp_target() else { return false };
+        let doc = self.active_doc().expect("checked above");
+        let (l, c) = doc.buffer.utf16_point(doc.buffer.point_to_offset(line, col));
+        let id = self.next_id();
+        self.hover_request = Some((id, line, col));
+        self.lsp.request(language, "textDocument/hover", text_document_position(&uri, Position { line: l, character: c }), RequestTag::Hover(id));
+        false
+    }
+}
+
+fn replay_event(key: &str, shift: bool, key_char: Option<String>) -> gpui::KeyDownEvent {
+    gpui::KeyDownEvent {
+        keystroke: gpui::Keystroke {
+            modifiers: gpui::Modifiers { shift, ..Default::default() },
+            key: key.to_lowercase(),
+            key_char,
+        },
+        is_held: false,
+    }
+}
+
+/// `ctrl+shift+p` style token to a key event. Single plain characters also carry their text.
+fn replay_event_from_chord(token: &str) -> gpui::KeyDownEvent {
+    let normalized = forge_core::commands::normalize_sequence(token);
+    let mut modifiers = gpui::Modifiers::default();
+    let mut rest = normalized.as_str();
+    loop {
+        if let Some(r) = rest.strip_prefix("ctrl+") {
+            modifiers.control = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("shift+") {
+            modifiers.shift = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("alt+") {
+            modifiers.alt = true;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("meta+") {
+            modifiers.platform = true;
+            rest = r;
+        } else {
+            break;
+        }
+    }
+    let typed = !modifiers.control && !modifiers.alt && !modifiers.platform;
+    // Like real Windows events: only single printable keys carry a character; named keys
+    // (space, enter, tab, arrows) do not.
+    let key_char = (rest.chars().count() == 1 && typed).then(|| rest.to_owned());
+    gpui::KeyDownEvent { keystroke: gpui::Keystroke { modifiers, key: rest.to_owned(), key_char }, is_held: false }
+}
+
+/// Markdown hovers carry runs of empty lines; show at most one between paragraphs.
+fn collapse_blank_lines(text: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    for line in text.lines().map(str::trim_end) {
+        if line.is_empty() && out.last().is_none_or(|l| l.is_empty()) {
+            continue;
+        }
+        out.push(line);
+    }
+    while out.last().is_some_and(|l| l.is_empty()) {
+        out.pop();
+    }
+    out.join("
+")
+}
+
+#[cfg(test)]
+mod hover_tests {
+    use super::collapse_blank_lines;
+
+    #[test]
+    fn blank_runs_collapse_and_edges_are_trimmed() {
+        assert_eq!(collapse_blank_lines("
+
+probe2
+
+
+
+fn f()
+
+"), "probe2
+
+fn f()");
+        assert_eq!(collapse_blank_lines("a
+b"), "a
+b");
+        assert_eq!(collapse_blank_lines("   
+"), "");
+    }
+}
+
+#[cfg(test)]
+mod encoding_tests {
+    use super::decode_utf8;
+
+    #[test]
+    fn a_byte_order_mark_is_split_off_and_reported() {
+        assert_eq!(decode_utf8(b"\xEF\xBB\xBF<?xml?>".to_vec()), Some(("<?xml?>".to_owned(), true)));
+        assert_eq!(decode_utf8(b"plain".to_vec()), Some(("plain".to_owned(), false)));
+        assert_eq!(decode_utf8(Vec::new()), Some((String::new(), false)));
+        // Only a leading mark counts, and invalid UTF-8 is still rejected.
+        assert_eq!(decode_utf8("a\u{FEFF}b".as_bytes().to_vec()), Some(("a\u{FEFF}b".to_owned(), false)));
+        assert_eq!(decode_utf8(vec![0xEF, 0xBB, 0xBF, 0xFF]), None);
+    }
+}
