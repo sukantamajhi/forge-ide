@@ -990,8 +990,13 @@ impl Workspace {
 
     /// Characters that fit on one row of the commit message box.
     pub fn scm_wrap_cols(&self) -> usize {
-        let inner = self.sidebar_width() - 1.0 - 2.0 * SCM_PAD - 2.0 * (1.0 + INPUT_PAD);
+        let inner = self.sidebar_width() - 1.0 - 2.0 * SCM_PAD - 2.0 * (1.0 + INPUT_PAD) - self.ai_button_reserve();
         ((inner / f32::from(self.char_width).max(1.0)).floor() as usize).max(8)
+    }
+
+    /// Width at the right of the message box kept free for the AI button, so text wraps before it.
+    fn ai_button_reserve(&self) -> f32 {
+        16.0 * self.settings.font_size / 14.0 * 1.625
     }
 
     /// The commit message box: wrapped rows, caret, selection, placeholder, mouse selection.
@@ -1079,10 +1084,34 @@ impl Workspace {
             row
         });
 
+        let can_ai = self.git.as_ref().is_some_and(|g| g.status.staged().next().is_some() && g.job.is_none()) && !self.ai_pending;
+        let ai_tip = if self.ai_pending { "Writing a commit message..." } else { "Write Commit Message with AI" };
+        let ai_button = div()
+            .id("git-ai")
+            .absolute()
+            .top(px(2.0))
+            .right(px(2.0))
+            .w(rems(1.5))
+            .h(rems(1.5))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .tooltip(self.tooltip(ai_tip, Some(Command::GitGenerateMessage)))
+            .when(can_ai, |d| d.cursor_pointer().hover(|s| s.bg(rgb(t.tab_active))))
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if can_ai {
+                    this.run_command(Command::GitGenerateMessage, false, cx);
+                }
+            }))
+            .child(crate::icons::glyph(crate::codicons::SPARKLE, 1.0, if can_ai { t.text } else { t.dim }));
         div()
             .id("scm-input")
+            .relative()
             .w_full()
-            .px(px(INPUT_PAD))
+            .pl(px(INPUT_PAD))
+            .pr(px(INPUT_PAD + self.ai_button_reserve()))
             .py(rems(0.25))
             .bg(rgb(t.bg))
             .border_1()
@@ -1097,6 +1126,7 @@ impl Workspace {
                 cx.notify();
             }))
             .children(row_elements)
+            .child(ai_button)
     }
 
     fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1283,7 +1313,6 @@ impl Workspace {
                         div()
                             .flex()
                             .flex_row()
-                            .child(icon("git-ai", crate::codicons::SPARKLE, if self.ai_pending { "Writing a commit message..." } else { "Write Commit Message with AI" }, can_commit && !self.ai_pending, cx, Command::GitGenerateMessage))
                             .child(icon("git-commit-icon", crate::codicons::CHECK, "Commit", can_commit, cx, Command::GitCommit))
                             .child(icon("git-refresh", crate::codicons::REFRESH, "Refresh", true, cx, Command::GitRefresh))
                             .child(
