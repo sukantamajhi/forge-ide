@@ -12,6 +12,7 @@ mod markdown_view;
 mod minimap;
 mod render;
 mod resize;
+mod scroll;
 mod host_support;
 mod codicons;
 mod icons;
@@ -19,6 +20,8 @@ mod product_icons;
 mod snippet_support;
 mod ext_support;
 mod ext_view;
+mod diff_view;
+mod conflict_view;
 mod file_icons;
 mod server_support;
 mod session_support;
@@ -37,6 +40,11 @@ use gpui::{
 use workspace::Workspace;
 
 fn main() {
+    // Git runs this program to ask for a password or passphrase (see `forge_core::askpass`).
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = forge_core::askpass::run_as_helper(&args) {
+        std::process::exit(code);
+    }
     let target = std::env::args()
         .nth(1)
         .map(PathBuf::from)

@@ -202,10 +202,11 @@ pub(crate) fn classify_link(url: &str, base: &Path) -> LinkTarget {
 }
 
 impl Workspace {
-    /// Markdown blocks drawn like the preview, for pages other than an editor tab.
-    pub(crate) fn markdown_blocks(&self, blocks: &[Block], base: PathBuf, cx: &mut Context<Self>) -> AnyElement {
-        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base, next_id: Cell::new(0) };
-        div().w_full().flex().flex_col().children(blocks.iter().map(|b| block(&ctx, b))).into_any_element()
+    /// One Markdown block drawn like the preview, for pages that lay out their blocks lazily.
+    /// `id_seed` keeps the ids of clickable links unique across blocks.
+    pub(crate) fn markdown_block(&self, b: &Block, base: PathBuf, id_seed: usize, cx: &mut Context<Self>) -> AnyElement {
+        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base, next_id: Cell::new(id_seed) };
+        block(&ctx, b)
     }
 
     /// Whether the active document in group `g` is Markdown.

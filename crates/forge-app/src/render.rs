@@ -118,7 +118,7 @@ impl Workspace {
                     this.completion = None;
                     cx.notify();
                 }))
-                .child(file_icon(self.icon_theme.as_ref(), &doc.name()))
+                .child(if doc.ext_page.is_some() { crate::icons::glyph(crate::codicons::EXTENSIONS, 1.0, t.dim) } else { file_icon(self.icon_theme.as_ref(), &doc.name()) })
                 .child(doc.name())
                 .child(
                     div()
@@ -203,7 +203,13 @@ impl Workspace {
     fn render_group(&mut self, g: usize, cx: &mut Context<Self>) -> Div {
         let t = self.theme.clone();
         let has_views = !self.groups[g].views.is_empty();
-        let body: AnyElement = if has_views {
+        let ext_page = self.groups[g].views.get(self.groups[g].active).map(|v| v.doc).filter(|&d| self.docs[d].ext_page.is_some());
+        let diff = if self.settings.diff_side_by_side && has_views { self.diff_target_in(g) } else { None };
+        let body: AnyElement = if let Some(page) = ext_page.and_then(|d| self.render_ext_page(d, cx)) {
+            page
+        } else if let Some((doc_ix, target)) = diff {
+            self.render_diff_view(doc_ix, &target, cx)
+        } else if has_views {
             self.render_editor(g, cx).into_any_element()
         } else {
             self.render_welcome().into_any_element()
@@ -1287,7 +1293,29 @@ impl Workspace {
                             ),
                     ),
             )
-            .child(div().flex().flex_col().gap(rems(0.5)).px(px(SCM_PAD)).pb(rems(0.625)).child(self.render_message_box(cx)).child(commit_button))
+            .children(self.render_git_state_banner(cx))
+            .child(div().flex().flex_col().gap(rems(0.5)).px(px(SCM_PAD)).pb(rems(0.625)).child(self.render_message_box(cx)).child(commit_button).children(busy.then(|| {
+                div()
+                    .id("git-cancel")
+                    .w(rems(6.0))
+                    .justify_center()
+                    .px_3()
+                    .h(rems(1.5))
+                    .flex()
+                    .items_center()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_xs()
+                    .bg(rgb(t.tab_active))
+                    .text_color(rgb(t.text))
+                    .hover(|s| s.bg(rgb(t.border)))
+                    .tooltip(self.tooltip("Cancel the running git operation", Some(Command::GitCancel)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.git_cancel();
+                        cx.notify();
+                    }))
+                    .child("Cancel")
+            })))
             .children(nothing.then(|| div().px(px(SCM_PAD)).pt_1().text_xs().text_color(rgb(t.dim)).child("No changes detected.")))
             .child(
                 div().flex_1().min_h_0().child(
@@ -1378,6 +1406,7 @@ impl Workspace {
                                             None => (change.path.clone(), String::new()),
                                         };
                                         let untracked = change.untracked;
+                                        let conflicted = change.conflicted;
                                         let (open_rel, stage_rel, discard_rel) = (change.path.clone(), change.path.clone(), change.path.clone());
                                         let group = format!("scm-file-{i}");
                                         let action = |id: usize, glyph: char, tip: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace) + 'static>| {
@@ -1424,7 +1453,11 @@ impl Workspace {
                                             .whitespace_nowrap()
                                             .hover(|s| s.bg(rgb(t.tab_active)))
                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.git_open_diff(open_rel.clone(), is_staged, untracked);
+                                                if conflicted {
+                                                    this.open_conflict_page(open_rel.clone());
+                                                } else {
+                                                    this.git_open_diff(open_rel.clone(), is_staged, untracked);
+                                                }
                                                 cx.notify();
                                             }))
                                             .child(
@@ -1453,6 +1486,70 @@ impl Workspace {
                 ),
             )
             .into_any_element()
+    }
+
+    /// While a merge or rebase waits (usually for conflicts): what is going on and how to go on.
+    fn render_git_state_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use forge_core::git::RepoState;
+        let git = self.git.as_ref()?;
+        let label = git.status.state.label()?;
+        let t = &self.theme;
+        let conflicts = git.status.changes.iter().filter(|c| c.conflicted).count();
+        let (continue_cmd, skip_cmd, abort_cmd) = match git.status.state {
+            RepoState::Rebase { .. } => (Command::GitRebaseContinue, Some(Command::GitRebaseSkip), Command::GitRebaseAbort),
+            _ => (Command::GitMergeContinue, None, Command::GitMergeAbort),
+        };
+        let busy = git.job.is_some();
+        let button = |id: &'static str, text: &str, command: Command, primary: bool, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px_2()
+                .h(rems(1.5))
+                .flex()
+                .items_center()
+                .rounded_sm()
+                .text_xs()
+                .when(!busy, |d| d.cursor_pointer().hover(|s| s.opacity(0.85)))
+                .when(busy, |d| d.opacity(0.5))
+                .bg(rgb(if primary { t.button } else { t.tab_active }))
+                .text_color(rgb(if primary { t.button_text } else { t.text }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.run_command(command, false, cx);
+                    cx.notify();
+                }))
+                .child(text.to_owned())
+        };
+        let hint = if conflicts > 0 {
+            format!("{conflicts} file{} with conflicts: click one to resolve it.", if conflicts == 1 { "" } else { "s" })
+        } else {
+            "No conflicts left. Continue when you are ready.".to_owned()
+        };
+        Some(
+            div()
+                .mx(px(SCM_PAD))
+                .mb(rems(0.5))
+                .p_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(t.warning))
+                .bg(rgba((t.warning << 8) | 0x1a))
+                .child(div().text_sm().font_weight(FontWeight::BOLD).child(label))
+                .child(div().text_xs().text_color(rgb(t.dim)).child(hint))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(button("git-state-continue", "Continue", continue_cmd, conflicts == 0, cx))
+                        .children(skip_cmd.map(|c| button("git-state-skip", "Skip", c, false, cx)))
+                        .child(button("git-state-abort", "Abort", abort_cmd, false, cx)),
+                )
+                .into_any_element(),
+        )
     }
 
     // ---- bottom panel ----
@@ -1666,6 +1763,11 @@ impl Workspace {
             .px_2()
             .py_1()
             .overflow_hidden()
+            // Clicking the terminal gives it the keyboard, like clicking an editor does.
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.focus = Focus::Terminal;
+                cx.notify();
+            }))
             .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _, cx| {
                 let line = px(this.line_height());
                 let lines = f32::from(ev.delta.pixel_delta(line).y) / f32::from(line);
@@ -1921,7 +2023,7 @@ impl Workspace {
                         .occlude()
                         .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
                         .when(show_input, |d| {
-                            if overlay.kind == OverlayKind::AiKey {
+                            if overlay.kind == OverlayKind::AiKey || matches!(&overlay.kind, OverlayKind::GitCredential(p) if forge_core::askpass::is_secret(p)) {
                                 // The key is never drawn: one dot per character.
                                 let dots = LineInput::new(&"•".repeat(overlay.input.text().chars().count()));
                                 d.child(self.render_input(&dots, &overlay.placeholder, true))
@@ -2047,6 +2149,22 @@ impl Workspace {
                             .child(crate::icons::glyph(crate::codicons::GIT_BRANCH, 0.875, t.text))
                             .child(format!("{branch}{dirty}{sync}{busy}"))
                     }))
+                    .children(self.git.as_ref().filter(|g| g.job.is_some()).map(|_| {
+                        div()
+                            .id("status-git-cancel")
+                            .flex_none()
+                            .cursor_pointer()
+                            .px_1()
+                            .rounded_sm()
+                            .text_color(rgb(t.text))
+                            .hover(|s| s.bg(rgb(t.tab_active)))
+                            .tooltip(self.tooltip("Cancel the running git operation", Some(Command::GitCancel)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.git_cancel();
+                                cx.notify();
+                            }))
+                            .child("Cancel")
+                    }))
                     .child(
                         div()
                             .id("status-problems")
@@ -2152,7 +2270,7 @@ impl Render for Workspace {
             .children(self.render_hover())
             .children(signature.as_ref().and_then(|s| self.render_signature(s)))
             .children(self.render_settings(cx))
-            .children(self.render_ext_detail(cx))
+            .children(self.render_conflict_page(cx))
             .children(self.render_debug_toolbar(f32::from(window.viewport_size().width), cx))
             .children(self.render_overlay(cx))
             .children(self.render_context_menu(window.viewport_size(), cx))

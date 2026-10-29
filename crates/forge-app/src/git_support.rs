@@ -29,6 +29,10 @@ fn job_title(label: &str) -> &'static str {
         "commit" => "Committing…",
         "checkout" | "branch" => "Switching branch…",
         "stash" | "stash-pop" => "Stashing…",
+        "rebase" => "Rebasing…",
+        "rebase-abort" | "merge-abort" => "Aborting…",
+        "merge" => "Merging…",
+        "hunk" | "stage" | "unstage" => "Updating the index…",
         "init" => "Initializing…",
         _ => "Working…",
     }
@@ -53,6 +57,7 @@ impl Workspace {
                 decor: HashMap::new(),
                 job: None,
                 job_started: None,
+                cancel: None,
             });
         }
     }
@@ -90,14 +95,18 @@ impl Workspace {
         }
         g.job = Some(job_title(label).to_owned());
         g.job_started = Some(Instant::now());
+        let control = git::JobControl::new();
+        g.cancel = Some(control.clone());
         let (root, tx, label) = (g.root.clone(), self.git_tx.clone(), label.to_owned());
         std::thread::spawn(move || {
-            let result = f(&root);
+            let result = git::with_job(&control, || f(&root));
+            // Whatever the command reported after it was stopped, the user cancelled it.
+            let result = if control.is_cancelled() { Err("cancelled".to_owned()) } else { result };
             let _ = tx.send(GitMsg::Done { label, result });
         });
     }
 
-    fn git_background<T: Send + 'static>(&self, make: impl FnOnce(&Path) -> T + Send + 'static, wrap: impl FnOnce(T) -> GitMsg + Send + 'static) {
+    pub(crate) fn git_background<T: Send + 'static>(&self, make: impl FnOnce(&Path) -> T + Send + 'static, wrap: impl FnOnce(T) -> GitMsg + Send + 'static) {
         let Some(g) = self.git.as_ref() else { return };
         let (root, tx) = (g.root.clone(), self.git_tx.clone());
         std::thread::spawn(move || {
@@ -117,11 +126,48 @@ impl Workspace {
         if self.git.as_ref().is_some_and(|g| g.job.is_some()) || self.ai_pending || (self.status_kind != crate::workspace::StatusKind::Info && self.status_at.elapsed().as_secs() == 10) {
             changed = true;
         }
+        changed |= self.poll_askpass();
         let due = self.git.as_ref().is_some_and(|g| !g.refreshing && (g.refresh_wanted || g.last_refresh.elapsed() > AUTO_REFRESH));
         if due {
             self.start_status();
         }
         changed
+    }
+
+    /// Show a question git asked (a username, password or passphrase), and tell git "no" when it is dismissed.
+    fn poll_askpass(&mut self) -> bool {
+        let mut changed = false;
+        let showing = matches!(self.overlay.as_ref().map(|o| &o.kind), Some(OverlayKind::GitCredential(_)));
+        if self.askpass_pending.is_some() && !showing {
+            if let Some(reply) = self.askpass_pending.take() {
+                let _ = reply.send(None);
+            }
+            changed = true;
+        }
+        if self.askpass_pending.is_none() {
+            if let Some(request) = self.askpass_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                self.askpass_pending = Some(request.reply);
+                self.open_overlay(OverlayKind::GitCredential(request.prompt), "");
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Stop the running git operation (a pull waiting on the network, a stuck rebase).
+    pub fn git_cancel(&mut self) {
+        let Some(control) = self.git.as_ref().and_then(|g| g.cancel.clone()) else {
+            self.set_status("No git operation is running");
+            return;
+        };
+        control.cancel();
+        if let Some(reply) = self.askpass_pending.take() {
+            let _ = reply.send(None);
+            if matches!(self.overlay.as_ref().map(|o| &o.kind), Some(OverlayKind::GitCredential(_))) {
+                self.overlay = None;
+            }
+        }
+        self.set_status("Cancelling...");
     }
 
     fn handle_git_msg(&mut self, msg: GitMsg, cx: &mut Context<Self>) {
@@ -143,6 +189,7 @@ impl Workspace {
                 if let Some(g) = self.git.as_mut() {
                     g.job = None;
                     g.job_started = None;
+                    g.cancel = None;
                     g.head.clear();
                     g.head_pending.clear();
                     g.epoch += 1;
@@ -158,8 +205,11 @@ impl Workspace {
                         }
                         self.set_result(if message.is_empty() { "Done".to_owned() } else { message }, true);
                     }
+                    Err(error) if error == "cancelled" => self.set_status(format!("Cancelled{}", if label.is_empty() { String::new() } else { format!(": {label}") })),
                     Err(error) => self.set_result(format!("Git {}failed: {error}", if label.is_empty() { String::new() } else { format!("{label} ") }), false),
                 }
+                // Staging a hunk changes what every open diff shows.
+                self.refresh_open_diffs();
                 // Checkout, pull, stash and discard rewrite files under the open tabs.
                 self.reload_clean_docs();
                 self.tree.refresh();
@@ -169,6 +219,11 @@ impl Workspace {
                 Ok(text) => self.open_virtual(&key, &title, &text, true, cx),
                 Err(error) => self.set_status(format!("Git: {error}")),
             },
+            GitMsg::DiffRefresh { key, title, result } => {
+                if let Ok(text) = result {
+                    self.replace_virtual(&key, &title, &text);
+                }
+            }
             GitMsg::AiMessage(result) => {
                 self.ai_pending = false;
                 match result {
@@ -321,6 +376,9 @@ impl Workspace {
     /// Show generated text (a diff or commit) in a read-only tab, replacing an earlier one with the same key.
     pub fn open_virtual(&mut self, key: &str, title: &str, text: &str, diff: bool, cx: &mut Context<Self>) {
         let path = PathBuf::from(format!("git:{key}"));
+        // A new diff starts with nothing picked.
+        *self.diff_cache.borrow_mut() = None;
+        self.diff_selected.clear();
         let doc = Doc::new_virtual(path.clone(), title, text, diff);
         let ix = match self.doc_index(&path) {
             Some(ix) => {
@@ -552,6 +610,26 @@ impl Workspace {
                 self.open_overlay(OverlayKind::GitCheckout, "");
                 self.git_request_branches();
             }
+            GitRebase => {
+                self.branches.clear();
+                self.open_overlay(OverlayKind::GitRebase, "");
+                self.git_request_branches();
+            }
+            GitMerge => {
+                self.branches.clear();
+                self.open_overlay(OverlayKind::GitMerge, "");
+                self.git_request_branches();
+            }
+            GitRebaseContinue => self.git_job("rebase", git::rebase_continue),
+            GitRebaseSkip => self.git_job("rebase", git::rebase_skip),
+            GitRebaseAbort => self.git_job("rebase-abort", git::rebase_abort),
+            GitMergeContinue => self.git_job("merge", git::merge_continue),
+            GitMergeAbort => self.git_job("merge-abort", git::merge_abort),
+            GitCancel => self.git_cancel(),
+            GitResolveConflicts => match self.active_rel() {
+                Some(rel) => self.open_conflict_page(rel),
+                None => self.set_status("The current editor is not a file in this repository"),
+            },
             GitCreateBranch => self.open_overlay(OverlayKind::GitCreateBranch, ""),
             GitPull => self.git_job("pull", git::pull),
             GitPush => {

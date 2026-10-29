@@ -36,9 +36,27 @@ cargo build --release -p forge-app            # LTO; slow first build
   document (Shift+Alt+F), outline, Problems panel.
 - **Source control** (Ctrl+Shift+G; uses your `git`): changed-files view with staged / unstaged groups,
   stage, unstage, discard (untracked files go to the Recycle Bin), commit, commit all, pull, push, fetch,
-  stash, AI-written commit subjects (see below), branch create and checkout, file history and commit diffs, blame for a line, unified diff tabs,
+  stash, AI-written commit subjects (see below), branch create and checkout, file history and commit diffs, blame for a line,
   change markers in the editor gutter that update as you type, status decorations in the explorer, and the
-  branch with ahead/behind in the status bar. Everything is also in the Command Palette as `Git: ...`.
+  branch with ahead/behind in the status bar. Everything is also in the Command Palette as `Git: ...`. Also:
+  - **Side-by-side diffs.** Clicking a changed file opens a two-column diff (removed lines left, added lines right, changed
+    lines paired). The **Inline** button, `Diff: Toggle Side by Side`, or `diffEditor.renderSideBySide` switch to the one-column view.
+  - **Stage hunks or lines.** In a diff, **Stage Hunk** stages one block, or click lines to pick them and press **Stage
+    Selected**. In a staged diff the same buttons say **Unstage**. Forge builds a small patch and runs `git apply --cached`
+    (reversed for unstaging), so the rest of the file is untouched. The diff updates after every change.
+  - **Merge conflicts.** A conflicted file (marked `!`) opens a page listing each conflict with the current and incoming
+    sides next to each other and **Accept Current / Incoming / Both** (or all at once). When no markers are left,
+    **Stage File** marks it resolved. `Git: Resolve Merge Conflicts in File` does the same for the file in the editor.
+  - **Rebase and merge.** `Git: Rebase Branch...` and `Git: Merge Branch...` pick a branch. When git stops (usually for
+    conflicts) the Source Control view shows a banner ("Rebase in progress (2/5)") with **Continue**, **Skip** and **Abort**
+    (`Git: Continue Rebase`, `Git: Skip This Commit in the Rebase`, `Git: Abort Rebase`, `Git: Commit the Merge`,
+    `Git: Abort Merge`). Interactive rebase (editing the todo list) is not supported.
+  - **Logins.** A pull, push or fetch that needs a username, password, passphrase or a yes/no answer (host keys) asks in the
+    editor instead of failing. Forge starts git with itself as the `GIT_ASKPASS` / `SSH_ASKPASS` helper, which asks the
+    running editor over a local socket (127.0.0.1 only, with a random token), the way VS Code's git extension does.
+    Passwords are shown as dots, go only to git, and Escape cancels the command. Credential helpers you already use still run first.
+  - **Cancel.** While git runs, a **Cancel** button (Source Control view and status bar, or `Git: Cancel Running
+    Operation`) stops the command and anything it started.
 - **Markdown preview** (Ctrl+K V, or `Markdown: Open Preview to the Side`): a live preview beside the editor with headings,
   emphasis, links, lists and task lists, quotes, code blocks, tables and rules. Links are clickable (web and mail links open
   in your browser or mail app, links to project files open in Forge; `file:` and other schemes are refused), and the
@@ -156,7 +174,7 @@ Forge installs VS Code extensions from **Open VSX** (open-vsx.org, the registry 
 Microsoft's products) or from a `.vsix` file. It uses what they *declare* (themes, grammars, snippets, languages)
 and, if Node.js is on `PATH`, **runs their code** in an extension host: a separate Node process with Forge's own
 implementation of the `vscode` API. Running extension code is new and only a part of that API exists (see below);
-an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". The **Extensions** tab beside Source Control (Ctrl+Shift+X) searches Open VSX as you press Enter, lists what is installed, and has Install and Uninstall buttons. Clicking an extension opens its page (README, license, links, Install or Uninstall); Esc closes it. Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
+an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". The **Extensions** tab beside Source Control (Ctrl+Shift+X) searches Open VSX as you press Enter, lists what is installed, and has Install and Uninstall buttons. Clicking an extension opens its page in an editor tab (README, license, links, Install or Uninstall); close it like any tab (the x, or Ctrl+W). Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
 **Extensions: Install from VSIX...** (a file path), **Extensions: Manage Installed...** (Enter uninstalls),
 **Preferences: Color Theme**, **Insert Snippet...**. Extensions live in `%APPDATA%\Forge\extensions`
 (`FORGE_CONFIG_DIR` moves everything, which is how the tests stay out of your real settings).
@@ -198,15 +216,16 @@ run yet**: that is the next step and needs you to choose which ones.
 **Built** (details in the sections above): multi-cursor editing, find/replace and Replace in Files, Quick Open and the
 Command Palette, language-server features (with a go-to-definition picker and servers started automatically), a
 VS Code-style Source Control view (stage, commit, push, publish, pull, sync, fetch, stash, branches, history, blame, AI
-commit messages, visible progress and results), Markdown preview with scroll sync, minimap, word wrap, a Settings page,
+commit messages, visible progress and results, side-by-side diffs, hunk and line staging, merge-conflict resolution,
+rebase and merge with continue / skip / abort, login prompts, cancel), Markdown preview with scroll sync, minimap, word wrap, a Settings page,
 right-click menus, resizable and remembered panels, editor tab-bar buttons and menu, Codicons icons with hover tooltips,
 session restore, debugging for Python / Node / Rust, VS Code extensions from Open VSX (themes, languages, grammars,
 snippets, and a partial `vscode` API for running code), and syntax highlighting for 29 languages.
 
 **Not built yet:**
 
-- Source control: side-by-side diffs, staging individual hunks or lines, merge-conflict resolution, rebase, credential
-  prompts (commands that need a login fail instead of asking), cancelling a running git operation.
+- Source control: interactive rebase, cherry-pick and revert, a three-way (base) view of conflicts, staging or discarding
+  single hunks of a new (untracked) file or discarding a single hunk, GPG-signing prompts, submodules, worktrees.
 - Workbench: multi-root workspaces, drag-and-drop of tabs or text, sticky scroll, inlay hints, semantic highlighting,
   per-language settings, restoring unsaved edits or a second editor group's tabs, mouse-driven checks of the new
   hover tooltips (verified by keyboard replay only).

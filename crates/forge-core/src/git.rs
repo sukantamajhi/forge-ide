@@ -1,10 +1,73 @@
 //! Source control through the `git` command line, so behavior (config, hooks, credential
-//! helpers) matches the user's own git. Nothing here prompts: `GIT_TERMINAL_PROMPT=0`
-//! makes a command that needs credentials fail with a message instead of hanging.
+//! helpers) matches the user's own git. There is no terminal to prompt on
+//! (`GIT_TERMINAL_PROMPT=0`); a command that needs a login asks through [`crate::askpass`],
+//! which shows the question in the editor. A running operation can be cancelled.
 
+use std::cell::RefCell;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Lets another thread stop the git process a background job is running.
+#[derive(Default)]
+pub struct JobControl {
+    pid: AtomicU32,
+    cancelled: AtomicBool,
+}
+
+impl JobControl {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Stop the running git process and everything it started (ssh, credential helpers).
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        let pid = self.pid.load(Ordering::SeqCst);
+        if pid != 0 {
+            kill_tree(pid);
+        }
+    }
+}
+
+fn kill_tree(pid: u32) {
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("taskkill");
+        c.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        c
+    } else {
+        let mut c = Command::new("kill");
+        c.args(["-TERM", &pid.to_string()]);
+        c
+    };
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let _ = cmd.status();
+}
+
+thread_local! {
+    /// The job the current thread works for, so `run` can register its process with it.
+    static JOB: RefCell<Option<Arc<JobControl>>> = const { RefCell::new(None) };
+}
+
+/// Run `f` as `job`: git processes it starts can be cancelled through `job`.
+pub fn with_job<T>(job: &Arc<JobControl>, f: impl FnOnce() -> T) -> T {
+    JOB.with(|slot| *slot.borrow_mut() = Some(Arc::clone(job)));
+    let result = f();
+    JOB.with(|slot| *slot.borrow_mut() = None);
+    result
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -84,6 +147,54 @@ pub struct Status {
     /// The repository has at least one remote, so a branch can be published.
     pub has_remote: bool,
     pub changes: Vec<Change>,
+    /// A merge, rebase or similar that stopped and waits to be continued or aborted.
+    pub state: RepoState,
+}
+
+/// An operation git has paused, usually for conflicts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RepoState {
+    #[default]
+    Clean,
+    Merge,
+    Rebase { step: usize, total: usize },
+    CherryPick,
+    Revert,
+}
+
+impl RepoState {
+    pub fn label(&self) -> Option<String> {
+        match self {
+            RepoState::Clean => None,
+            RepoState::Merge => Some("Merge in progress".to_owned()),
+            RepoState::Rebase { step, total } if *total > 0 => Some(format!("Rebase in progress ({step}/{total})")),
+            RepoState::Rebase { .. } => Some("Rebase in progress".to_owned()),
+            RepoState::CherryPick => Some("Cherry-pick in progress".to_owned()),
+            RepoState::Revert => Some("Revert in progress".to_owned()),
+        }
+    }
+}
+
+/// What the repository is in the middle of, from the marker files git keeps in its directory.
+pub fn repo_state(root: &Path) -> RepoState {
+    let Ok(dir) = run(root, &["rev-parse", "--git-dir"]) else { return RepoState::Clean };
+    let dir = root.join(dir.trim());
+    let number = |file: &str| std::fs::read_to_string(dir.join(file)).ok().and_then(|t| t.trim().parse::<usize>().ok()).unwrap_or(0);
+    if dir.join("rebase-merge").is_dir() {
+        return RepoState::Rebase { step: number("rebase-merge/msgnum"), total: number("rebase-merge/end") };
+    }
+    if dir.join("rebase-apply").is_dir() {
+        return RepoState::Rebase { step: number("rebase-apply/next"), total: number("rebase-apply/last") };
+    }
+    if dir.join("MERGE_HEAD").exists() {
+        RepoState::Merge
+    } else if dir.join("CHERRY_PICK_HEAD").exists() {
+        RepoState::CherryPick
+    } else if dir.join("REVERT_HEAD").exists() {
+        RepoState::Revert
+    } else {
+        RepoState::Clean
+    }
 }
 
 impl Status {
@@ -163,6 +274,7 @@ fn command(root: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(root).args(["-c", "core.quotepath=off"]);
     cmd.env("GIT_TERMINAL_PROMPT", "0").env("GIT_EDITOR", "true").env("LC_ALL", "C");
+    cmd.envs(crate::askpass::env_vars());
     cmd.stdin(Stdio::null());
     #[cfg(windows)]
     {
@@ -174,7 +286,36 @@ fn command(root: &Path) -> Command {
 }
 
 fn run(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = command(root).args(args).output().map_err(|e| format!("could not run git: {e}"))?;
+    run_with_input(command(root).args(args), None)
+}
+
+/// Run a prepared git command, optionally feeding `input` to it. The process is registered with the
+/// current thread's [`JobControl`] so it can be cancelled.
+fn run_with_input(cmd: &mut Command, input: Option<&str>) -> Result<String, String> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if input.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    let job = JOB.with(|slot| slot.borrow().clone());
+    if let Some(job) = &job {
+        job.pid.store(child.id(), Ordering::SeqCst);
+        // Cancelled between starting the job and starting the process.
+        if job.is_cancelled() {
+            kill_tree(child.id());
+        }
+    }
+    if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    let output = child.wait_with_output();
+    if let Some(job) = &job {
+        job.pid.store(0, Ordering::SeqCst);
+        if job.is_cancelled() {
+            return Err("cancelled".to_owned());
+        }
+    }
+    let output = output.map_err(|e| format!("could not run git: {e}"))?;
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
@@ -222,6 +363,7 @@ pub fn status(root: &Path) -> Result<Status, String> {
     let out = run(root, &["-c", "core.fsmonitor=false", "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"])?;
     let mut status = parse_status(&out);
     status.has_remote = run(root, &["remote"]).is_ok_and(|r| !r.trim().is_empty());
+    status.state = repo_state(root);
     status.changes.truncate(5000);
     Ok(status)
 }
@@ -342,6 +484,71 @@ pub fn stash(root: &Path) -> Result<String, String> {
 
 pub fn stash_pop(root: &Path) -> Result<String, String> {
     run(root, &["stash", "pop"]).map(|_| "Applied the latest stash".to_owned())
+}
+
+/// Apply a patch to the index (`cached`) or the working tree, forwards or `reverse`d. This is how one
+/// hunk or some lines are staged (forwards, to the index), unstaged (reversed, to the index) or
+/// discarded (reversed, to the working tree). `--recount` lets git fix the line counts of a patch
+/// that was cut down to chosen lines.
+pub fn apply_patch(root: &Path, patch: &str, cached: bool, reverse: bool) -> Result<String, String> {
+    let mut cmd = command(root);
+    cmd.args(["apply", "--recount", "--whitespace=nowarn"]);
+    if cached {
+        cmd.arg("--cached");
+    }
+    if reverse {
+        cmd.arg("--reverse");
+    }
+    cmd.arg("-");
+    run_with_input(&mut cmd, Some(patch))
+}
+
+/// Mark a conflicted file resolved: stage its current content.
+pub fn mark_resolved(root: &Path, rel: &str) -> Result<String, String> {
+    run(root, &["add", "--", rel])
+}
+
+/// When an operation stops with conflicts, say what to do instead of showing git's raw failure.
+fn stopped(root: &Path, result: Result<String, String>, done: String) -> Result<String, String> {
+    match result {
+        Ok(_) => Ok(done),
+        Err(e) if e == "cancelled" => Err(e),
+        Err(e) if repo_state(root) != RepoState::Clean => Err(format!("stopped with conflicts. Resolve them and stage the files, then Continue ({e})")),
+        Err(e) => Err(e),
+    }
+}
+
+pub fn rebase(root: &Path, onto: &str) -> Result<String, String> {
+    let result = run(root, &["rebase", onto]);
+    stopped(root, result, format!("Rebased onto {onto}"))
+}
+
+pub fn rebase_continue(root: &Path) -> Result<String, String> {
+    let result = run(root, &["rebase", "--continue"]);
+    stopped(root, result, "Rebase finished".to_owned())
+}
+
+pub fn rebase_skip(root: &Path) -> Result<String, String> {
+    let result = run(root, &["rebase", "--skip"]);
+    stopped(root, result, "Rebase finished".to_owned())
+}
+
+pub fn rebase_abort(root: &Path) -> Result<String, String> {
+    run(root, &["rebase", "--abort"]).map(|_| "Rebase aborted".to_owned())
+}
+
+pub fn merge(root: &Path, branch: &str) -> Result<String, String> {
+    let result = run(root, &["merge", "--no-edit", branch]);
+    stopped(root, result, format!("Merged {branch}"))
+}
+
+pub fn merge_abort(root: &Path) -> Result<String, String> {
+    run(root, &["merge", "--abort"]).map(|_| "Merge aborted".to_owned())
+}
+
+/// Finish a merge whose conflicts are all staged.
+pub fn merge_continue(root: &Path) -> Result<String, String> {
+    run(root, &["commit", "--no-edit"]).map(|out| out.lines().next().unwrap_or("Merge committed").to_owned())
 }
 
 /// A unified diff for one path: unstaged (`staged = false`, against the index) or staged
@@ -755,6 +962,118 @@ hint: something
         for d in [&a, &b, &bare] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    fn numbered(n: usize) -> String {
+        (1..=n).map(|i| format!("line {i}\n")).collect()
+    }
+
+    fn index_text(dir: &Path) -> String {
+        run(dir, &["show", ":f.txt"]).unwrap()
+    }
+
+    #[test]
+    fn one_hunk_is_staged_and_unstaged_through_a_patch() {
+        let Some(dir) = repo("hunks") else { return };
+        write(&dir, "f.txt", &numbered(14));
+        commit_all(&dir, "base");
+        write(&dir, "f.txt", &numbered(14).replace("line 2\n", "LINE 2\n").replace("line 13\n", "LINE 13\n"));
+        let patch = crate::patch::parse(&diff_text(&dir, "f.txt", false, false).unwrap()).unwrap();
+        assert_eq!(patch.hunks.len(), 2, "two edits far apart are two hunks");
+        apply_patch(&dir, &patch.hunk_patch(0).unwrap(), true, false).unwrap();
+        let staged = diff_text(&dir, "f.txt", true, false).unwrap();
+        assert!(staged.contains("+LINE 2") && !staged.contains("LINE 13"), "{staged}");
+        let unstaged = diff_text(&dir, "f.txt", false, false).unwrap();
+        assert!(unstaged.contains("+LINE 13") && !unstaged.contains("+LINE 2\n"), "{unstaged}");
+        // Unstage it again by applying the staged hunk backwards to the index.
+        let staged_patch = crate::patch::parse(&staged).unwrap();
+        apply_patch(&dir, &staged_patch.hunk_patch(0).unwrap(), true, true).unwrap();
+        assert_eq!(diff_text(&dir, "f.txt", true, false).unwrap(), "No changes.\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn chosen_lines_are_staged_and_unstaged_leaving_the_rest_alone() {
+        let Some(dir) = repo("lines") else { return };
+        write(&dir, "f.txt", &numbered(10));
+        commit_all(&dir, "base");
+        write(&dir, "f.txt", &numbered(10).replace("line 5\n", "FIVE\n").replace("line 6\n", "SIX\n"));
+        let patch = crate::patch::parse(&diff_text(&dir, "f.txt", false, false).unwrap()).unwrap();
+        let find = |kind: crate::patch::LineKind, text: &str| patch.hunks[0].lines.iter().position(|l| l.kind == kind && l.text == text).unwrap();
+        use crate::patch::LineKind::{Add, Del};
+        // Stage only the 5 -> FIVE edit.
+        let chosen = std::collections::BTreeSet::from([find(Del, "line 5"), find(Add, "FIVE")]);
+        apply_patch(&dir, &patch.lines_patch(0, &chosen, false).unwrap(), true, false).unwrap();
+        let index = index_text(&dir);
+        assert!(index.contains("FIVE\n") && index.contains("line 6\n") && !index.contains("SIX"), "{index}");
+        // Stage the rest, then unstage only the 6 -> SIX edit.
+        stage(&dir, &["f.txt".to_owned()]).unwrap();
+        let staged = crate::patch::parse(&diff_text(&dir, "f.txt", true, false).unwrap()).unwrap();
+        let find = |kind: crate::patch::LineKind, text: &str| staged.hunks[0].lines.iter().position(|l| l.kind == kind && l.text == text).unwrap();
+        let chosen = std::collections::BTreeSet::from([find(Del, "line 6"), find(Add, "SIX")]);
+        apply_patch(&dir, &staged.lines_patch(0, &chosen, true).unwrap(), true, true).unwrap();
+        let index = index_text(&dir);
+        assert!(index.contains("FIVE\n") && index.contains("line 6\n") && !index.contains("SIX"), "{index}");
+        assert!(std::fs::read_to_string(dir.join("f.txt")).unwrap().contains("SIX"), "the file itself is untouched");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_rebase_that_stops_for_conflicts_is_resolved_and_continued() {
+        let Some(dir) = repo("rebase") else { return };
+        git_ok(&dir, &["branch", "-M", "main"]);
+        write(&dir, "a.txt", "base\n");
+        commit_all(&dir, "base");
+        git_ok(&dir, &["switch", "-q", "-c", "feature"]);
+        write(&dir, "a.txt", "feature\n");
+        commit_all(&dir, "feature change");
+        git_ok(&dir, &["switch", "-q", "main"]);
+        write(&dir, "a.txt", "main\n");
+        commit_all(&dir, "main change");
+        git_ok(&dir, &["switch", "-q", "feature"]);
+
+        let error = rebase(&dir, "main").unwrap_err();
+        assert!(error.contains("conflicts"), "{error}");
+        assert!(matches!(repo_state(&dir), RepoState::Rebase { .. }), "{:?}", repo_state(&dir));
+        let state = status(&dir).unwrap();
+        assert!(state.changes.iter().any(|c| c.path == "a.txt" && c.conflicted));
+        assert!(state.state.label().unwrap().starts_with("Rebase in progress"));
+
+        let text = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        assert_eq!(crate::conflict::find(&text).len(), 1);
+        std::fs::write(dir.join("a.txt"), crate::conflict::resolve_all(&text, crate::conflict::Choice::Both)).unwrap();
+        mark_resolved(&dir, "a.txt").unwrap();
+        assert_eq!(rebase_continue(&dir).unwrap(), "Rebase finished");
+        assert_eq!(repo_state(&dir), RepoState::Clean);
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "main\nfeature\n");
+
+        // Abort puts everything back.
+        git_ok(&dir, &["reset", "-q", "--hard", "HEAD~1"]);
+        git_ok(&dir, &["switch", "-q", "-c", "again", "main"]);
+        write(&dir, "a.txt", "again\n");
+        commit_all(&dir, "again change");
+        git_ok(&dir, &["reset", "-q", "--hard", "HEAD"]);
+        let error = merge(&dir, "feature");
+        assert!(error.is_ok() || error.unwrap_err().contains("conflicts"));
+        if repo_state(&dir) == RepoState::Merge {
+            assert_eq!(merge_abort(&dir).unwrap(), "Merge aborted");
+        }
+        assert_eq!(repo_state(&dir), RepoState::Clean);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_running_operation_can_be_cancelled() {
+        let Some(dir) = repo("cancel") else { return };
+        let job = JobControl::new();
+        let (worker_job, worker_dir) = (Arc::clone(&job), dir.clone());
+        let started = std::time::Instant::now();
+        let worker = std::thread::spawn(move || with_job(&worker_job, || run(&worker_dir, &["-c", "alias.slow=!sleep 60", "slow"])));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        job.cancel();
+        assert_eq!(worker.join().unwrap(), Err("cancelled".to_owned()));
+        assert!(started.elapsed() < std::time::Duration::from_secs(30), "the process was stopped, not waited for");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -5,7 +5,7 @@ use forge_core::commands::Command;
 use forge_core::input::{LineInput, Outcome};
 use forge_core::settings::{config_dir, set_value, Settings};
 use forge_core::theme::{Theme, THEME_NAMES};
-use gpui::{div, prelude::*, px, rems, rgb, AnyElement, Context, Div, FontWeight, Keystroke, MouseButton, MouseDownEvent};
+use gpui::{div, prelude::*, rems, rgb, AnyElement, Context, Div, FontWeight, Keystroke, MouseButton, MouseDownEvent};
 
 use crate::workspace::{Focus, Workspace};
 
@@ -241,19 +241,7 @@ impl Workspace {
                 .into_any_element()));
 
         Some(
-            div()
-                .id("settings-page")
-                .absolute()
-                .top_0()
-                .left(px(left))
-                .right_0()
-                .bottom(rems(1.5))
-                .bg(rgb(t.bg))
-                .text_color(rgb(t.text))
-                .occlude()
-                .overflow_y_scroll()
-                .flex()
-                .justify_center()
+            crate::scroll::overlay_page("settings-page", left, t.bg, t.text)
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     this.settings_model_focus = false;
                     this.focus = Focus::Editor;

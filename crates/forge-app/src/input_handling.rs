@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use forge_core::commands::{chord, Command, Resolution};
 use forge_core::fileops;
+use forge_core::git;
 use forge_core::fuzzy::rank;
 use forge_core::input::{LineInput, Outcome};
 use forge_core::project_search::{self, Hit};
@@ -86,8 +87,8 @@ impl Workspace {
             cx.notify();
             return;
         }
-        if self.ext_detail.is_some() && self.overlay.is_none() && k.key == "escape" {
-            self.ext_detail = None;
+        if self.conflict_page.is_some() && self.overlay.is_none() && k.key == "escape" {
+            self.conflict_page = None;
             cx.notify();
             return;
         }
@@ -458,6 +459,9 @@ impl Workspace {
             OverlayKind::RenameEntry(_) => "New name",
             OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmReplace { .. } => "",
             OverlayKind::GitCheckout => "Select a branch to switch to",
+            OverlayKind::GitRebase => "Select the branch to rebase the current branch onto",
+            OverlayKind::GitMerge => "Select a branch to merge into the current branch",
+            OverlayKind::GitCredential(prompt) => prompt.trim(),
             OverlayKind::GitCreateBranch => "New branch name",
             OverlayKind::GitHistory => "Select a commit to view its changes",
             OverlayKind::LanguageServers => "Filter language servers (Enter installs the selected one)",
@@ -663,19 +667,31 @@ impl Workspace {
                 }
                 self.ext_installed_items(&text)
             }
-            OverlayKind::GitCheckout => {
+            OverlayKind::GitCheckout | OverlayKind::GitRebase | OverlayKind::GitMerge => {
                 if self.branches.is_empty() {
                     overlay.note = Some("Loading branches...".to_owned());
                 }
+                let kind = overlay.kind.clone();
                 let names: Vec<&str> = self.branches.iter().map(|b| b.name.as_str()).collect();
                 rank(&text, &names, 60)
                     .into_iter()
+                    // Rebasing or merging a branch into itself means nothing.
+                    .filter(|(i, _)| kind == OverlayKind::GitCheckout || !self.branches[*i].current)
                     .map(|(i, m)| {
                         let b = &self.branches[i];
                         let detail = if b.current { "current" } else if b.remote { "remote" } else { "" };
-                        Item { label: b.name.clone(), detail: detail.to_owned(), positions: m.positions, action: ItemAction::GitBranch(i) }
+                        let action = match kind {
+                            OverlayKind::GitRebase => ItemAction::GitRebaseOnto(i),
+                            OverlayKind::GitMerge => ItemAction::GitMergeBranch(i),
+                            _ => ItemAction::GitBranch(i),
+                        };
+                        Item { label: b.name.clone(), detail: detail.to_owned(), positions: m.positions, action }
                     })
                     .collect()
+            }
+            OverlayKind::GitCredential(prompt) => {
+                overlay.note = Some(format!("{}  Sent only to git for the running command. Enter to confirm, Escape to cancel it.", prompt.trim()));
+                Vec::new()
             }
             OverlayKind::GitHistory => {
                 if self.history.is_empty() {
@@ -802,6 +818,12 @@ impl Workspace {
                     self.place_caret_offset(offset);
                 }
             }
+            OverlayKind::GitCredential(_) => {
+                // The answer goes to git exactly as typed (a password may begin or end with a space).
+                if let Some(reply) = self.askpass_pending.take() {
+                    let _ = reply.send(Some(overlay.input.text().to_owned()));
+                }
+            }
             OverlayKind::AiKey => {
                 if forge_core::ai::is_valid_key(&text) {
                     let saved = forge_core::ai::save_key(&text);
@@ -900,6 +922,16 @@ impl Workspace {
             ItemAction::GitBranch(i) => {
                 if let Some(branch) = self.branches.get(i).cloned() {
                     self.git_checkout_branch(branch);
+                }
+            }
+            ItemAction::GitRebaseOnto(i) => {
+                if let Some(name) = self.branches.get(i).map(|b| b.name.clone()) {
+                    self.git_job("rebase", move |r| git::rebase(r, &name));
+                }
+            }
+            ItemAction::GitMergeBranch(i) => {
+                if let Some(name) = self.branches.get(i).map(|b| b.name.clone()) {
+                    self.git_job("merge", move |r| git::merge(r, &name));
                 }
             }
             ItemAction::GitCommit(i) => self.git_show_commit(i),

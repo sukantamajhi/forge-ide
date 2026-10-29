@@ -21,6 +21,8 @@ pub struct Settings {
     pub icon_theme: String,
     /// `workbench.productIconTheme`: [`BUILTIN_PRODUCT_ICON_THEME`] or the label of an extension's product icon theme.
     pub product_icon_theme: String,
+    /// `diffEditor.renderSideBySide`: show file diffs in two columns instead of one.
+    pub diff_side_by_side: bool,
     pub trim_trailing_whitespace: bool,
     pub format_on_save: bool,
     /// `languageServers` in settings.json: VS Code language id to command and arguments.
@@ -45,6 +47,7 @@ impl Default for Settings {
             theme: "Forge Dark".to_owned(),
             icon_theme: BUILTIN_ICON_THEME.to_owned(),
             product_icon_theme: BUILTIN_PRODUCT_ICON_THEME.to_owned(),
+            diff_side_by_side: true,
             trim_trailing_whitespace: false,
             format_on_save: false,
             language_servers: Default::default(),
@@ -137,6 +140,9 @@ impl Settings {
         }
         if let Some(v) = map.get("workbench.productIconTheme").and_then(Value::as_str) {
             s.product_icon_theme = v.to_owned();
+        }
+        if let Some(v) = map.get("diffEditor.renderSideBySide").and_then(Value::as_bool) {
+            s.diff_side_by_side = v;
         }
         if let Some(v) = map.get("files.trimTrailingWhitespace").and_then(Value::as_bool) {
             s.trim_trailing_whitespace = v;

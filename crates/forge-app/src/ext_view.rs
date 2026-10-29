@@ -3,7 +3,7 @@
 
 use forge_core::input::Outcome;
 use forge_ext_host::openvsx::Listing;
-use gpui::{div, prelude::*, px, rems, rgb, AnyElement, Context, FontWeight, Keystroke, MouseButton, MouseDownEvent};
+use gpui::{div, list, prelude::*, px, rems, rgb, AnyElement, Context, FontWeight, Keystroke, MouseButton, MouseDownEvent, Window};
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, TryRecvError};
@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use forge_ext_host::openvsx::Details;
 use forge_ext_host::Extension;
 
-use crate::workspace::{ExtDetail, Focus, ItemAction, Readme, Workspace};
+use crate::workspace::{Doc, ExtDetail, Focus, ItemAction, Readme, View, Workspace};
 
 /// 1234 -> "1.2K", 2_500_000 -> "2.5M".
 fn count(n: u64) -> String {
@@ -287,12 +287,44 @@ fn local_info(extension: &Extension) -> Details {
 }
 
 impl Workspace {
+    /// Show an extension's page in a tab of the focused group, or switch to its tab if it is open.
+    fn open_ext_page(&mut self, detail: ExtDetail) {
+        let doc = Doc::new_ext_page(detail);
+        let ix = match self.doc_index(&doc.path) {
+            Some(ix) => {
+                self.docs[ix] = doc;
+                ix
+            }
+            None => {
+                self.docs.push(doc);
+                self.docs.len() - 1
+            }
+        };
+        let group = self.focused_group;
+        match self.groups[group].views.iter().position(|v| v.doc == ix) {
+            Some(vi) => self.groups[group].active = vi,
+            None => {
+                self.groups[group].views.push(View::new(ix));
+                self.groups[group].active = self.groups[group].views.len() - 1;
+            }
+        }
+        self.focus = Focus::Editor;
+    }
+
+    /// Close the tab of an extension's page, wherever it is open.
+    fn close_ext_page(&mut self, id: &str, cx: &mut Context<Self>) {
+        let path = PathBuf::from(format!("ext:{}", id.to_lowercase()));
+        while let Some((g, vi)) = self.doc_index(&path).and_then(|ix| self.views_of(ix).next()) {
+            self.close_view(g, vi, cx);
+        }
+    }
+
     /// Open the page of an installed extension: its README comes from its own folder.
     pub(crate) fn open_ext_detail_installed(&mut self, i: usize) {
         let Some(e) = self.extensions.get(i) else { return };
         let id = e.id();
         let (publisher, _) = id.split_once('.').unwrap_or(("", &id));
-        self.ext_detail = Some(ExtDetail {
+        let detail = ExtDetail {
             name: e.display_name(),
             publisher: publisher.to_owned(),
             version: e.manifest.version.clone(),
@@ -302,8 +334,10 @@ impl Workspace {
             info: local_info(e),
             readme: local_readme(&e.root),
             base: e.root.clone(),
+            list: ExtDetail::blank_list(),
             id,
-        });
+        };
+        self.open_ext_page(detail);
     }
 
     /// Open the page of an Open VSX search result; its README is fetched in the background.
@@ -314,8 +348,8 @@ impl Workspace {
         std::thread::spawn(move || {
             let _ = tx.send((wanted.clone(), forge_ext_host::openvsx::details(&wanted)));
         });
-        self.ext_detail_rx = Some(rx);
-        self.ext_detail = Some(ExtDetail {
+        self.ext_detail_rx.push(rx);
+        self.open_ext_page(ExtDetail {
             name: listing.display_name.clone(),
             publisher: listing.namespace.clone(),
             version: listing.version.clone(),
@@ -324,42 +358,74 @@ impl Workspace {
             info: Details { downloads: listing.downloads, ..Details::default() },
             readme: Readme::Loading,
             base: PathBuf::new(),
+            list: ExtDetail::blank_list(),
             listing: Some(listing),
             id,
         });
     }
 
-    /// Fill the open page when its details arrive.
+    /// Fill the open pages whose details have arrived.
     pub(crate) fn poll_ext_detail(&mut self) -> bool {
-        let Some(rx) = &self.ext_detail_rx else { return false };
-        let (id, result) = match rx.try_recv() {
-            Ok(done) => done,
-            Err(TryRecvError::Empty) => return false,
-            Err(TryRecvError::Disconnected) => {
-                self.ext_detail_rx = None;
-                return false;
+        let mut changed = false;
+        for rx in std::mem::take(&mut self.ext_detail_rx) {
+            match rx.try_recv() {
+                Ok((id, result)) => {
+                    // The tab may have been closed while the fetch ran.
+                    if let Some(detail) = self.docs.iter_mut().filter_map(|d| d.ext_page.as_mut()).find(|d| d.id == id) {
+                        match result {
+                            Ok(mut info) => {
+                                detail.readme = match info.readme.take() {
+                                    Some(text) => Readme::Ready(forge_core::markdown::parse(&text)),
+                                    None => Readme::Missing("This extension has no README.".to_owned()),
+                                };
+                                detail.info = info;
+                            }
+                            Err(error) => detail.readme = Readme::Missing(format!("Could not load details from Open VSX: {error}")),
+                        }
+                        detail.sync_list();
+                        changed = true;
+                    }
+                }
+                Err(TryRecvError::Empty) => self.ext_detail_rx.push(rx),
+                Err(TryRecvError::Disconnected) => {}
             }
-        };
-        self.ext_detail_rx = None;
-        let Some(detail) = self.ext_detail.as_mut().filter(|d| d.id == id) else { return true };
-        match result {
-            Ok(mut info) => {
-                detail.readme = match info.readme.take() {
-                    Some(text) => Readme::Ready(forge_core::markdown::parse(&text)),
-                    None => Readme::Missing("This extension has no README.".to_owned()),
-                };
-                detail.info = info;
-            }
-            Err(error) => detail.readme = Readme::Missing(format!("Could not load details from Open VSX: {error}")),
         }
-        true
+        changed
     }
 
-    /// The extension page, drawn over the editor area like the Settings page.
-    pub(crate) fn render_ext_detail(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let d = self.ext_detail.as_ref()?;
+    /// The body of an extension's tab, in place of the editor. Its rows are laid out lazily, so a long
+    /// README costs only what is on screen.
+    pub(crate) fn render_ext_page(&self, doc_ix: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let d = self.docs.get(doc_ix)?.ext_page.as_deref()?;
+        let (id, state) = (d.id.clone(), d.list.clone());
+        let row = cx.processor(move |this: &mut Workspace, ix: usize, _: &mut Window, cx: &mut Context<Workspace>| this.ext_page_row(&id, ix, cx));
+        Some(div().size_full().bg(rgb(self.theme.bg)).text_color(rgb(self.theme.text)).child(list(state, row).size_full()).into_any_element())
+    }
+
+    /// Row `ix` of the extension page `id`, centred in a column.
+    fn ext_page_row(&self, id: &str, ix: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Some(d) = self.docs.iter().find_map(|doc| doc.ext_page.as_deref().filter(|p| p.id == id)) else { return div().into_any_element() };
+        let t = &self.theme;
+        let inner: AnyElement = if ix == 0 {
+            self.ext_header(d, cx)
+        } else if ix + 1 >= d.item_count() {
+            div().h(rems(1.5)).into_any_element()
+        } else {
+            match &d.readme {
+                Readme::Loading => div().py_4().text_color(rgb(t.dim)).child("Loading README from Open VSX...").into_any_element(),
+                Readme::Missing(message) => div().py_4().text_color(rgb(t.dim)).child(message.clone()).into_any_element(),
+                Readme::Ready(blocks) => match blocks.get(ix - 1) {
+                    Some(b) => self.markdown_block(b, d.base.clone(), ix * 10_000, cx),
+                    None => div().into_any_element(),
+                },
+            }
+        };
+        div().w_full().flex().justify_center().child(div().w_full().max_w(rems(52.0)).px(rems(2.0)).child(inner)).into_any_element()
+    }
+
+    /// The top of the page: icon, name, facts, and the Install or Uninstall button.
+    fn ext_header(&self, d: &ExtDetail, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme.clone();
-        let left = if self.sidebar_visible { self.sidebar_width() } else { 0.0 };
         let installed_ix = self.extensions.iter().position(|e| e.id().eq_ignore_ascii_case(&d.id));
         let busy = self.ext_installing.as_deref().is_some_and(|i| i.eq_ignore_ascii_case(&d.id));
 
@@ -382,11 +448,13 @@ impl Workspace {
         let action: AnyElement = match (installed_ix, &d.listing) {
             (Some(ix), listing) => {
                 let keep_open = listing.is_some();
+                let id = d.id.clone();
                 button("ext-detail-uninstall", "Uninstall", false)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.perform_ext_item(ItemAction::ExtInstalled(ix));
+                        // An extension that is gone has nothing left to show, unless Open VSX still lists it.
                         if !keep_open {
-                            this.ext_detail = None;
+                            this.close_ext_page(&id, cx);
                         }
                         cx.notify();
                     }))
@@ -436,19 +504,11 @@ impl Workspace {
             facts.push(link("ext-detail-home", "Homepage", url, cx));
         }
 
-        let readme: AnyElement = match &d.readme {
-            Readme::Loading => div().py_4().text_color(rgb(t.dim)).child("Loading README from Open VSX...").into_any_element(),
-            Readme::Missing(message) => div().py_4().text_color(rgb(t.dim)).child(message.clone()).into_any_element(),
-            Readme::Ready(blocks) => self.markdown_blocks(blocks, d.base.clone(), cx),
-        };
-
-        let content = div()
+        div()
             .flex()
             .flex_col()
             .w_full()
-            .max_w(rems(52.0))
-            .px(rems(2.0))
-            .py(rems(1.5))
+            .pt(rems(1.5))
             .gap_3()
             .child(
                 div()
@@ -471,31 +531,11 @@ impl Workspace {
                             .children((!d.info.categories.is_empty()).then(|| {
                                 div().flex().flex_row().flex_wrap().gap_1().pt_1().children(d.info.categories.iter().map(|c| div().px_2().py(rems(0.125)).rounded_full().bg(rgb(t.tab_active)).text_xs().child(c.clone())))
                             }))
-                            .child(div().flex().flex_row().items_center().gap_2().pt_2().child(action).child(button("ext-detail-close", "Close", false).on_click(cx.listener(|this, _, _, cx| {
-                                this.ext_detail = None;
-                                cx.notify();
-                            })))),
+                            .child(div().flex().flex_row().items_center().gap_2().pt_2().child(action)),
                     ),
             )
             .child(div().w_full().h(px(1.0)).bg(rgb(t.border)))
-            .child(readme);
-
-        Some(
-            div()
-                .id("ext-detail-page")
-                .absolute()
-                .top_0()
-                .left(px(left))
-                .right_0()
-                .bottom(rems(1.5))
-                .bg(rgb(t.bg))
-                .text_color(rgb(t.text))
-                .occlude()
-                .overflow_y_scroll()
-                .flex()
-                .justify_center()
-                .child(content),
-        )
+            .into_any_element()
     }
 }
 

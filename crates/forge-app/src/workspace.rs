@@ -90,6 +90,8 @@ pub(crate) struct Doc {
     pub ext_lang: Option<forge_core::ext_lang::ExtLanguage>,
     /// That language's TextMate tokenizer, when its extension ships a grammar.
     pub tm: Option<forge_syntax::TextMateSyntax>,
+    /// Set when the tab shows an extension's page instead of text.
+    pub ext_page: Option<Box<ExtDetail>>,
 }
 
 /// Decode file contents, splitting a leading UTF-8 byte-order mark off the text.
@@ -130,7 +132,17 @@ impl Doc {
             bom: false,
             ext_lang: None,
             tm: None,
+            ext_page: None,
         }
+    }
+
+    /// The tab for an extension's page. It has no text; the tab is named after the extension.
+    pub fn new_ext_page(detail: ExtDetail) -> Self {
+        let path = PathBuf::from(format!("ext:{}", detail.id.to_lowercase()));
+        let mut doc = Self::new_virtual(path, &detail.name, "", false);
+        detail.sync_list();
+        doc.ext_page = Some(Box::new(detail));
+        doc
     }
 
     /// Use an extension's language for this file: its name, comment tokens and grammar.
@@ -275,6 +287,10 @@ pub(crate) enum OverlayKind {
     RenameEntry(PathBuf),
     ConfirmDelete(PathBuf),
     GitCheckout,
+    GitRebase,
+    GitMerge,
+    /// A question from git (a username, password or passphrase), to be answered for the running command.
+    GitCredential(String),
     GitCreateBranch,
     GitHistory,
     ConfirmDiscard { rel: String, untracked: bool },
@@ -301,6 +317,8 @@ pub(crate) enum ItemAction {
     Definition(usize),
     Symbol(usize, usize),
     GitBranch(usize),
+    GitRebaseOnto(usize),
+    GitMergeBranch(usize),
     GitCommit(usize),
     Server(usize),
     ServersInstallAll,
@@ -364,7 +382,7 @@ pub(crate) enum Readme {
     Missing(String),
 }
 
-/// The page opened by clicking an extension in the Extensions view.
+/// The page shown in a tab when an extension is clicked in the Extensions view.
 pub(crate) struct ExtDetail {
     pub id: String,
     pub name: String,
@@ -379,6 +397,26 @@ pub(crate) struct ExtDetail {
     pub readme: Readme,
     /// The folder links in the README are relative to (the extension's own, when installed).
     pub base: PathBuf,
+    /// Lays out only the rows on screen: row 0 is the header, then one row per README block, then a spacer.
+    pub list: gpui::ListState,
+}
+
+impl ExtDetail {
+    pub fn blank_list() -> gpui::ListState {
+        gpui::ListState::new(0, gpui::ListAlignment::Top, px(600.0))
+    }
+
+    pub fn item_count(&self) -> usize {
+        2 + match &self.readme {
+            Readme::Ready(blocks) => blocks.len(),
+            _ => 1,
+        }
+    }
+
+    /// Tell the list how many rows there are; call after the README changes.
+    pub fn sync_list(&self) {
+        self.list.reset(self.item_count());
+    }
 }
 
 /// One row of the results list: a file header, or one line holding hits `first..end`
@@ -426,6 +464,8 @@ pub(crate) enum GitMsg {
     Head(PathBuf, Option<String>),
     Done { label: String, result: Result<String, String> },
     Diff { key: String, title: String, result: Result<String, String> },
+    /// New text for a diff tab that is already open (after staging).
+    DiffRefresh { key: String, title: String, result: Result<String, String> },
     Branches(Result<Vec<Branch>, String>),
     History(Result<Vec<Commit>, String>),
     Blame(Result<Blame, String>),
@@ -442,6 +482,8 @@ pub(crate) enum StatusKind {
 }
 
 pub(crate) struct GitState {
+    /// Stops the running operation.
+    pub cancel: Option<Arc<forge_core::git::JobControl>>,
     pub root: PathBuf,
     pub status: Status,
     /// A status request is in flight.
@@ -590,9 +632,17 @@ pub(crate) struct Workspace {
     pub ext_panel: ExtPanel,
     /// The extension being downloaded and installed, for its button.
     pub ext_installing: Option<String>,
-    /// The extension page that is open, and the background fetch that fills it.
-    pub ext_detail: Option<ExtDetail>,
-    pub ext_detail_rx: Option<Receiver<(String, Result<forge_ext_host::openvsx::Details, String>)>>,
+    /// Background fetches of the README and facts for extension pages that are open.
+    pub ext_detail_rx: Vec<Receiver<(String, Result<forge_ext_host::openvsx::Details, String>)>>,
+    /// Questions git asked while a command ran, and the one on screen now.
+    pub askpass_rx: Option<Receiver<forge_core::askpass::Request>>,
+    pub askpass_pending: Option<std::sync::mpsc::Sender<Option<String>>>,
+    /// The side-by-side diff: its scroll, the lines picked for staging, and the parsed rows.
+    pub diff_scroll: UniformListScrollHandle,
+    pub diff_selected: std::collections::BTreeSet<(usize, usize)>,
+    pub diff_cache: std::cell::RefCell<Option<crate::diff_view::DiffCache>>,
+    /// The merge-conflict page, when open.
+    pub conflict_page: Option<crate::conflict_view::ConflictPage>,
     /// Languages and grammars the installed extensions contribute.
     pub ext_langs: Vec<forge_core::ext_lang::ExtLanguage>,
     pub tm: forge_syntax::TextMateRegistry,
@@ -742,8 +792,13 @@ impl Workspace {
             ext_listings: Vec::new(),
             ext_panel: ExtPanel { query: LineInput::default(), results: Vec::new(), searched: false, waiting: false, error: None, shown_query: String::new() },
             ext_installing: None,
-            ext_detail: None,
-            ext_detail_rx: None,
+            ext_detail_rx: Vec::new(),
+            askpass_rx: None,
+            askpass_pending: None,
+            diff_scroll: UniformListScrollHandle::new(),
+            diff_selected: Default::default(),
+            diff_cache: Default::default(),
+            conflict_page: None,
             snippets,
             snippet_session: None,
             host: None,
@@ -751,6 +806,10 @@ impl Workspace {
             ext_langs,
             tm,
         };
+        // Git asks for logins through this program; the questions come back here.
+        if let Ok(exe) = std::env::current_exe() {
+            workspace.askpass_rx = forge_core::askpass::start(&exe);
+        }
         workspace.lsp.set_overrides(workspace.settings.language_servers.clone());
         workspace.init_git();
         workspace.restore_session(initial_file, cx);

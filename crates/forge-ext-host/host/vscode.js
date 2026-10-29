@@ -871,8 +871,35 @@ module.exports = function createApi(host) {
   // ---------- the API object ----------
 
   const noopDisposable = () => new Disposable(() => {});
+  // Whatever Forge does not implement yet becomes an inert stand-in instead of an error, so an extension
+  // that touches it at startup still activates. A stub can be called, constructed, indexed, iterated and
+  // disposed; every call returns another stub. Each distinct name is noted once in the log.
+  const noted = new Set();
+  function stub(name) {
+    const target = function () {};
+    return new Proxy(target, {
+      get(_, prop) {
+        if (prop === 'then' || prop === 'toJSON' || prop === 'inspect') return undefined;
+        if (prop === 'dispose') return () => {};
+        if (prop === 'length') return 0;
+        if (prop === 'name') return name;
+        if (prop === Symbol.iterator) return () => [][Symbol.iterator]();
+        if (prop === Symbol.toPrimitive) return () => '';
+        if (typeof prop === 'symbol') return undefined;
+        return stub(`${name}.${prop}`);
+      },
+      apply() {
+        if (!noted.has(name)) {
+          noted.add(name);
+          host.log('info', `${name} is not supported by Forge yet; the call was ignored`);
+        }
+        return stub(`${name}()`);
+      },
+      construct() { return stub(`new ${name}`); },
+    });
+  }
   function unsupported(name) {
-    return () => { throw new Error(`${name} is not supported by Forge yet`); };
+    return stub(name);
   }
   const warnedProviders = new Set();
   function provider(name) {
@@ -923,6 +950,23 @@ module.exports = function createApi(host) {
     createWebviewPanel: unsupported('window.createWebviewPanel'),
     createTerminal: unsupported('window.createTerminal'),
     registerWebviewViewProvider: noopDisposable,
+    // Accepted and ignored: Forge has no URI scheme, terminal links, decorations or custom editors yet,
+    // but extensions (GitLens, ...) register these at startup and must not fail to activate.
+    registerUriHandler: noopDisposable,
+    registerTerminalLinkProvider: noopDisposable,
+    registerTerminalProfileProvider: noopDisposable,
+    registerFileDecorationProvider: noopDisposable,
+    registerCustomEditorProvider: noopDisposable,
+    registerWebviewPanelSerializer: noopDisposable,
+    onDidOpenTerminal: new EventEmitter().event,
+    onDidCloseTerminal: new EventEmitter().event,
+    onDidChangeActiveTerminal: new EventEmitter().event,
+    onDidChangeTerminalState: new EventEmitter().event,
+    onDidChangeTextEditorVisibleRanges: new EventEmitter().event,
+    onDidChangeTextEditorOptions: new EventEmitter().event,
+    onDidChangeActiveColorTheme: new EventEmitter().event,
+    terminals: [],
+    activeTerminal: undefined,
     onDidChangeActiveTextEditor: onDidChangeActiveEditor.event,
     onDidChangeTextEditorSelection: onDidChangeSelection.event,
     onDidChangeVisibleTextEditors: new EventEmitter().event,
@@ -1115,7 +1159,7 @@ module.exports = function createApi(host) {
     return new Proxy(target, {
       get(object, prop, receiver) {
         if (prop in object || typeof prop === 'symbol' || prop === 'then' || prop === 'toJSON' || prop === 'inspect' || String(prop).startsWith('__')) return Reflect.get(object, prop, receiver);
-        return unsupported(`${label}.${String(prop)}`);
+        return stub(`${label}.${String(prop)}`);
       },
     });
   }

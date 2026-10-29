@@ -186,6 +186,16 @@ commands! {
     GitFetch, "git.fetch", "Git: Fetch", [];
     GitStash, "git.stash", "Git: Stash (Include Untracked)", [];
     GitStashPop, "git.stashPop", "Git: Pop Latest Stash", [];
+    GitRebase, "git.rebase", "Git: Rebase Branch...", [];
+    GitRebaseContinue, "git.rebaseContinue", "Git: Continue Rebase", [];
+    GitRebaseSkip, "git.rebaseSkip", "Git: Skip This Commit in the Rebase", [];
+    GitRebaseAbort, "git.rebaseAbort", "Git: Abort Rebase", [];
+    GitMerge, "git.merge", "Git: Merge Branch...", [];
+    GitMergeContinue, "git.mergeContinue", "Git: Commit the Merge", [];
+    GitMergeAbort, "git.mergeAbort", "Git: Abort Merge", [];
+    GitResolveConflicts, "git.resolveConflicts", "Git: Resolve Merge Conflicts in File", [];
+    GitCancel, "git.cancel", "Git: Cancel Running Operation", [];
+    ToggleDiffLayout, "git.toggleDiffLayout", "Diff: Toggle Side by Side", [];
     GitFileHistory, "git.viewFileHistory", "Git: View File History", [];
     GitLog, "git.viewHistory", "Git: View History", [];
     GitBlame, "git.blame", "Git: Show Blame for Current Line", [];

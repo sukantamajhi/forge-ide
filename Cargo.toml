@@ -18,3 +18,10 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+# GPUI, text shaping and layout are unusably slow unoptimised: scrolling stutters in a plain `cargo run`.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
