@@ -86,6 +86,11 @@ impl Workspace {
             cx.notify();
             return;
         }
+        if self.ext_detail.is_some() && self.overlay.is_none() && k.key == "escape" {
+            self.ext_detail = None;
+            cx.notify();
+            return;
+        }
         if self.settings_open && self.overlay.is_none() && self.settings_key(k) {
             cx.notify();
             return;
@@ -1155,6 +1160,7 @@ impl Workspace {
         }
         changed |= self.poll_install();
         changed |= self.poll_ext();
+        changed |= self.poll_ext_detail();
         // A shell that exited closes its terminal.
         let before = self.terminals.len();
         self.terminals.retain_mut(|t| t.is_alive() || t.keep_when_dead);

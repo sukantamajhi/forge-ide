@@ -202,6 +202,12 @@ pub(crate) fn classify_link(url: &str, base: &Path) -> LinkTarget {
 }
 
 impl Workspace {
+    /// Markdown blocks drawn like the preview, for pages other than an editor tab.
+    pub(crate) fn markdown_blocks(&self, blocks: &[Block], base: PathBuf, cx: &mut Context<Self>) -> AnyElement {
+        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base, next_id: Cell::new(0) };
+        div().w_full().flex().flex_col().children(blocks.iter().map(|b| block(&ctx, b))).into_any_element()
+    }
+
     /// Whether the active document in group `g` is Markdown.
     pub(crate) fn is_markdown(&self, g: usize) -> bool {
         let Some(view) = self.groups.get(g).and_then(|gr| gr.views.get(gr.active)) else { return false };

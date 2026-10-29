@@ -2048,6 +2048,7 @@ impl Render for Workspace {
             .children(self.render_hover())
             .children(signature.as_ref().and_then(|s| self.render_signature(s)))
             .children(self.render_settings(cx))
+            .children(self.render_ext_detail(cx))
             .children(self.render_debug_toolbar(f32::from(window.viewport_size().width), cx))
             .children(self.render_overlay(cx))
             .children(self.render_context_menu(window.viewport_size(), cx))

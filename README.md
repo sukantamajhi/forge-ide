@@ -156,7 +156,7 @@ Forge installs VS Code extensions from **Open VSX** (open-vsx.org, the registry 
 Microsoft's products) or from a `.vsix` file. It uses what they *declare* (themes, grammars, snippets, languages)
 and, if Node.js is on `PATH`, **runs their code** in an extension host: a separate Node process with Forge's own
 implementation of the `vscode` API. Running extension code is new and only a part of that API exists (see below);
-an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". The **Extensions** tab beside Source Control (Ctrl+Shift+X) searches Open VSX as you press Enter, lists what is installed, and has Install and Uninstall buttons. Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
+an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". The **Extensions** tab beside Source Control (Ctrl+Shift+X) searches Open VSX as you press Enter, lists what is installed, and has Install and Uninstall buttons. Clicking an extension opens its page (README, license, links, Install or Uninstall); Esc closes it. Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
 **Extensions: Install from VSIX...** (a file path), **Extensions: Manage Installed...** (Enter uninstalls),
 **Preferences: Color Theme**, **Insert Snippet...**. Extensions live in `%APPDATA%\Forge\extensions`
 (`FORGE_CONFIG_DIR` moves everything, which is how the tests stay out of your real settings).

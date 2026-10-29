@@ -118,6 +118,55 @@ pub fn lookup(id: &str) -> Result<Listing, String> {
     parse_listings(&curl_text(&url)?)?.into_iter().next().ok_or_else(|| format!("{id} was not found on Open VSX"))
 }
 
+/// What Open VSX knows about one extension beyond its search listing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Details {
+    pub license: Option<String>,
+    pub repository: Option<String>,
+    pub homepage: Option<String>,
+    pub categories: Vec<String>,
+    pub rating: Option<f64>,
+    pub rating_count: u64,
+    pub downloads: u64,
+    /// The extension's README (Markdown), when it has one.
+    pub readme: Option<String>,
+}
+
+/// Parse a single-extension response. The second value is where its README can be fetched.
+pub fn parse_details(json: &str) -> Result<(Details, Option<String>), String> {
+    let value: Value = serde_json::from_str(json).map_err(|e| format!("unexpected response: {e}"))?;
+    if let Some(error) = value.get("error").and_then(Value::as_str) {
+        return Err(error.to_owned());
+    }
+    let text = |key: &str| value.get(key).and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(str::to_owned);
+    let readme_url = value.get("files").and_then(|f| f.get("readme")).and_then(Value::as_str).filter(|u| is_trusted_url(u)).map(str::to_owned);
+    let details = Details {
+        license: text("license"),
+        repository: text("repository"),
+        homepage: text("homepage"),
+        categories: value.get("categories").and_then(Value::as_array).map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
+        rating: value.get("averageRating").and_then(Value::as_f64),
+        rating_count: value.get("reviewCount").and_then(Value::as_u64).unwrap_or(0),
+        downloads: value.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
+        readme: None,
+    };
+    Ok((details, readme_url))
+}
+
+/// Everything shown on an extension's page: its details and README. Blocks; run on a background thread.
+pub fn details(id: &str) -> Result<Details, String> {
+    let (namespace, name) = id.split_once('.').ok_or("an extension id looks like publisher.name")?;
+    if namespace.is_empty() || name.is_empty() || id.contains(['/', '\\', ' ']) {
+        return Err("an extension id looks like publisher.name".to_owned());
+    }
+    let url = format!("{API}/{}/{}", percent_encode(namespace), percent_encode(name));
+    let (mut details, readme_url) = parse_details(&curl_text(&url)?)?;
+    if let Some(url) = readme_url {
+        details.readme = curl_text(&url).ok();
+    }
+    Ok(details)
+}
+
 /// The expected digest from a `.sha256` file: its first token, lowercase.
 pub fn parse_digest(text: &str) -> Option<String> {
     let token = text.split_whitespace().next()?.to_ascii_lowercase();
@@ -164,6 +213,20 @@ mod tests {
         { "name": "sneaky", "namespace": "x", "version": "1", "files": { "download": "https://open-vsx.org@evil.example/x.vsix" } },
         { "name": "plain", "namespace": "acme", "files": { "download": "https://open-vsx.org/api/acme/plain/file/p.vsix", "sha256": "https://evil.example/p.sha256" } }
     ] }"#;
+
+    #[test]
+    fn details_parse_and_only_trusted_readme_urls_are_kept() {
+        let json = r#"{ "license": "MIT", "repository": "https://github.com/a/b", "categories": ["Themes"], "averageRating": 4.5, "reviewCount": 12, "downloadCount": 99,
+            "files": { "readme": "https://open-vsx.org/api/a/b/1/file/README.md" } }"#;
+        let (details, readme) = parse_details(json).unwrap();
+        assert_eq!(details.license.as_deref(), Some("MIT"));
+        assert_eq!((details.rating, details.rating_count, details.downloads), (Some(4.5), 12, 99));
+        assert_eq!(details.categories, ["Themes"]);
+        assert_eq!(readme.as_deref(), Some("https://open-vsx.org/api/a/b/1/file/README.md"));
+        let (_, evil) = parse_details(r#"{ "files": { "readme": "https://evil.example/README.md" } }"#).unwrap();
+        assert_eq!(evil, None);
+        assert!(parse_details(r#"{ "error": "not found" }"#).is_err());
+    }
 
     #[test]
     fn search_results_parse_and_untrusted_hosts_are_dropped() {

@@ -357,6 +357,30 @@ pub(crate) struct ExtPanel {
     pub shown_query: String,
 }
 
+/// An extension's README, as it is loaded.
+pub(crate) enum Readme {
+    Loading,
+    Ready(Vec<forge_core::markdown::Block>),
+    Missing(String),
+}
+
+/// The page opened by clicking an extension in the Extensions view.
+pub(crate) struct ExtDetail {
+    pub id: String,
+    pub name: String,
+    pub publisher: String,
+    pub version: String,
+    pub description: String,
+    /// What Forge can use from it, for an installed extension.
+    pub summary: Option<String>,
+    /// Present when it came from Open VSX, so it can be installed from the page.
+    pub listing: Option<forge_ext_host::openvsx::Listing>,
+    pub info: forge_ext_host::openvsx::Details,
+    pub readme: Readme,
+    /// The folder links in the README are relative to (the extension's own, when installed).
+    pub base: PathBuf,
+}
+
 /// One row of the results list: a file header, or one line holding hits `first..end`
 /// (several matches on a line share a row).
 pub(crate) enum SearchRow {
@@ -566,6 +590,9 @@ pub(crate) struct Workspace {
     pub ext_panel: ExtPanel,
     /// The extension being downloaded and installed, for its button.
     pub ext_installing: Option<String>,
+    /// The extension page that is open, and the background fetch that fills it.
+    pub ext_detail: Option<ExtDetail>,
+    pub ext_detail_rx: Option<Receiver<(String, Result<forge_ext_host::openvsx::Details, String>)>>,
     /// Languages and grammars the installed extensions contribute.
     pub ext_langs: Vec<forge_core::ext_lang::ExtLanguage>,
     pub tm: forge_syntax::TextMateRegistry,
@@ -715,6 +742,8 @@ impl Workspace {
             ext_listings: Vec::new(),
             ext_panel: ExtPanel { query: LineInput::default(), results: Vec::new(), searched: false, waiting: false, error: None, shown_query: String::new() },
             ext_installing: None,
+            ext_detail: None,
+            ext_detail_rx: None,
             snippets,
             snippet_session: None,
             host: None,
