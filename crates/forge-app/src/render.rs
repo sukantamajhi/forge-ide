@@ -118,6 +118,11 @@ impl Workspace {
                     this.completion = None;
                     cx.notify();
                 }))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    // The workspace-level right click is for the editor only.
+                    cx.stop_propagation();
+                    this.open_tab_context_menu(g, vi, ev.position, cx);
+                }))
                 .child(if doc.ext_page.is_some() { crate::icons::glyph(crate::codicons::EXTENSIONS, 1.0, t.dim) } else { file_icon(self.icon_theme.as_ref(), &doc.name()) })
                 .child(doc.name())
                 .child(
@@ -131,12 +136,21 @@ impl Workspace {
                         .rounded_sm()
                         .cursor_pointer()
                         .hover(|s| s.bg(rgb(t.border)))
-                        .tooltip(self.tooltip(if doc.dirty { "Unsaved changes: close" } else { "Close" }, Some(Command::CloseTab)))
+                        .tooltip(self.tooltip(if view.pinned { "Unpin" } else if doc.dirty { "Unsaved changes: close" } else { "Close" }, if view.pinned { None } else { Some(Command::CloseTab) }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                            this.close_view(g, vi, cx);
+                            // A pinned tab's button unpins it; closing it takes unpinning first, as in VS Code.
+                            if this.groups[g].views[vi].pinned {
+                                this.tab_op(crate::context_menu::TabOp::Unpin, g, vi, cx);
+                            } else {
+                                this.close_view(g, vi, cx);
+                            }
                         }))
-                        .child(crate::icons::glyph(if doc.dirty { crate::codicons::CIRCLE_FILLED } else { crate::codicons::CLOSE }, 0.875, if doc.dirty { t.accent } else { t.dim })),
+                        .child(crate::icons::glyph(
+                            if view.pinned { crate::codicons::PINNED } else if doc.dirty { crate::codicons::CIRCLE_FILLED } else { crate::codicons::CLOSE },
+                            0.875,
+                            if doc.dirty && !view.pinned { t.accent } else { t.dim },
+                        )),
                 )
         })
         .collect::<Vec<_>>();

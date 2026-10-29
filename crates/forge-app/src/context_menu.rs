@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use forge_core::commands::Command;
 use gpui::{div, prelude::*, px, rgb, AnyElement, ClipboardItem, Context, Div, MouseButton, MouseDownEvent, Pixels, Point, Size};
 
-use crate::workspace::{Focus, OverlayKind, Workspace};
+use crate::workspace::{Focus, OverlayKind, SidebarView, Workspace};
 
 const MENU_WIDTH: f32 = 300.0;
 const ROW_HEIGHT: f32 = 30.0;
@@ -25,6 +25,25 @@ pub(crate) enum MenuAction {
     RevealEntry,
     CloseOthers,
     CloseAll,
+    /// A choice from the menu of one particular tab: group `g`, tab `vi`.
+    Tab { op: TabOp, g: usize, vi: usize },
+}
+
+/// What a tab's right-click menu can do to that tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabOp {
+    Close,
+    CloseOthers,
+    CloseRight,
+    CloseSaved,
+    CloseAll,
+    CopyPath,
+    CopyRelativePath,
+    Pin,
+    Unpin,
+    SplitRight,
+    RevealInOs,
+    RevealInExplorer,
 }
 
 pub(crate) enum MenuEntry {
@@ -130,36 +149,55 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Close every tab of the focused group but the active one. Files with unsaved changes stay.
-    fn close_other_tabs(&mut self, cx: &mut Context<Self>) {
-        let g = self.focused_group;
-        let Some(active) = self.groups.get(g).map(|gr| gr.active) else { return };
-        let (closing, kept) = self.closable_tabs(g, Some(active));
-        for vi in closing.into_iter().rev() {
-            self.close_view(g, vi, cx);
-        }
-        self.report_kept(kept);
+    /// The menu of tab `vi` in group `g`, opened by right-clicking it.
+    pub fn open_tab_context_menu(&mut self, g: usize, vi: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(group) = self.groups.get(g) else { return };
+        let Some(view) = group.views.get(vi) else { return };
+        let doc = &self.docs[view.doc];
+        // A generated document (a diff, a commit, an extension page) has no file to copy the path of.
+        let on_disk = !doc.readonly && doc.path.is_file();
+        let pinned = view.pinned;
+        let count = group.views.len();
+        let can_close = |i: usize| !group.views[i].pinned;
+        let others = (0..count).any(|i| i != vi && can_close(i));
+        let right = ((vi + 1)..count).any(can_close);
+        let saved = (0..count).any(|i| can_close(i) && !self.docs[group.views[i].doc].dirty);
+        let any = (0..count).any(can_close);
+        let tab = |op: TabOp| MenuAction::Tab { op, g, vi };
+        let entries = vec![
+            self.menu_item("Close", tab(TabOp::Close), self.keymap.shortcut_label(Command::CloseTab), !pinned),
+            self.menu_item("Close Others", tab(TabOp::CloseOthers), None, others),
+            self.menu_item("Close to the Right", tab(TabOp::CloseRight), None, right),
+            self.menu_item("Close Saved", tab(TabOp::CloseSaved), self.keymap.shortcut_label(Command::CloseSavedTabs), saved),
+            self.menu_item("Close All", tab(TabOp::CloseAll), self.keymap.shortcut_label(Command::CloseAllTabs), any),
+            MenuEntry::Separator,
+            self.menu_item("Copy Path", tab(TabOp::CopyPath), self.keymap.shortcut_label(Command::CopyFilePath), on_disk),
+            self.menu_item("Copy Relative Path", tab(TabOp::CopyRelativePath), self.keymap.shortcut_label(Command::CopyRelativeFilePath), on_disk),
+            MenuEntry::Separator,
+            if pinned {
+                self.menu_item("Unpin", tab(TabOp::Unpin), self.keymap.shortcut_label(Command::UnpinTab), true)
+            } else {
+                self.menu_item("Pin", tab(TabOp::Pin), self.keymap.shortcut_label(Command::PinTab), true)
+            },
+            MenuEntry::Separator,
+            self.menu_item("Split Right", tab(TabOp::SplitRight), self.keymap.shortcut_label(Command::SplitEditor), true),
+            MenuEntry::Separator,
+            self.menu_item("Reveal in File Explorer", tab(TabOp::RevealInOs), self.keymap.shortcut_label(Command::RevealActiveFile), on_disk),
+            self.menu_item("Reveal in Explorer View", tab(TabOp::RevealInExplorer), self.keymap.shortcut_label(Command::ShowActiveFileInExplorer), on_disk && doc.path.starts_with(self.root())),
+        ];
+        let target = on_disk.then(|| (doc.path.clone(), false));
+        self.context_menu = Some(ContextMenu { position, entries, target });
+        cx.notify();
     }
 
-    /// Close every tab of the focused group. Files with unsaved changes stay.
-    fn close_all_tabs(&mut self, cx: &mut Context<Self>) {
-        let g = self.focused_group;
-        let (closing, kept) = self.closable_tabs(g, None);
-        for vi in closing.into_iter().rev() {
-            if g >= self.groups.len() {
-                break;
-            }
-            self.close_view(g, vi, cx);
-        }
-        self.report_kept(kept);
-    }
-
-    /// The tabs of group `g` that can be closed without losing work (all but `except`), and how many were kept for that reason.
-    fn closable_tabs(&self, g: usize, except: Option<usize>) -> (Vec<usize>, usize) {
-        let Some(group) = self.groups.get(g) else { return (Vec::new(), 0) };
+    /// Close the tabs of group `g` that `wanted` picks. Pinned tabs and files with unsaved changes stay, and
+    /// the tab that was in front stays in front.
+    fn close_tabs_where(&mut self, g: usize, wanted: impl Fn(usize) -> bool, cx: &mut Context<Self>) {
+        let Some(group) = self.groups.get(g) else { return };
+        let front = group.views.get(group.active).map(|v| v.doc);
         let (mut closing, mut kept) = (Vec::new(), 0);
         for (vi, view) in group.views.iter().enumerate() {
-            if Some(vi) == except {
+            if !wanted(vi) || view.pinned {
                 continue;
             }
             // Unsaved work is never discarded by a bulk close; another tab on the same file keeps it safe.
@@ -169,7 +207,104 @@ impl Workspace {
                 closing.push(vi);
             }
         }
-        (closing, kept)
+        for vi in closing.into_iter().rev() {
+            if g >= self.groups.len() {
+                break;
+            }
+            self.close_view(g, vi, cx);
+        }
+        if let (Some(group), Some(doc)) = (self.groups.get_mut(g), front) {
+            if let Some(at) = group.views.iter().position(|v| v.doc == doc) {
+                group.active = at;
+            }
+        }
+        self.report_kept(kept);
+    }
+
+    /// Pin or unpin tab `vi`: pinned tabs are kept together at the left.
+    fn set_pinned(&mut self, g: usize, vi: usize, pinned: bool) {
+        let Some(group) = self.groups.get_mut(g) else { return };
+        if vi >= group.views.len() || group.views[vi].pinned == pinned {
+            return;
+        }
+        let front = group.views[group.active].doc;
+        let was_front = group.active == vi;
+        let mut view = group.views.remove(vi);
+        view.pinned = pinned;
+        // Pinning joins the end of the pinned tabs; unpinning becomes the first unpinned tab.
+        let at = group.views.iter().filter(|v| v.pinned).count();
+        group.views.insert(at, view);
+        group.active = if was_front { at } else { group.views.iter().position(|v| v.doc == front).unwrap_or(0) };
+    }
+
+    /// Do `op` to tab `vi` of group `g`.
+    pub(crate) fn tab_op(&mut self, op: TabOp, g: usize, vi: usize, cx: &mut Context<Self>) {
+        let Some(view) = self.groups.get(g).and_then(|gr| gr.views.get(vi)) else { return };
+        let path = self.docs[view.doc].path.clone();
+        match op {
+            TabOp::Close => self.close_view(g, vi, cx),
+            TabOp::CloseOthers => self.close_tabs_where(g, |i| i != vi, cx),
+            TabOp::CloseRight => self.close_tabs_where(g, |i| i > vi, cx),
+            TabOp::CloseSaved => {
+                let saved: Vec<bool> = self.groups[g].views.iter().map(|v| !self.docs[v.doc].dirty).collect();
+                self.close_tabs_where(g, |i| saved.get(i).copied().unwrap_or(false), cx);
+            }
+            TabOp::CloseAll => self.close_tabs_where(g, |_| true, cx),
+            TabOp::CopyPath | TabOp::CopyRelativePath => {
+                let relative = op == TabOp::CopyRelativePath;
+                let text = if relative { self.display_path(&path) } else { path.display().to_string() };
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.set_status(if relative { "Copied the relative path" } else { "Copied the path" });
+            }
+            TabOp::Pin => self.set_pinned(g, vi, true),
+            TabOp::Unpin => self.set_pinned(g, vi, false),
+            TabOp::SplitRight => {
+                self.focused_group = g;
+                self.groups[g].active = vi;
+                self.run_command(Command::SplitEditor, false, cx);
+            }
+            TabOp::RevealInOs => match reveal_in_file_manager(&path) {
+                Ok(()) => self.set_status(format!("Revealed {}", path.display())),
+                Err(err) => self.set_status(format!("Cannot reveal {}: {err}", path.display())),
+            },
+            TabOp::RevealInExplorer => {
+                self.sidebar_visible = true;
+                self.sidebar_view = SidebarView::Explorer;
+                self.tree.reveal(&path);
+                if let Some(ix) = self.tree.entries.iter().position(|e| e.path == path) {
+                    self.explorer_selected = Some(ix);
+                    self.explorer_scroll.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+                }
+                self.focus = Focus::Explorer;
+            }
+        }
+    }
+
+    /// The palette and keyboard versions of the tab operations act on the front tab of the focused group.
+    pub(crate) fn run_tab_command(&mut self, command: Command, cx: &mut Context<Self>) {
+        let g = self.focused_group;
+        let Some(vi) = self.groups.get(g).filter(|gr| !gr.views.is_empty()).map(|gr| gr.active) else {
+            self.set_status("No editor is open");
+            return;
+        };
+        let op = match command {
+            Command::CloseOtherTabs => TabOp::CloseOthers,
+            Command::CloseTabsToRight => TabOp::CloseRight,
+            Command::CloseSavedTabs => TabOp::CloseSaved,
+            Command::CloseAllTabs => TabOp::CloseAll,
+            Command::PinTab => TabOp::Pin,
+            Command::UnpinTab => TabOp::Unpin,
+            Command::CopyFilePath => TabOp::CopyPath,
+            Command::CopyRelativeFilePath => TabOp::CopyRelativePath,
+            Command::RevealActiveFile => TabOp::RevealInOs,
+            _ => TabOp::RevealInExplorer,
+        };
+        let on_disk = self.docs[self.groups[g].views[vi].doc].path.is_file();
+        if matches!(op, TabOp::CopyPath | TabOp::CopyRelativePath | TabOp::RevealInOs | TabOp::RevealInExplorer) && !on_disk {
+            self.set_status("The current editor is not a file on disk");
+            return;
+        }
+        self.tab_op(op, g, vi, cx);
     }
 
     fn report_kept(&mut self, kept: usize) {
@@ -243,8 +378,12 @@ impl Workspace {
                     self.set_status(if relative { "Copied the relative path" } else { "Copied the path" });
                 }
             }
-            MenuAction::CloseOthers => self.close_other_tabs(cx),
-            MenuAction::CloseAll => self.close_all_tabs(cx),
+            MenuAction::CloseOthers | MenuAction::CloseAll => {
+                let g = self.focused_group;
+                let vi = self.groups.get(g).map_or(0, |gr| gr.active);
+                self.tab_op(if action == MenuAction::CloseAll { TabOp::CloseAll } else { TabOp::CloseOthers }, g, vi, cx);
+            }
+            MenuAction::Tab { op, g, vi } => self.tab_op(op, g, vi, cx),
             MenuAction::RevealEntry => {
                 if let Some((path, _)) = target {
                     match reveal_in_file_manager(&path) {

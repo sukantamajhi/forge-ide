@@ -99,6 +99,16 @@ commands! {
     Save, "workbench.action.files.save", "Save", ["ctrl+s"];
     SaveAll, "workbench.action.files.saveAll", "Save All", ["ctrl+k s"];
     CloseTab, "workbench.action.closeActiveEditor", "Close Editor", ["ctrl+w", "ctrl+f4"];
+    CloseOtherTabs, "workbench.action.closeOtherEditors", "Close Other Editors", [];
+    CloseTabsToRight, "workbench.action.closeEditorsToTheRight", "Close Editors to the Right", [];
+    CloseSavedTabs, "workbench.action.closeUnmodifiedEditors", "Close Saved Editors", ["ctrl+k u"];
+    CloseAllTabs, "workbench.action.closeAllEditors", "Close All Editors", ["ctrl+k ctrl+w"];
+    PinTab, "workbench.action.pinEditor", "Pin Editor", ["ctrl+k shift+enter"];
+    UnpinTab, "workbench.action.unpinEditor", "Unpin Editor", [];
+    CopyFilePath, "workbench.action.files.copyPathOfActiveFile", "Copy Path of Active File", ["shift+alt+c"];
+    CopyRelativeFilePath, "workbench.action.files.copyRelativePathOfActiveFile", "Copy Relative Path of Active File", ["ctrl+k ctrl+shift+c"];
+    RevealActiveFile, "workbench.action.files.revealActiveFileInWindows", "Reveal Active File in File Explorer", ["shift+alt+r"];
+    ShowActiveFileInExplorer, "workbench.files.action.showActiveFileInExplorer", "Reveal Active File in Explorer View", ["ctrl+k r"];
     NextTab, "workbench.action.nextEditor", "Open Next Editor", ["ctrl+pagedown", "ctrl+tab"];
     PreviousTab, "workbench.action.previousEditor", "Open Previous Editor", ["ctrl+pageup", "ctrl+shift+tab"];
     OpenTab1, "workbench.action.openEditorAtIndex1", "Open Editor 1", ["alt+1"];

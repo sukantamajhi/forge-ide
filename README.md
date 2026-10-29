@@ -67,6 +67,12 @@ cargo build --release -p forge-app            # LTO; slow first build
 - **Editor buttons** at the right of the tab bar: Open Preview (Markdown files only), Split Editor, and a **...** menu with
   Copy Path / Copy Relative Path / Reveal in File Explorer, Close / Close Others / Close All (files with unsaved changes stay
   open), Toggle Minimap, Go to Line, Command Palette, and the file's Git actions.
+- **Tab right-click menu** (right-click any tab, not only the front one): Close, Close Others, Close to the Right, Close Saved,
+  Close All, Copy Path, Copy Relative Path, Pin / Unpin, Split Right, Reveal in File Explorer, and Reveal in Explorer View.
+  Bulk closes keep tabs with unsaved changes and pinned tabs, and leave the front tab in front. A pinned tab moves to the left,
+  shows a pin instead of a close button (click the pin to unpin), and is not pinned again after a restart. Each item is also a
+  command with VS Code's shortcut where it has one (Close Saved Ctrl+K U, Close All Ctrl+K Ctrl+W, Pin Ctrl+K Shift+Enter,
+  Copy Path Shift+Alt+C, Copy Relative Path Ctrl+K Ctrl+Shift+C, Reveal in File Explorer Shift+Alt+R, Reveal in Explorer View Ctrl+K R).
 - **Resizable panels:** drag the edge of the sidebar, the top edge of the bottom panel, the left edge of the Markdown
   preview, the divider between split editors, or the dividers between the Debug panel's columns. The sidebar, bottom
   panel, preview and Debug columns are remembered in `%APPDATA%\Forge\ui-state.json`; split editors reset to equal shares.

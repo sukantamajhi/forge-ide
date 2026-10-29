@@ -239,6 +239,8 @@ impl Workspace {
             | GitFileHistory | GitLog | GitBlame | GitRebase | GitRebaseContinue | GitRebaseSkip | GitRebaseAbort | GitMerge | GitMergeContinue | GitMergeAbort
             | GitResolveConflicts | GitCancel => self.run_git_command(command, cx),
             ToggleDiffLayout => self.toggle_diff_layout(),
+            CloseOtherTabs | CloseTabsToRight | CloseSavedTabs | CloseAllTabs | PinTab | UnpinTab | CopyFilePath | CopyRelativeFilePath | RevealActiveFile
+            | ShowActiveFileInExplorer => self.run_tab_command(command, cx),
             AiSetKey => self.open_overlay(OverlayKind::AiKey, ""),
             AiForgetKey => self.forget_ai_key(),
             LanguageServers => self.open_overlay(OverlayKind::LanguageServers, ""),

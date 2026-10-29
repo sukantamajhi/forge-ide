@@ -53,12 +53,13 @@ fn ids(icon: char) -> &'static [&'static str] {
         c::ERROR => &["error"],
         c::EXTENSIONS => &["extensions", "extensions-view-icon"],
         c::TRASH => &["trash"],
+        c::PINNED => &["pinned"],
         c::CLOUD_DOWNLOAD => &["cloud-download"],
         _ => &[],
     }
 }
 
-const ALL: [char; 33] = [
+const ALL: [char; 34] = [
     crate::codicons::FILES,
     crate::codicons::SEARCH,
     crate::codicons::SOURCE_CONTROL,
@@ -91,6 +92,7 @@ const ALL: [char; 33] = [
     crate::codicons::ERROR,
     crate::codicons::EXTENSIONS,
     crate::codicons::TRASH,
+    crate::codicons::PINNED,
     crate::codicons::CLOUD_DOWNLOAD,
 ];
 

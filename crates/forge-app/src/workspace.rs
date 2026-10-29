@@ -199,6 +199,8 @@ impl Doc {
 /// One open tab: a document plus this tab's own cursors, scroll and folds.
 pub(crate) struct View {
     pub doc: usize,
+    /// A pinned tab sits at the left, shows a pin instead of a close button, and survives "Close Others / All".
+    pub pinned: bool,
     pub selections: SelectionSet,
     /// Column kept across vertical moves through short lines.
     pub goal: Option<usize>,
@@ -220,6 +222,7 @@ impl View {
     pub fn new(doc: usize) -> Self {
         Self {
             doc,
+            pinned: false,
             selections: SelectionSet::single(Selection::caret(0)),
             goal: None,
             history: Vec::new(),
