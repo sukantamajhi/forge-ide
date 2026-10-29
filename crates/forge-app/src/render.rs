@@ -1483,7 +1483,7 @@ impl Workspace {
                 .child(label)
         };
         let body: AnyElement = match self.panel_view {
-            PanelView::Terminal => self.render_terminal().into_any_element(),
+            PanelView::Terminal => self.render_terminal(cx).into_any_element(),
             PanelView::Problems => self.render_problems(cx).into_any_element(),
             PanelView::References => self.render_references(cx).into_any_element(),
             PanelView::Debug => self.render_debug_panel(cx),
@@ -1509,6 +1509,7 @@ impl Workspace {
                     .child(tab(format!("REFERENCES {}", self.references.len()), PanelView::References, cx))
                     .child(tab("DEBUG".to_owned(), PanelView::Debug, cx))
                     .child(div().flex_1())
+                    .children(self.render_terminal_tabs(cx))
                     .child(
                         div()
                             .id("panel-close")
@@ -1534,13 +1535,94 @@ impl Workspace {
             .child(self.resize_handle(("resize", 1), Resize::Panel, Edge::Top, cx))
     }
 
-    fn render_terminal(&self) -> impl IntoElement {
+    /// Beside the panel tabs while Terminal is showing: one chip per terminal, and a button for a new one.
+    fn render_terminal_tabs(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.panel_view != PanelView::Terminal {
+            return None;
+        }
+        let t = &self.theme;
+        let chips = self.terminals.iter().enumerate().map(|(i, terminal)| {
+            let active = i == self.active_terminal;
+            div()
+                .id(("terminal-chip", i))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .h(rems(1.5))
+                .pl_2()
+                .pr_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(rgb(if active { t.text } else { t.dim }))
+                .bg(rgb(if active { t.tab_active } else { t.sidebar }))
+                .hover(|s| s.bg(rgb(t.tab_active)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.active_terminal = i;
+                    this.focus = Focus::Terminal;
+                    cx.notify();
+                }))
+                .child(format!("{}: {}", i + 1, terminal.title))
+                .child(
+                    div()
+                        .id(("terminal-kill", i))
+                        .w(rems(1.125))
+                        .h(rems(1.125))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .hover(|s| s.bg(rgb(t.border)))
+                        .tooltip(self.tooltip("Kill Terminal", None))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.kill_terminal(i);
+                            cx.notify();
+                        }))
+                        .child(crate::icons::glyph(crate::codicons::CLOSE, 0.75, t.dim)),
+                )
+        });
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .pr_1()
+                .children(chips)
+                .child(
+                    div()
+                        .id("terminal-new")
+                        .w(rems(1.75))
+                        .h(rems(1.5))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(rgb(t.border)))
+                        .tooltip(self.tooltip("New Terminal", Some(Command::NewTerminal)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.new_terminal();
+                            cx.notify();
+                        }))
+                        .child(crate::icons::glyph(crate::codicons::ADD, 1.0, t.text)),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_terminal(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let Some(terminal) = self.terminals.get(self.active_terminal) else {
             return div().p_3().text_color(rgb(t.dim)).child("No terminal is running. Press Ctrl+` to start one.").into_any_element();
         };
         let (rows, _) = terminal.size();
+        let (scrolled, history) = terminal.scroll_position();
+        // The caret belongs to the live screen: hide it while looking at older output.
         let (cur_row, cur_col, cur_visible) = terminal.cursor();
+        let cur_visible = cur_visible && scrolled == 0;
         let line_h = px(self.line_height());
         let focused = self.focus == Focus::Terminal;
         let mut lines: Vec<Div> = Vec::with_capacity(rows as usize);
@@ -1570,7 +1652,29 @@ impl Workspace {
             }
             lines.push(line);
         }
-        div().size_full().px_2().py_1().overflow_hidden().children(lines).into_any_element()
+        // A thin scroll bar on the right while there is history to scroll through.
+        let bar = (history > 0).then(|| {
+            let total = (rows as usize + history) as f32;
+            let thumb = (rows as f32 / total).clamp(0.05, 1.0);
+            let top = (history - scrolled) as f32 / history as f32 * (1.0 - thumb);
+            div().absolute().top_0().right_0().bottom_0().w(px(6.0)).child(div().absolute().right(px(1.0)).w(px(4.0)).rounded_full().bg(rgb(if scrolled > 0 { t.dim } else { t.border })).top(relative(top)).h(relative(thumb)))
+        });
+        div()
+            .id("terminal-view")
+            .relative()
+            .size_full()
+            .px_2()
+            .py_1()
+            .overflow_hidden()
+            .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _, cx| {
+                let line = px(this.line_height());
+                let lines = f32::from(ev.delta.pixel_delta(line).y) / f32::from(line);
+                this.scroll_terminal(lines);
+                cx.notify();
+            }))
+            .children(lines)
+            .children(bar)
+            .into_any_element()
     }
 
     fn render_problems(&self, cx: &mut Context<Self>) -> impl IntoElement {

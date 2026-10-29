@@ -1498,6 +1498,62 @@ impl Workspace {
         }
     }
 
+    /// Show the terminal `delta` places along (wrapping round), and give it the keyboard.
+    pub fn switch_terminal(&mut self, delta: isize) {
+        let n = self.terminals.len() as isize;
+        if n == 0 {
+            self.new_terminal();
+            return;
+        }
+        self.active_terminal = (self.active_terminal as isize + delta).rem_euclid(n) as usize;
+        self.panel_visible = true;
+        self.panel_view = PanelView::Terminal;
+        self.focus = Focus::Terminal;
+    }
+
+    /// End terminal `index` and take its tab away.
+    pub fn kill_terminal(&mut self, index: usize) {
+        if index >= self.terminals.len() {
+            return;
+        }
+        self.terminals[index].kill();
+        self.terminals.remove(index);
+        if self.active_terminal > index || self.active_terminal >= self.terminals.len() {
+            self.active_terminal = self.active_terminal.saturating_sub(1).min(self.terminals.len().saturating_sub(1));
+        }
+        if self.terminals.is_empty() {
+            if self.focus == Focus::Terminal {
+                self.focus = Focus::Editor;
+            }
+            if self.panel_view == PanelView::Terminal {
+                self.panel_visible = false;
+            }
+        } else if self.focus == Focus::Terminal || self.panel_view == PanelView::Terminal {
+            self.focus = Focus::Terminal;
+        }
+    }
+
+    /// The mouse wheel over the terminal. `lines` is positive for up (older output). A full-screen
+    /// program such as a pager gets arrow keys instead, as in other terminals.
+    pub fn scroll_terminal(&mut self, lines: f32) {
+        let Some(terminal) = self.terminals.get_mut(self.active_terminal) else { return };
+        let mut step = lines.round() as isize;
+        if step == 0 && lines != 0.0 {
+            step = lines.signum() as isize;
+        }
+        if step == 0 {
+            return;
+        }
+        if terminal.alternate_screen() {
+            let arrow: &[u8] = if step > 0 { b"\x1b[A" } else { b"\x1b[B" };
+            for _ in 0..step.unsigned_abs().min(5) {
+                terminal.send(arrow);
+            }
+        } else {
+            terminal.scroll(step);
+        }
+    }
+
     fn terminal_key(&mut self, k: &Keystroke, pressed: &str, cx: &mut Context<Self>) -> bool {
         if let Resolution::Run { command, .. } = self.keymap.resolve("", pressed) {
             if terminal_passthrough(command) {
@@ -1506,14 +1562,26 @@ impl Workspace {
         }
         let m = k.modifiers;
         let Some(terminal) = self.terminals.get_mut(self.active_terminal) else { return false };
-        if pressed == "ctrl+v" || pressed == "ctrl+shift+v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                terminal.send(text.as_bytes());
+        // Shift+PageUp / PageDown / Home / End move through the history instead of reaching the shell.
+        let page = (terminal.size().0.saturating_sub(1) as isize).max(1);
+        match pressed {
+            "shift+pageup" => terminal.scroll(page),
+            "shift+pagedown" => terminal.scroll(-page),
+            "ctrl+shift+home" | "shift+home" => terminal.scroll(isize::MAX / 2),
+            "ctrl+shift+end" | "shift+end" => terminal.scroll_to_bottom(),
+            "ctrl+v" | "ctrl+shift+v" => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                    terminal.scroll_to_bottom();
+                    terminal.send(text.as_bytes());
+                }
             }
-            return true;
-        }
-        if let Some(bytes) = key_bytes(&k.key, m.control, m.alt, m.shift, k.key_char.as_deref()) {
-            terminal.send(&bytes);
+            _ => {
+                if let Some(bytes) = key_bytes(&k.key, m.control, m.alt, m.shift, k.key_char.as_deref()) {
+                    // Typing brings the live prompt back, like any terminal.
+                    terminal.scroll_to_bottom();
+                    terminal.send(&bytes);
+                }
+            }
         }
         true
     }

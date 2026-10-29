@@ -61,7 +61,7 @@ cargo build --release -p forge-app            # LTO; slow first build
   F10 / F11 / Shift+F11 step, Shift+F5 stops. The Debug panel shows variables, the call stack and the console.
   Uses `debugpy` from the project's `.venv`, your Python, or the copy bundled with VS Code's Python extension.
 - **Workbench:** right-click menus in the editor and explorer, explorer with new file/folder, rename (F2) and delete to the Recycle Bin, integrated
-  terminal (Ctrl+`), bottom panel, sidebar toggle (Ctrl+B), zoom, three themes, settings and keybindings JSON.
+  terminal (Ctrl+`; several at once, each with its own tab, New Terminal with Ctrl+Shift+`; 5000 lines of scrollback with the mouse wheel or Shift+PageUp/PageDown), bottom panel, sidebar toggle (Ctrl+B), zoom, three themes, settings and keybindings JSON.
 
 Every command has a VS Code id and is listed in the Command Palette with its shortcut. Syntax
 highlighting covers Rust, JSON, JavaScript, Python and TOML.

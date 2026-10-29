@@ -118,6 +118,9 @@ commands! {
     TogglePanel, "workbench.action.togglePanel", "Toggle Panel Visibility", ["ctrl+j"];
     ToggleTerminal, "workbench.action.terminal.toggleTerminal", "Toggle Terminal", ["ctrl+`"];
     NewTerminal, "workbench.action.terminal.new", "Create New Terminal", ["ctrl+shift+`"];
+    TerminalNext, "workbench.action.terminal.focusNext", "Terminal: Focus Next Terminal", [];
+    TerminalPrevious, "workbench.action.terminal.focusPrevious", "Terminal: Focus Previous Terminal", [];
+    TerminalKill, "workbench.action.terminal.kill", "Terminal: Kill the Active Terminal", [];
     ShowProblems, "workbench.actions.view.problems", "Show Problems", ["ctrl+shift+m"];
     FocusExplorer, "workbench.view.explorer", "Show Explorer", ["ctrl+shift+e"];
     SplitEditor, "workbench.action.splitEditor", "Split Editor", ["ctrl+\\"];

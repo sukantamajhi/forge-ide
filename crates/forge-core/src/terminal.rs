@@ -9,6 +9,9 @@ use std::thread;
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+/// Lines of output kept above the screen.
+pub const SCROLLBACK: usize = 5000;
+
 pub struct Terminal {
     parser: vt100::Parser,
     writer: Box<dyn Write + Send>,
@@ -21,6 +24,10 @@ pub struct Terminal {
     debug_tail: Vec<u8>,
     /// Keep the tab after its process exits so the output can still be read (a debugged program's terminal).
     pub keep_when_dead: bool,
+    /// What the terminal's tab is called: the program's name.
+    pub title: String,
+    /// How many lines of history there are above the screen.
+    history: usize,
 }
 
 /// A run of cells sharing one style. `None` colors mean the terminal default.
@@ -65,7 +72,8 @@ impl Terminal {
                 }
             }
         });
-        Ok(Self { parser: vt100::Parser::new(nz(rows), nz(cols), 2000), writer, output, master: pair.master, child, rows, cols, debug_tail: Vec::new(), keep_when_dead: false })
+        let title = Path::new(program).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| program.to_owned());
+        Ok(Self { parser: vt100::Parser::new(nz(rows), nz(cols), SCROLLBACK), writer, output, master: pair.master, child, rows, cols, debug_tail: Vec::new(), keep_when_dead: false, title, history: 0 })
     }
 
     /// Feed any pending shell output to the screen. True if anything arrived.
@@ -84,7 +92,46 @@ impl Terminal {
             }
             changed = true;
         }
+        if changed {
+            self.measure_history();
+        }
         changed
+    }
+
+    /// Learn how much history exists: ask for the farthest view and see where the parser stops.
+    fn measure_history(&mut self) {
+        let at = self.parser.screen().scrollback();
+        let screen = self.parser.screen_mut();
+        screen.set_scrollback(usize::MAX);
+        self.history = screen.scrollback();
+        screen.set_scrollback(at);
+    }
+
+    /// Move the view into the history: positive `lines` go back to older output, negative toward the prompt.
+    pub fn scroll(&mut self, lines: isize) {
+        let at = self.parser.screen().scrollback() as isize;
+        let next = (at + lines).clamp(0, self.history as isize) as usize;
+        self.parser.screen_mut().set_scrollback(next);
+    }
+
+    /// Show the live screen again.
+    pub fn scroll_to_bottom(&mut self) {
+        self.parser.screen_mut().set_scrollback(0);
+    }
+
+    /// `(lines scrolled back, lines of history)`.
+    pub fn scroll_position(&self) -> (usize, usize) {
+        (self.parser.screen().scrollback(), self.history)
+    }
+
+    /// A full-screen program (an editor, a pager) is running: it has no history of its own to scroll.
+    pub fn alternate_screen(&self) -> bool {
+        self.parser.screen().alternate_screen()
+    }
+
+    /// End the shell (and anything it started in the terminal).
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
     }
 
     /// The last raw bytes received, for diagnostics.
@@ -282,6 +329,35 @@ mod tests {
         assert!(term.contents().contains("forge-terminal-ok"), "screen was {:?}; raw tail {:?}", term.contents(), term.debug_tail());
         let found = (0..24).any(|r| term.row_runs(r).iter().any(|run| run.text.contains("forge-terminal-ok")));
         assert!(found, "row_runs exposes the same text");
+    }
+
+    /// More output than fits on the screen can be scrolled back to, and typing returns to the prompt.
+    #[test]
+    fn output_scrolls_back_into_history_and_returns_to_the_bottom() {
+        let (program, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/c".to_owned(), "for /L %i in (1,1,80) do @echo row-%i".to_owned()])
+        } else {
+            ("sh", vec!["-c".to_owned(), "i=1; while [ $i -le 80 ]; do echo row-$i; i=$((i+1)); done".to_owned()])
+        };
+        let mut term = Terminal::spawn(program, &args, &std::env::temp_dir(), 6, 40).expect("spawn");
+        let has = |term: &Terminal, row: &str| term.contents().lines().any(|l| l.trim() == row);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline && !has(&term, "row-80") {
+            term.pump();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(has(&term, "row-80"), "screen was {:?}", term.contents());
+        let (at, history) = term.scroll_position();
+        assert_eq!(at, 0);
+        assert!(history >= 70, "80 lines on a 6-row screen leave history, got {history}");
+        assert!(!has(&term, "row-1"));
+        term.scroll(isize::MAX / 2);
+        assert_eq!(term.scroll_position().0, history, "scrolling stops at the oldest line");
+        assert!(has(&term, "row-1"), "the first line is visible at the top of the history: {:?}", term.contents());
+        term.scroll(-3);
+        assert_eq!(term.scroll_position().0, history - 3);
+        term.scroll_to_bottom();
+        assert!(has(&term, "row-80"));
     }
 
     #[test]

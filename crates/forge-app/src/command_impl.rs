@@ -171,6 +171,9 @@ impl Workspace {
             TogglePanel => self.panel_visible = !self.panel_visible,
             ToggleTerminal => self.toggle_terminal(),
             NewTerminal => self.new_terminal(),
+            TerminalNext => self.switch_terminal(1),
+            TerminalPrevious => self.switch_terminal(-1),
+            TerminalKill => self.kill_terminal(self.active_terminal),
             ShowProblems => {
                 self.panel_view = PanelView::Problems;
                 self.panel_visible = true;
