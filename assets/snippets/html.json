@@ -55,77 +55,6 @@
     ],
     "description": "An inline style"
   },
-  "div": {
-    "prefix": "div",
-    "body": [
-      "<div${1: class=\"${2:name}\"}>",
-      "\t$0",
-      "</div>"
-    ],
-    "description": "A div"
-  },
-  "anchor": {
-    "prefix": "a",
-    "body": [
-      "<a href=\"${1:#}\">${2:text}</a>"
-    ],
-    "description": "A link"
-  },
-  "image": {
-    "prefix": "img",
-    "body": [
-      "<img src=\"${1:path}\" alt=\"${2:description}\">"
-    ],
-    "description": "An image"
-  },
-  "unordered list": {
-    "prefix": "ul",
-    "body": [
-      "<ul>",
-      "\t<li>$0</li>",
-      "</ul>"
-    ],
-    "description": "A list"
-  },
-  "ordered list": {
-    "prefix": "ol",
-    "body": [
-      "<ol>",
-      "\t<li>$0</li>",
-      "</ol>"
-    ],
-    "description": "An ordered list"
-  },
-  "table": {
-    "prefix": "table",
-    "body": [
-      "<table>",
-      "\t<thead>",
-      "\t\t<tr><th>${1:Heading}</th></tr>",
-      "\t</thead>",
-      "\t<tbody>",
-      "\t\t<tr><td>$0</td></tr>",
-      "\t</tbody>",
-      "</table>"
-    ],
-    "description": "A table"
-  },
-  "form": {
-    "prefix": "form",
-    "body": [
-      "<form action=\"${1:#}\" method=\"${2:post}\">",
-      "\t$0",
-      "</form>"
-    ],
-    "description": "A form"
-  },
-  "input": {
-    "prefix": "input",
-    "body": [
-      "<input type=\"${1:text}\" name=\"${2:name}\" id=\"${3:id}\"${4: placeholder=\"$5\"}>"
-    ],
-    "description": "An input"
-  },
   "label input": {
     "prefix": "labelinput",
     "body": [
@@ -133,38 +62,6 @@
       "<input type=\"${3:text}\" id=\"${1:id}\" name=\"${4:name}\">"
     ],
     "description": "A label with an input"
-  },
-  "button": {
-    "prefix": "button",
-    "body": [
-      "<button type=\"${1:button}\">${2:Click}</button>"
-    ],
-    "description": "A button"
-  },
-  "select": {
-    "prefix": "select",
-    "body": [
-      "<select name=\"${1:name}\">",
-      "\t<option value=\"${2:value}\">${3:Label}</option>",
-      "</select>"
-    ],
-    "description": "A select"
-  },
-  "textarea": {
-    "prefix": "textarea",
-    "body": [
-      "<textarea name=\"${1:name}\" rows=\"${2:4}\"></textarea>"
-    ],
-    "description": "A textarea"
-  },
-  "nav": {
-    "prefix": "nav",
-    "body": [
-      "<nav>",
-      "\t<a href=\"${1:#}\">${2:Home}</a>",
-      "</nav>"
-    ],
-    "description": "A nav"
   },
   "comment": {
     "prefix": "comment",

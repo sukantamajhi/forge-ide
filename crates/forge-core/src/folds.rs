@@ -24,6 +24,16 @@ impl Folds {
         &self.regions
     }
 
+    /// The start lines of the regions that contain `top` but begin above it, outermost first, at most `max` of them
+    /// (the innermost ones when there are more): the scopes "sticky scroll" keeps at the top of the editor.
+    pub fn enclosing_starts(&self, top: usize, max: usize) -> Vec<usize> {
+        let mut starts: Vec<usize> = self.regions().iter().filter(|(start, end)| *start < top && *end >= top).map(|(start, _)| *start).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        let skip = starts.len().saturating_sub(max);
+        starts.split_off(skip)
+    }
+
     pub fn has_region_at(&self, line: usize) -> bool {
         self.regions.iter().any(|r| r.0 == line)
     }

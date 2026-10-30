@@ -521,8 +521,9 @@ impl Workspace {
                     }
                 }
             }
-            MenuAction::NewFile => self.prompt_new_entry(false),
-            MenuAction::NewFolder => self.prompt_new_entry(true),
+            // The item the menu was opened on decides where it goes, not whatever is selected now.
+            MenuAction::NewFile => self.prompt_new_entry_at(target, false),
+            MenuAction::NewFolder => self.prompt_new_entry_at(target, true),
             MenuAction::RenameEntry => self.prompt_rename_entry(),
             MenuAction::OpenInTerminal => {
                 if let Some((path, is_dir)) = target {

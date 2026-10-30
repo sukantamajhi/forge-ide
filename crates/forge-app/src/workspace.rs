@@ -83,6 +83,8 @@ pub(crate) struct Doc {
     /// Lines changed relative to HEAD, and the `(revision, git epoch)` they were computed for.
     pub gutter: Vec<LineChange>,
     pub gutter_key: (u64, u64),
+    /// Bracket nesting depth at the start of each line, and the `revision` it was worked out for.
+    pub bracket_depths: std::cell::RefCell<(u64, std::rc::Rc<Vec<i32>>)>,
     /// The file began with a UTF-8 byte-order mark. It is kept out of the text (language
     /// servers choke on it) and written back on save.
     pub bom: bool,
@@ -129,11 +131,30 @@ impl Doc {
             diff: false,
             gutter: Vec::new(),
             gutter_key: (u64::MAX, 0),
+            bracket_depths: std::cell::RefCell::new((u64::MAX, std::rc::Rc::new(Vec::new()))),
             bom: false,
             ext_lang: None,
             tm: None,
             ext_page: None,
         }
+    }
+
+    /// Not worth colouring: a page, not text.
+    pub fn readonly_text_only(&self) -> bool {
+        self.ext_page.is_some()
+    }
+
+    /// Bracket nesting at the start of every line, kept until the text changes. `None` for very large files.
+    pub fn bracket_depths(&self) -> Option<std::rc::Rc<Vec<i32>>> {
+        if self.buffer.len_chars() > 2_000_000 {
+            return None;
+        }
+        let mut cache = self.bracket_depths.borrow_mut();
+        if cache.0 != self.revision || cache.1.len() < self.buffer.len_lines() {
+            let depths = forge_text::brackets::depths_at_line_starts(self.buffer.rope(), self.language.and_then(|l| l.line_comment()), self.language == Some(Language::Rust));
+            *cache = (self.revision, std::rc::Rc::new(depths));
+        }
+        Some(cache.1.clone())
     }
 
     /// The tab for an extension's page. It has no text; the tab is named after the extension.

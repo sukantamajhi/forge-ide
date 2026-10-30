@@ -269,7 +269,18 @@ impl Workspace {
         let Some(doc) = self.active_doc() else { return };
         let caret = view.selections.primary().head;
         let word = doc.buffer.rope().slice(identifier_start(&doc.buffer, caret)..caret).to_string();
-        let items = self.snippet_completion_items(&word);
+        let mut items = self.snippet_completion_items(&word);
+        if self.settings.word_suggestions && word.chars().count() >= 2 && doc.buffer.len_chars() <= 300_000 {
+            let text = doc.buffer.text();
+            items.extend(forge_core::fuzzy::words_with_prefix(&text, &word, 12).into_iter().map(|label| CompletionItem {
+                label,
+                detail: Some("word".to_owned()),
+                kind: Some(1),
+                sort_text: None,
+                edit: None,
+                insert_text: None,
+            }));
+        }
         self.completion = (!items.is_empty()).then(|| CompletionState::new(items));
     }
 

@@ -59,9 +59,13 @@ impl Workspace {
             DeleteLeft => {
                 self.mutate(cx, move |b, s| b.backspace(s, style, auto_close));
                 self.merge_typing();
+                self.sync_paired_tag(cx);
                 self.refresh_completion_after_edit(None, true);
             }
-            DeleteRight => self.mutate(cx, |b, s| b.delete_forward(s)),
+            DeleteRight => {
+                self.mutate(cx, |b, s| b.delete_forward(s));
+                self.sync_paired_tag(cx);
+            }
             DeleteWordLeft => self.mutate(cx, |b, s| b.delete_word(s, false)),
             DeleteWordRight => self.mutate(cx, |b, s| b.delete_word(s, true)),
             InsertNewline => {
@@ -71,7 +75,7 @@ impl Workspace {
                 self.signature = None;
             }
             InsertTab => {
-                if !self.snippet_tab(false, cx) {
+                if !self.snippet_tab(false, cx) && !self.try_emmet(cx) {
                     self.mutate(cx, move |b, s| b.insert_tab(s, style));
                 }
             }
@@ -541,6 +545,8 @@ impl Workspace {
         } else {
             self.last_typing = None;
         }
+        self.after_type_markup(text, cx);
+        self.sync_paired_tag(cx);
         self.refresh_completion_after_edit(Some(text), false);
         if text == "(" || text == "," {
             self.request_signature();

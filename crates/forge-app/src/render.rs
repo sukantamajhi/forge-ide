@@ -39,6 +39,30 @@ struct LineCtx {
     focused: bool,
     breakpoints: std::collections::BTreeSet<usize>,
     debug_line: Option<usize>,
+    /// Bracket nesting at each line's start, when brackets are coloured.
+    depths: Option<std::rc::Rc<Vec<i32>>>,
+    line_comment: Option<&'static str>,
+    lifetimes: bool,
+}
+
+/// Give the bytes `range` of a line the colour `color`, splitting any highlight run it cuts across.
+fn paint_range(runs: &mut Vec<(Range<usize>, HighlightStyle)>, range: Range<usize>, color: u32) {
+    let mut out: Vec<(Range<usize>, HighlightStyle)> = Vec::with_capacity(runs.len() + 3);
+    for (r, style) in runs.drain(..) {
+        if r.end <= range.start || r.start >= range.end {
+            out.push((r, style));
+            continue;
+        }
+        if r.start < range.start {
+            out.push((r.start..range.start, style));
+        }
+        if r.end > range.end {
+            out.push((range.end..r.end, style));
+        }
+    }
+    out.push((range, HighlightStyle { color: Some(rgb(color).into()), ..Default::default() }));
+    out.sort_by_key(|(r, _)| r.start);
+    *runs = out;
 }
 
 /// The small coloured file-type badge shown before a file's name.
@@ -308,21 +332,102 @@ impl Workspace {
         let scroll = view.scroll.clone();
         let focused = g == self.focused_group;
         let minimap = self.render_minimap(g, count, cx);
+        let sticky = self.render_sticky(g, cx);
         let preview = self.render_markdown_preview(g, cx);
         div().size_full().flex().flex_row().child(
-            div().flex_1().min_w_0().h_full().child(
-                uniform_list(
-                    ("editor", g),
-                    count,
-                    cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
+            div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .relative()
+                .child(
+                    uniform_list(
+                        ("editor", g),
+                        count,
+                        cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
+                    )
+                    .track_scroll(scroll)
+                    .size_full()
+                    .when(!focused, |d| d.opacity(0.92)),
                 )
-                .track_scroll(scroll)
-                .size_full()
-                .when(!focused, |d| d.opacity(0.92)),
-            ),
+                .children(sticky),
         )
         .children(preview)
         .children(minimap)
+    }
+
+    /// Sticky scroll: the lines that open the scopes the first visible line is inside, pinned over the top of the editor.
+    fn render_sticky(&self, g: usize, cx: &mut Context<Self>) -> Option<Div> {
+        if !self.settings.sticky_scroll {
+            return None;
+        }
+        let view = self.groups.get(g)?.views.get(self.groups[g].active)?;
+        let doc = &self.docs[view.doc];
+        if doc.diff || doc.ext_page.is_some() || view.wrap.is_some() {
+            return None;
+        }
+        let line_h = self.line_height();
+        let offset_y = f32::from(view.scroll.0.borrow().base_handle.offset().y);
+        if offset_y >= 0.0 {
+            return None;
+        }
+        let row = (-offset_y / line_h).floor() as usize;
+        let total = doc.buffer.len_lines();
+        let top = match view.folds.visible_lines(total) {
+            Some(v) => *v.get(row)?,
+            None => row,
+        };
+        let starts = view.folds.enclosing_starts(top, self.settings.sticky_max_lines);
+        if starts.is_empty() {
+            return None;
+        }
+        let t = &self.theme;
+        let rows: Vec<gpui::Stateful<Div>> = starts
+            .iter()
+            .map(|&line| {
+                let text = doc.buffer.line(line);
+                let (shown, byte_of_col) = expand_tabs_mapped(text.trim_end());
+                let spans = match (doc.syntax.as_ref(), doc.tm.as_ref()) {
+                    (Some(s), _) => s.highlight_lines(doc.buffer.rope(), line..line + 1),
+                    (None, Some(tm)) => tm.highlight_lines(doc.buffer.rope(), line..line + 1),
+                    (None, None) => Vec::new(),
+                };
+                let runs: Vec<(Range<usize>, HighlightStyle)> = spans
+                    .first()
+                    .map(|spans| {
+                        spans
+                            .iter()
+                            .filter(|s| s.end_col < byte_of_col.len())
+                            .map(|s| (byte_of_col[s.start_col]..byte_of_col[s.end_col], HighlightStyle { color: Some(rgb(t.syntax_color(s.class)).into()), ..Default::default() }))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                div()
+                    .id(("sticky", g * 100_000 + line))
+                    .flex()
+                    .flex_row()
+                    .w_full()
+                    .h(px(line_h))
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(t.tab_active)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            // Clicking a pinned line goes to it.
+                            cx.stop_propagation();
+                            this.focused_group = g;
+                            if let Some(doc) = this.groups[g].views.get(this.groups[g].active).map(|v| v.doc) {
+                                let offset = this.docs[doc].buffer.line_start(line);
+                                this.place_caret_offset(offset);
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(div().w(px(GUTTER_WIDTH)).flex_none())
+                    .child(div().pl(px(TEXT_PAD)).whitespace_nowrap().overflow_hidden().child(StyledText::new(shown).with_highlights(runs)))
+            })
+            .collect();
+        Some(div().absolute().top_0().left_0().right_0().bg(rgb(t.sidebar)).border_b_1().border_color(rgb(t.border)).shadow_sm().children(rows))
     }
 
     fn render_lines(&self, g: usize, range: Range<usize>) -> Vec<Div> {
@@ -354,7 +459,10 @@ impl Workspace {
             (Vec::new(), None)
         };
         let (breakpoints, debug_line) = self.debug_marks(&doc.path);
-        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused, breakpoints, debug_line };
+        let depths = (self.settings.bracket_colors && !doc.diff && !doc.readonly_text_only()).then(|| doc.bracket_depths()).flatten();
+        let line_comment = doc.language.and_then(|l| l.line_comment());
+        let lifetimes = doc.language == Some(forge_syntax::Language::Rust);
+        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused, breakpoints, debug_line, depths, line_comment, lifetimes };
         rows.into_iter().map(|row| self.render_line(view, row.line, &ctx, row)).collect()
     }
 
@@ -383,11 +491,22 @@ impl Workspace {
             .unwrap_or_default();
         // Generated diffs are colored by their line prefix instead of by syntax.
         let diff_style = if doc.diff { diff_line_style(t, &text) } else { None };
-        let runs = match diff_style {
+        let mut runs = match diff_style {
             Some((color, _)) if !shown.is_empty() => vec![(0..shown.len(), HighlightStyle { color: Some(rgb(color).into()), ..Default::default() })],
             _ if doc.diff => Vec::new(),
             _ => runs,
         };
+        // Brackets take a colour from how deeply they nest.
+        if let Some(depths) = &ctx.depths {
+            let palette: [u32; 3] = if (t.bg >> 16) & 0xff > 0x80 { [0xb8860b, 0x9b30a8, 0x0b6bcb] } else { [0xffd700, 0xda70d6, 0x179fff] };
+            let (found, _) = forge_text::brackets::line_brackets(&text, depths.get(line).copied().unwrap_or(0), ctx.line_comment, ctx.lifetimes);
+            for b in found {
+                if b.col + 1 < byte_of_col.len() {
+                    let color = if b.unmatched { t.error } else { palette[b.depth.rem_euclid(3) as usize] };
+                    paint_range(&mut runs, byte_of_col[b.col]..byte_of_col[b.col + 1], color);
+                }
+            }
+        }
 
         let mut layers: Vec<Div> = Vec::new();
         let rect = |from: usize, cells: usize, color: u32| div().absolute().top_0().left(x_of(from)).w(char_w * cells as f32).h(line_h).bg(rgb(color));

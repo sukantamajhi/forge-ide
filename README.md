@@ -142,6 +142,22 @@ cargo build --release -p forge-app            # LTO; slow first build
     **Focus on Outline View** opens the symbols picker for the file (the same list as Go to Symbol in Editor), not a permanent tree.
   - **Images and binary files:** PNG, JPEG, GIF, BMP, WebP and ICO files open in a viewer over the editor (Escape or Close to leave).
     Any other file that is not UTF-8 opens as a read-only hex dump of its first 256 KiB.
+- **Markup and CSS help:**
+  - **Auto closing tags** (HTML, XML, JSX, TSX, and `.vue` / `.svelte` when an extension names them): typing `>` after `<div class="x"` adds `</div>` with the
+    caret between; `</` finishes with the innermost open tag; void tags (`br`, `img`...), self-closing tags and generics like `Array<string>` get nothing.
+    `"html.autoClosingTags": false` turns it off.
+  - **Auto rename tags:** with the caret in a tag's name, the matching opening or closing tag gets the same name as you type or delete
+    (`"editor.linkedEditing": false` turns it off). Files over 400,000 characters are skipped.
+  - **Emmet:** type an abbreviation and press Tab in HTML, JSX / TSX or inside a CSS rule. HTML: `ul>li.item$*3`, `div#main.box>p{text}+a`, `(dl>dt+dd)*2`, `a[href=x]`, `^` to
+    climb, `$` numbering, implicit tags (`ul>.x` makes `li`), `!` for an HTML5 page; JSX writes `className` and `<br />`. CSS: `m10-20`, `w100p`, `mt-5`, `m0-a`, `fz1.5r`, `df`, `jcsb`, `aic`, `c#f00`
+    and about sixty more. A bare word expands only if it is a real tag name (so `return` + Tab stays a Tab). `"emmet.triggerExpansionOnTab": false` turns it off. Not supported: filters
+    (`|c`), `@` numbering modifiers, `lorem`, and the less common CSS abbreviations.
+- **Reading code:**
+  - **Bracket pair colouring:** `()` `[]` `{}` are coloured by nesting depth (three colours, red for a stray closer). Brackets inside strings and `//` / `#` comments are skipped; a block comment
+    or a multi-line string can confuse it. `"editor.bracketPairColorization.enabled": false` turns it off.
+  - **Sticky scroll:** the lines that open the scopes you are inside (function, impl, block) stay pinned at the top of the editor, up to `"editor.stickyScroll.maxLineCount"` (5); click one to go
+    to it. Scopes come from the folding regions. Off with `"editor.stickyScroll.enabled": false`, and not shown with word wrap on.
+  - **Word suggestions:** with no language server, typing two letters offers words already in the file (most frequent first), below any matching snippets. Off with `"editor.wordBasedSuggestions": false`.
 - **Snippets** (VS Code's format):
   - **In the completion popup.** As you type a word that starts a snippet's prefix, the popup lists it ("snippet: description") along
     with language-server items; Enter or Tab inserts it. Tab right after a full prefix still expands it. `"editor.snippetSuggestions": "none"` turns the listing off.
@@ -154,7 +170,7 @@ cargo build --release -p forge-app            # LTO; slow first build
     `${VAR:default}` uses the default when the variable is empty.
   - **Transforms:** `${TM_FILENAME_BASE/(.*)/${1:/upcase}/}`, with `/g` and `/i`, the `$1` and `${1:/downcase | capitalize | pascalcase | camelcase}`
     forms and `${1:+if}` / `${1:-else}` / `${1:?if:else}`. A transform is worked out once when the snippet is inserted; it does not follow later typing.
-  - **Built in:** Forge ships about 290 snippets, kept in `assets/snippets` and built into the program: for Rust, Python,
+  - **Built in:** Forge ships about 280 snippets, kept in `assets/snippets` and built into the program: for Rust, Python,
     JavaScript / TypeScript (with React hooks and components for `.jsx` / `.tsx`), HTML, CSS, Markdown, Go, C, C++, Java, C#, PHP, Ruby, Lua, SQL,
     shell, YAML (GitHub Actions, Compose, Kubernetes), TOML (Cargo, pyproject), JSON (`package`, `tsconfig`, `launch`), Dockerfile and Makefile, plus
     ones for every language (`todo`, `fixme`, `note`, `date`, `datetime`, `uuid`, `lorem`, `clip`, `region`...). Type `fn`, `def`, `log`, `class`, `iferr`, `rfc`,
@@ -354,9 +370,9 @@ run yet**: that is the next step and needs you to choose which ones.
 - **Workbench:** multi-root workspaces (so no Add / Remove Folder from Workspace), drag-and-drop of tabs or text (files and folders in the Explorer can be dragged), restoring
   unsaved edits or a second editor group's tabs after a restart, Alt+letter access keys for the menu bar, Share / Open Changes /
   Open on Remote / Timeline / Add to Chat entries in the Explorer menus.
-- **Language features:** sticky scroll, inlay hints, semantic highlighting, Peek Definition / References, Call Hierarchy, Type
+- **Language features:** inlay hints, semantic highlighting, Peek Definition / References, Call Hierarchy, Type
   Hierarchy, Code Lens, Linked Editing, workspace symbol search (Ctrl+T), a permanent Outline view (only a symbol picker),
-  bookmarks, a Search Editor, Emmet, spell checking.
+  bookmarks, a Search Editor, spell checking.
 - **Not verified against a running server:** Format Selection and Organize Imports (they build and send the requests, but were
   not tried with a language server); mouse-driven checks of some hover tooltips (verified by keyboard replay only); Cut / Copy /
   Paste in the Explorer (unit-tested, not tried by mouse); dropping files from Windows Explorer into the Explorer (the drop is

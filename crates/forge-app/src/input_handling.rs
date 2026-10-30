@@ -1654,6 +1654,16 @@ impl Workspace {
         true
     }
 
+    /// New File / New Folder for the item a menu was opened on: inside it when it is a folder, next to it when it is a file.
+    pub fn prompt_new_entry_at(&mut self, target: Option<(PathBuf, bool)>, folder: bool) {
+        let dir = match target {
+            Some((path, true)) => path,
+            Some((path, false)) => path.parent().map(Path::to_path_buf).unwrap_or_else(|| self.root().to_path_buf()),
+            None => return self.prompt_new_entry(folder),
+        };
+        self.open_overlay(OverlayKind::NewEntry { dir, folder }, "");
+    }
+
     pub fn prompt_new_entry(&mut self, folder: bool) {
         let dir = match self.selected_entry_path() {
             Some((path, true)) => path,

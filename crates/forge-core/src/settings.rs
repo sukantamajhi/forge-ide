@@ -85,6 +85,19 @@ pub struct Settings {
     pub snippet_suggestions: bool,
     /// `editor.builtInSnippets`: the snippets that come with Forge (for every language).
     pub builtin_snippets: bool,
+    /// `html.autoClosingTags`: typing `>` or `</` in markup types the closing tag.
+    pub auto_closing_tags: bool,
+    /// `editor.linkedEditing`: renaming a tag renames its partner.
+    pub linked_editing: bool,
+    /// `emmet.triggerExpansionOnTab`: Tab expands an Emmet abbreviation.
+    pub emmet: bool,
+    /// `editor.bracketPairColorization.enabled`: brackets are coloured by how deeply they nest.
+    pub bracket_colors: bool,
+    /// `editor.stickyScroll.enabled` and `editor.stickyScroll.maxLineCount`: the scopes you are inside stay at the top.
+    pub sticky_scroll: bool,
+    /// `editor.wordBasedSuggestions`: with no language server, complete from words already in the file.
+    pub word_suggestions: bool,
+    pub sticky_max_lines: usize,
     /// `"[language]": { ... }` blocks, keyed by VS Code language id (`rust`, `python`, ...).
     pub languages: std::collections::BTreeMap<String, LangOverrides>,
     /// `ai.model` in settings.json: the OpenAI model that writes commit messages.
@@ -119,6 +132,13 @@ impl Default for Settings {
             confirm_drag_and_drop: true,
             snippet_suggestions: true,
             builtin_snippets: true,
+            auto_closing_tags: true,
+            linked_editing: true,
+            emmet: true,
+            bracket_colors: true,
+            sticky_scroll: true,
+            word_suggestions: true,
+            sticky_max_lines: 5,
             languages: Default::default(),
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
             ai_provider: crate::ai::Provider::default(),
@@ -243,6 +263,27 @@ impl Settings {
         }
         if let Some(v) = map.get("editor.snippetSuggestions").and_then(Value::as_str) {
             s.snippet_suggestions = v != "none";
+        }
+        if let Some(v) = map.get("html.autoClosingTags").and_then(Value::as_bool) {
+            s.auto_closing_tags = v;
+        }
+        if let Some(v) = map.get("emmet.triggerExpansionOnTab").and_then(Value::as_bool) {
+            s.emmet = v;
+        }
+        if let Some(v) = map.get("editor.bracketPairColorization.enabled").and_then(Value::as_bool) {
+            s.bracket_colors = v;
+        }
+        if let Some(v) = map.get("editor.wordBasedSuggestions").and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s != "off"))) {
+            s.word_suggestions = v;
+        }
+        if let Some(v) = map.get("editor.stickyScroll.enabled").and_then(Value::as_bool) {
+            s.sticky_scroll = v;
+        }
+        if let Some(v) = map.get("editor.stickyScroll.maxLineCount").and_then(Value::as_u64) {
+            s.sticky_max_lines = (v as usize).clamp(1, 10);
+        }
+        if let Some(v) = map.get("editor.linkedEditing").and_then(Value::as_bool) {
+            s.linked_editing = v;
         }
         if let Some(v) = map.get("editor.builtInSnippets").and_then(Value::as_bool) {
             s.builtin_snippets = v;
@@ -429,6 +470,9 @@ mod tests {
         assert!(Settings::default().confirm_drag_and_drop);
         assert!(Settings::default().snippet_suggestions && Settings::default().builtin_snippets);
         assert!(!Settings::parse(r#"{ "editor.builtInSnippets": false }"#).builtin_snippets);
+        assert!(Settings::default().auto_closing_tags && Settings::default().linked_editing);
+        let off = Settings::parse(r#"{ "html.autoClosingTags": false, "editor.linkedEditing": false }"#);
+        assert!(!off.auto_closing_tags && !off.linked_editing);
         assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);
         assert!(Settings::parse(r#"{ "editor.snippetSuggestions": "top" }"#).snippet_suggestions);
         let f = Settings::parse(r#"{ "editor.fontFamily": " JetBrains Mono ", "workbench.fontFamily": "Inter" }"#);

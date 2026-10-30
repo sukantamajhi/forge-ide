@@ -73,12 +73,41 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
 }
 
 /// Indices of `items` matching `query`, best first (stable for ties), at most `limit`.
+/// Words of at least three chars in `text` that start with `prefix` (case-insensitively) and are longer than it,
+/// most frequent first, then alphabetical, at most `limit`. The word being typed (exactly `prefix`) is not offered.
+pub fn words_with_prefix(text: &str, prefix: &str, limit: usize) -> Vec<String> {
+    let prefix_lower = prefix.to_lowercase();
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for word in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
+        if word.chars().count() >= 3 && word.chars().count() > prefix.chars().count() && word.to_lowercase().starts_with(&prefix_lower) {
+            *counts.entry(word).or_default() += 1;
+        }
+    }
+    let mut words: Vec<(&str, usize)> = counts.into_iter().collect();
+    words.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    words.into_iter().take(limit).map(|(w, _)| w.to_owned()).collect()
+}
+
 pub fn rank<S: AsRef<str>>(query: &str, items: &[S], limit: usize) -> Vec<(usize, FuzzyMatch)> {
     let mut hits: Vec<(usize, FuzzyMatch)> =
         items.iter().enumerate().filter_map(|(i, s)| fuzzy_match(query, s.as_ref()).map(|m| (i, m))).collect();
     hits.sort_by(|a, b| b.1.score.cmp(&a.1.score).then(a.0.cmp(&b.0)));
     hits.truncate(limit);
     hits
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::words_with_prefix;
+
+    #[test]
+    fn words_are_offered_by_frequency_and_never_the_typed_one() {
+        let text = "render render render_line renderer rend ren Render xrender";
+        assert_eq!(words_with_prefix(text, "ren", 10), vec!["render", "Render", "rend", "render_line", "renderer"]);
+        assert_eq!(words_with_prefix(text, "render_", 10), vec!["render_line"]);
+        assert_eq!(words_with_prefix(text, "REND", 2), vec!["render", "Render"]);
+        assert!(words_with_prefix(text, "zzz", 10).is_empty());
+    }
 }
 
 #[cfg(test)]

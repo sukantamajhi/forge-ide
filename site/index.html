@@ -1,275 +1,430 @@
 <!doctype html>
 <html lang="en">
+
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Forge: a native code editor written in Rust</title>
-  <meta name="description" content="Forge is a GPU-rendered code editor written in Rust on GPUI. VS Code habits, Open VSX extensions, built-in Git and debugging. Free and open source (MIT). Windows for now.">
-  <meta name="theme-color" content="#f7f8fa">
-  <meta property="og:title" content="Forge: a native code editor written in Rust">
-  <meta property="og:description" content="GPU-rendered, written in Rust on GPUI. Installs VS Code extensions from Open VSX. Free and open source.">
-  <meta property="og:type" content="website">
-  <link rel="icon" href="assets/forge-logo.svg" type="image/svg+xml">
-  <link rel="icon" href="assets/favicon.ico" sizes="any">
-  <link rel="preload" href="assets/fonts/geist-600.ttf" as="font" type="font/ttf" crossorigin>
-  <link rel="stylesheet" href="css/style.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Forge: a native code editor written in Rust</title>
+    <meta name="description"
+        content="Forge is a GPU-rendered code editor written in Rust on GPUI. VS Code habits, Open VSX extensions, built-in Git and debugging. Free and open source (MIT). Windows for now.">
+    <meta name="theme-color" content="#f7f8fa">
+    <meta property="og:title" content="Forge: a native code editor written in Rust">
+    <meta property="og:description"
+        content="GPU-rendered, written in Rust on GPUI. Installs VS Code extensions from Open VSX. Free and open source.">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="assets/forge-logo.svg" type="image/svg+xml">
+    <link rel="icon" href="assets/favicon.ico" sizes="any">
+    <link rel="preload" href="assets/fonts/geist-600.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="stylesheet" href="css/style.css">
 </head>
+
 <body>
-  <a class="skip" href="#features">Skip to content</a>
+    <a class="skip" href="#features">Skip to content</a>
 
-  <header class="nav">
-    <div class="nav-in">
-      <a class="brand" href="#top" aria-label="Forge, home"><img src="assets/forge-logo.svg" alt="" width="30" height="30"><span>Forge</span></a>
-      <nav aria-label="Main">
-        <a href="#features">Features</a>
-        <a href="#extensions">Extensions</a>
-        <a href="#status">Status</a>
-        <a href="https://github.com/sukantamajhi/forge-ide" rel="noopener">GitHub</a>
-      </nav>
-      <a class="btn btn-ink btn-sm" href="#get">Get Forge</a>
-    </div>
-  </header>
-
-  <main id="top">
-    <section class="hero">
-      <div class="wrap">
-        <div class="hero-head">
-          <h1>A native code editor, written in&nbsp;Rust.</h1>
-          <div class="hero-side">
-            <p>Forge draws every pixel on the GPU with GPUI, edits the way VS Code taught you to, and installs your extensions from Open VSX. Free and open source. Windows for now.</p>
-            <div class="cta">
-              <a class="btn btn-ink" href="https://github.com/sukantamajhi/forge-ide/releases/latest" rel="noopener">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                Download for Windows
-              </a>
-              <a class="btn btn-line" href="https://github.com/sukantamajhi/forge-ide" rel="noopener">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1 5.9L12 17l-5.2 2.8 1-5.9-4.3-4.2 5.9-.8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-                Star on GitHub
-              </a>
-              <a class="link-arrow" href="#get">Join early access <span aria-hidden="true">&rarr;</span></a>
-            </div>
-          </div>
+    <header class="nav">
+        <div class="nav-in">
+            <a class="brand" href="#top" aria-label="Forge, home"><img src="assets/forge-logo.svg" alt="" width="30"
+                    height="30"><span>Forge</span></a>
+            <nav aria-label="Main">
+                <a href="#features">Features</a>
+                <a href="#extensions">Extensions</a>
+                <a href="#status">Status</a>
+                <a href="https://github.com/sukantamajhi/forge-ide" rel="noopener">GitHub</a>
+            </nav>
+            <a class="btn btn-ink btn-sm" href="#get">Get Forge</a>
         </div>
+    </header>
 
-        <div class="stage">
-          <div class="stage-bar">
-            <p>This is the editor. Try its three built-in themes.</p>
-            <div class="seg" role="group" aria-label="Editor theme">
-              <button type="button" data-theme="dark" aria-pressed="true">Forge Dark</button>
-              <button type="button" data-theme="light" aria-pressed="false">Forge Light</button>
-              <button type="button" data-theme="hc" aria-pressed="false">High Contrast</button>
-            </div>
-          </div>
-
-          <div class="win" data-theme="dark" role="img" aria-label="Illustration of the Forge window: a file explorer, three tabs, Rust code with a blinking caret, a minimap and a status bar.">
-            <div class="win-bar"><span class="win-title"><img src="assets/forge-logo.svg" alt="" width="14" height="14"> Forge</span><span class="win-ctl"><i></i><i></i><i></i></span></div>
-            <div class="win-main">
-              <aside class="win-side">
-                <div class="side-tabs">
-                  <svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 3h7l4 4v14H7zM14 3v4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
-                  <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m15 15 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                  <span class="badge-wrap"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9c0 4-6 3-12 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><b>1</b></span>
-                  <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM15 13h5v5h-5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    <main id="top">
+        <section class="hero">
+            <div class="wrap">
+                <div class="hero-head">
+                    <h1>A native code editor, written in&nbsp;Rust.</h1>
+                    <div class="hero-side">
+                        <p>Forge draws every pixel on the GPU with GPUI, edits the way VS Code taught you to, and
+                            installs your extensions from Open VSX. Free and open source. Windows for now.</p>
+                        <div class="cta">
+                            <a class="btn btn-ink" href="https://github.com/sukantamajhi/forge-ide/releases/latest"
+                                rel="noopener">
+                                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                    <path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none"
+                                        stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                </svg>
+                                Download for Windows
+                            </a>
+                            <a class="btn btn-line" href="https://github.com/sukantamajhi/forge-ide" rel="noopener">
+                                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                    <path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1 5.9L12 17l-5.2 2.8 1-5.9-4.3-4.2 5.9-.8z"
+                                        fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+                                </svg>
+                                Star on GitHub
+                            </a>
+                            <a class="link-arrow" href="#get">Join early access <span
+                                    aria-hidden="true">&rarr;</span></a>
+                        </div>
+                    </div>
                 </div>
-                <ul class="tree" aria-hidden="true">
-                  <li class="dir">forge-app</li>
-                  <li class="dir l2">src</li>
-                  <li class="l3">ext_view.rs</li>
-                  <li class="l3">markdown_view.rs</li>
-                  <li class="l3 on">scroll.rs</li>
-                  <li class="l3">settings_view.rs</li>
-                  <li class="l3">workspace.rs</li>
-                  <li class="l2">Cargo.toml</li>
-                </ul>
-              </aside>
-              <div class="win-edit">
-                <div class="tabs" aria-hidden="true">
-                  <span class="tab">ext_view.rs <u>x</u></span>
-                  <span class="tab on">scroll.rs <u>x</u></span>
-                  <span class="tab"><svg viewBox="0 0 24 24" width="11" height="11"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM15 13h5v5h-5z" fill="none" stroke="currentColor" stroke-width="2"/></svg> Language Support for Java <u>x</u></span>
+
+                <div class="stage">
+                    <div class="stage-bar">
+                        <p>This is the editor. Try its three built-in themes.</p>
+                        <div class="seg" role="group" aria-label="Editor theme">
+                            <button type="button" data-theme="dark" aria-pressed="true">Forge Dark</button>
+                            <button type="button" data-theme="light" aria-pressed="false">Forge Light</button>
+                            <button type="button" data-theme="hc" aria-pressed="false">High Contrast</button>
+                        </div>
+                    </div>
+
+                    <div class="win" data-theme="dark" role="img"
+                        aria-label="Illustration of the Forge window: a file explorer, three tabs, Rust code with a blinking caret, a minimap and a status bar.">
+                        <div class="win-bar"><span class="win-title"><img src="assets/forge-logo.svg" alt="" width="14"
+                                    height="14"> Forge</span><span class="win-ctl"><i></i><i></i><i></i></span></div>
+                        <div class="win-main">
+                            <aside class="win-side">
+                                <div class="side-tabs">
+                                    <svg viewBox="0 0 24 24" width="16" height="16">
+                                        <path d="M7 3h7l4 4v14H7zM14 3v4h4" fill="none" stroke="currentColor"
+                                            stroke-width="1.8" stroke-linejoin="round" />
+                                    </svg>
+                                    <svg viewBox="0 0 24 24" width="16" height="16">
+                                        <circle cx="10" cy="10" r="6" fill="none" stroke="currentColor"
+                                            stroke-width="1.8" />
+                                        <path d="m15 15 6 6" stroke="currentColor" stroke-width="1.8"
+                                            stroke-linecap="round" />
+                                    </svg>
+                                    <span class="badge-wrap"><svg viewBox="0 0 24 24" width="16" height="16">
+                                            <path
+                                                d="M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9c0 4-6 3-12 6"
+                                                fill="none" stroke="currentColor" stroke-width="1.8"
+                                                stroke-linecap="round" />
+                                        </svg><b>1</b></span>
+                                    <svg viewBox="0 0 24 24" width="16" height="16">
+                                        <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM15 13h5v5h-5z" fill="none"
+                                            stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" />
+                                    </svg>
+                                </div>
+                                <ul class="tree" aria-hidden="true">
+                                    <li class="dir">forge-app</li>
+                                    <li class="dir l2">src</li>
+                                    <li class="l3">ext_view.rs</li>
+                                    <li class="l3">markdown_view.rs</li>
+                                    <li class="l3 on">scroll.rs</li>
+                                    <li class="l3">settings_view.rs</li>
+                                    <li class="l3">workspace.rs</li>
+                                    <li class="l2">Cargo.toml</li>
+                                </ul>
+                            </aside>
+                            <div class="win-edit">
+                                <div class="tabs" aria-hidden="true">
+                                    <span class="tab">ext_view.rs <u>x</u></span>
+                                    <span class="tab on">scroll.rs <u>x</u></span>
+                                    <span class="tab"><svg viewBox="0 0 24 24" width="11" height="11">
+                                            <path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM15 13h5v5h-5z" fill="none"
+                                                stroke="currentColor" stroke-width="2" />
+                                        </svg> Language Support for Java <u>x</u></span>
+                                </div>
+                                <div class="code" aria-hidden="true">
+                                    <ol class="gut">
+                                        <li>1</li>
+                                        <li>2</li>
+                                        <li>3</li>
+                                        <li>4</li>
+                                        <li>5</li>
+                                        <li>6</li>
+                                        <li>7</li>
+                                        <li>8</li>
+                                        <li>9</li>
+                                        <li>10</li>
+                                        <li>11</li>
+                                        <li>12</li>
+                                        <li>13</li>
+                                        <li>14</li>
+                                    </ol>
+                                    <pre class="src"><span class="c">//! Shared scroll containers. GPUI sizes a scroll
+                                            area from its direct children,</span>
+                                        <span class="c">//! so the children must be as tall as their content.</span>
+
+                                        <span class="k">use</span> gpui::{div, prelude::*, <span class="t">Div</span>,
+                                        <span class="t">ElementId</span>, <span class="t">Stateful</span>};
+
+                                        <span class="c">/// A vertically scrolling page holding one centred content
+                                            column.</span>
+                                        <span class="k">pub fn</span> <span class="f">scroll_page</span>(id: <span
+                                            class="k">impl</span> <span class="t">Into</span>&lt;<span
+                                            class="t">ElementId</span>&gt;) -&gt; <span
+                                            class="t">Stateful</span>&lt;<span class="t">Div</span>&gt; {
+                                        <span class="f">div</span>()
+                                        .<span class="f">id</span>(id)
+                                        .<span class="f">overflow_y_scroll</span>()
+                                        .<span class="f">flex</span>()
+                                        .<span class="f">justify_center</span>()
+                                        <span class="c">// A flex row stretches its child to the page height: nothing to
+                                            scroll.</span>
+                                        .<span id="typed"><span class="f">items_start</span>()</span><b
+                                            class="caret"></b>
+                                        }
+                                    </pre>
+                                    <div class="mini" aria-hidden="true"><i style="width:62%"></i><i
+                                            style="width:80%"></i><i style="width:0"></i><i style="width:70%"></i><i
+                                            style="width:0"></i><i style="width:45%"></i><i style="width:90%"></i><i
+                                            style="width:55%"></i><i style="width:40%"></i><i style="width:35%"></i><i
+                                            style="width:38%"></i><i style="width:60%"></i><i style="width:76%"></i><i
+                                            style="width:10%"></i></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="win-status" aria-hidden="true"><span>main*</span><span>0 errors</span><span>0
+                                warnings</span><span class="sp"></span><span>Ln 14, Col 25</span><span>Spaces:
+                                4</span><span>UTF-8</span><span>LF</span><span>Rust</span></div>
+                    </div>
+                    <p class="note">An illustration drawn in HTML. The code is a real file from Forge itself.</p>
                 </div>
-                <div class="code" aria-hidden="true">
-                  <ol class="gut"><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li><li>6</li><li>7</li><li>8</li><li>9</li><li>10</li><li>11</li><li>12</li><li>13</li><li>14</li></ol>
-<pre class="src"><span class="c">//! Shared scroll containers. GPUI sizes a scroll area from its direct children,</span>
-<span class="c">//! so the children must be as tall as their content.</span>
+            </div>
+        </section>
 
-<span class="k">use</span> gpui::{div, prelude::*, <span class="t">Div</span>, <span class="t">ElementId</span>, <span class="t">Stateful</span>};
+        <section class="features" id="features">
+            <div class="wrap">
+                <h2 class="section-title">Familiar from the first keystroke.</h2>
+                <p class="section-lead">Everything on this page is built and in the installer today. Every command has a
+                    VS Code id and shows its shortcut.</p>
 
-<span class="c">/// A vertically scrolling page holding one centred content column.</span>
-<span class="k">pub fn</span> <span class="f">scroll_page</span>(id: <span class="k">impl</span> <span class="t">Into</span>&lt;<span class="t">ElementId</span>&gt;) -&gt; <span class="t">Stateful</span>&lt;<span class="t">Div</span>&gt; {
-    <span class="f">div</span>()
-        .<span class="f">id</span>(id)
-        .<span class="f">overflow_y_scroll</span>()
-        .<span class="f">flex</span>()
-        .<span class="f">justify_center</span>()
-        <span class="c">// A flex row stretches its child to the page height: nothing to scroll.</span>
-        .<span id="typed"><span class="f">items_start</span>()</span><b class="caret"></b>
-}</pre>
-                  <div class="mini" aria-hidden="true"><i style="width:62%"></i><i style="width:80%"></i><i style="width:0"></i><i style="width:70%"></i><i style="width:0"></i><i style="width:45%"></i><i style="width:90%"></i><i style="width:55%"></i><i style="width:40%"></i><i style="width:35%"></i><i style="width:38%"></i><i style="width:60%"></i><i style="width:76%"></i><i style="width:10%"></i></div>
+                <div class="row">
+                    <div class="row-text">
+                        <h3>Find anything in a few keys</h3>
+                        <p>Quick Open, the Command Palette, symbols, go to line, breadcrumbs and split editors. Search
+                            the project with Find in Files, which respects <code>.gitignore</code>, and replace across
+                            files, which asks before it changes anything.</p>
+                        <p class="keys"><kbd>Ctrl+P</kbd><kbd>Ctrl+Shift+P</kbd><kbd>Ctrl+Shift+F</kbd></p>
+                    </div>
+                    <div class="row-demo">
+                        <div class="palette" id="palette">
+                            <label class="palette-in" for="pal-q">
+                                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                                    <circle cx="10" cy="10" r="6" fill="none" stroke="currentColor"
+                                        stroke-width="1.8" />
+                                    <path d="m15 15 6 6" stroke="currentColor" stroke-width="1.8"
+                                        stroke-linecap="round" />
+                                </svg>
+                                <span class="sr">Filter commands</span>
+                                <input id="pal-q" type="text" placeholder="Type a command" autocomplete="off"
+                                    spellcheck="false">
+                            </label>
+                            <ul id="pal-list" aria-label="Commands"></ul>
+                            <p class="palette-empty" id="pal-empty" hidden>No matching command</p>
+                        </div>
+                        <p class="note">Type to filter. These are real Forge commands.</p>
+                    </div>
                 </div>
-              </div>
-            </div>
-            <div class="win-status" aria-hidden="true"><span>main*</span><span>0 errors</span><span>0 warnings</span><span class="sp"></span><span>Ln 14, Col 25</span><span>Spaces: 4</span><span>UTF-8</span><span>LF</span><span>Rust</span></div>
-          </div>
-          <p class="note">An illustration drawn in HTML. The code is a real file from Forge itself.</p>
-        </div>
-      </div>
-    </section>
 
-    <section class="features" id="features">
-      <div class="wrap">
-        <h2 class="section-title">Familiar from the first keystroke.</h2>
-        <p class="section-lead">Everything on this page is built and in the installer today. Every command has a VS Code id and shows its shortcut.</p>
-
-        <div class="row">
-          <div class="row-text">
-            <h3>Find anything in a few keys</h3>
-            <p>Quick Open, the Command Palette, symbols, go to line, breadcrumbs and split editors. Search the project with Find in Files, which respects <code>.gitignore</code>, and replace across files, which asks before it changes anything.</p>
-            <p class="keys"><kbd>Ctrl+P</kbd><kbd>Ctrl+Shift+P</kbd><kbd>Ctrl+Shift+F</kbd></p>
-          </div>
-          <div class="row-demo">
-            <div class="palette" id="palette">
-              <label class="palette-in" for="pal-q">
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m15 15 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-                <span class="sr">Filter commands</span>
-                <input id="pal-q" type="text" placeholder="Type a command" autocomplete="off" spellcheck="false">
-              </label>
-              <ul id="pal-list" aria-label="Commands"></ul>
-              <p class="palette-empty" id="pal-empty" hidden>No matching command</p>
-            </div>
-            <p class="note">Type to filter. These are real Forge commands.</p>
-          </div>
-        </div>
-
-        <div class="row row-flip">
-          <div class="row-text">
-            <h3>Source control that writes the first draft</h3>
-            <p>Stage, commit, push, pull, stash, branches, blame and file history, using your own <code>git</code>. Press the sparkle in the message box and an AI writes a one-line subject from your staged diff, only when you ask. You edit it, then commit.</p>
-            <p class="small">Uses your OpenAI API key, stored encrypted for your Windows account. Only the staged diff and your last ten commit subjects are sent.</p>
-          </div>
-          <div class="row-demo">
-            <div class="scm">
-              <div class="scm-branch"><span><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9c0 4-6 3-12 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg> main</span><span class="dim">0 behind, 0 ahead</span></div>
-              <div class="msg">
-                <div class="msg-text" id="msg-text" aria-live="polite"><span class="ph">Message (Ctrl+Enter to commit)</span></div>
-                <button class="spark" id="spark" type="button" aria-label="Write commit message with AI">
-                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM18.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z" fill="currentColor"/></svg>
-                </button>
-              </div>
-              <button class="commit" type="button" tabindex="-1" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Commit
-              </button>
-              <p class="scm-h">Staged Changes <b>2</b></p>
-              <ul class="scm-files">
-                <li><span>scroll.rs</span><em>A</em></li>
-                <li><span>ext_view.rs</span><em>M</em></li>
-              </ul>
-            </div>
-            <p class="note">An illustration. Press the sparkle.</p>
-          </div>
-        </div>
-
-        <div class="more">
-          <div><h4>Language servers</h4><p>Diagnostics, completion, hover, definition, references, rename, quick fix and format. Forge installs the servers it can into its own folder.</p></div>
-          <div><h4>Debugging</h4><p>F5 starts Python, Node or Rust under a debugger with breakpoints, stepping, variables and a call stack.</p></div>
-          <div><h4>Terminal</h4><p>Several integrated terminals in the bottom panel, each with its own tab and 5000 lines of scrollback.</p></div>
-          <div><h4>Editing</h4><p>Multi-cursor, move and copy lines, auto-closing brackets, expand selection by syntax, cursor undo, sort lines.</p></div>
-          <div><h4>Markdown preview</h4><p>A live preview beside the editor that scrolls with it. Links open in your browser or in Forge.</p></div>
-          <div><h4>Themes and settings</h4><p>Forge Dark, Forge Light and Forge High Contrast, a Settings page that edits <code>settings.json</code> in place, and a session that reopens where you left off.</p></div>
-        </div>
-        <p class="also">Syntax highlighting covers 29 languages and file kinds, from Rust and TypeScript to Dockerfile and <code>.env</code>.</p>
-      </div>
-    </section>
-
-    <section class="ext" id="extensions">
-      <div class="wrap">
-        <div class="ext-head">
-          <h2 class="section-title">Your extensions come along.</h2>
-          <p class="section-lead">Forge installs VS Code extensions from Open VSX, or from a <code>.vsix</code> file. It uses what they declare (themes, icon themes, languages, grammars, snippets) and, with Node.js on your <code>PATH</code>, runs their code in an extension host with Forge's own implementation of the <code>vscode</code> API.</p>
-        </div>
-        <figure class="shot">
-          <img src="assets/forge-extensions.webp" width="2000" height="1089" alt="Forge's Extensions view searching Open VSX, with the page of Language Support for Java by Red Hat open in an editor tab." loading="lazy">
-          <figcaption>Forge with an Open VSX extension's page open in its own tab.</figcaption>
-        </figure>
-        <div class="split">
-          <div>
-            <h3>Works today</h3>
-            <ul class="ticks">
-              <li>Color themes, product icon themes and file icon themes</li>
-              <li>Languages and TextMate grammars</li>
-              <li>Snippets with tab stops and mirrors</li>
-              <li>Commands, status bar items, output channels and diagnostics</li>
-              <li>Documents, settings, workspace edits and the file system API</li>
-            </ul>
-          </div>
-          <div>
-            <h3>Not there yet</h3>
-            <ul class="dashes">
-              <li>Webviews, tree views, notebooks and the terminal API</li>
-              <li>Language features from extension code, which are accepted and ignored</li>
-              <li>Debug adapters, tasks and authentication from extensions</li>
-            </ul>
-            <p class="small">A call into a missing part of the API is ignored, so an extension still starts.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="status" id="status">
-      <div class="wrap">
-        <h2 class="section-title">Early, and honest about it.</h2>
-        <dl class="facts">
-          <div><dt>Windows only</dt><dd>There is no macOS or Linux build yet.</dd></div>
-          <div><dt>Unsigned installer</dt><dd>Windows SmartScreen may warn when you run it.</dd></div>
-          <div><dt>Part of the VS Code API</dt><dd>Extensions that rely on webviews or tree views start, but those parts don't show.</dd></div>
-          <div><dt>Bring some servers</dt><dd>rust-analyzer, gopls, clangd and a few others are used once they are on your <code>PATH</code>.</dd></div>
-          <div><dt>Partial reopening</dt><dd>Forge restores open files and carets, not unsaved edits, and only the first editor group's tabs.</dd></div>
-        </dl>
-      </div>
-    </section>
-
-    <section class="get" id="get">
-      <div class="wrap">
-        <div class="panel">
-          <h2 class="section-title">Get Forge.</h2>
-          <div class="ways">
-            <div class="way">
-              <h3>Download</h3>
-              <p>Windows 10 or 11. Installs for your user only, with no admin prompt, and offers <em>Open with Forge</em> in the right-click menu, a desktop icon, and <code>forge .</code> on your <code>PATH</code>.</p>
-              <a class="btn btn-white" href="https://github.com/sukantamajhi/forge-ide/releases/latest" rel="noopener">Download for Windows</a>
-              <p class="small">Forge-Setup-0.1.0. Uninstall from Settings, Apps.</p>
-            </div>
-            <div class="way">
-              <h3>Read the source</h3>
-              <p>A Rust workspace: a text engine, syntax, a language-server client, an extension host and the GPUI app. Free and open source under the MIT license.</p>
-              <a class="btn btn-ghost" href="https://github.com/sukantamajhi/forge-ide" rel="noopener">Star on GitHub</a>
-              <p class="small">Build it with <code>cargo run -p forge-app</code>.</p>
-            </div>
-            <div class="way">
-              <h3>Join early access</h3>
-              <p>One short email when a release lands. Nothing else, and you can leave any time.</p>
-              <form id="waitlist" novalidate>
-                <label for="email">Email address</label>
-                <div class="row-form">
-                  <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
-                  <button class="btn btn-white" type="submit">Join</button>
+                <div class="row row-flip">
+                    <div class="row-text">
+                        <h3>Source control that writes the first draft</h3>
+                        <p>Stage, commit, push, pull, stash, branches, blame and file history, using your own
+                            <code>git</code>. Press the sparkle in the message box and an AI writes a one-line subject
+                            from your staged diff, only when you ask. You edit it, then commit.
+                        </p>
+                        <p class="small">Uses your OpenAI API key, stored encrypted for your Windows account. Only the
+                            staged diff and your last ten commit subjects are sent.</p>
+                    </div>
+                    <div class="row-demo">
+                        <div class="scm">
+                            <div class="scm-branch"><span><svg viewBox="0 0 24 24" width="15" height="15"
+                                        aria-hidden="true">
+                                        <path
+                                            d="M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9c0 4-6 3-12 6"
+                                            fill="none" stroke="currentColor" stroke-width="1.8"
+                                            stroke-linecap="round" />
+                                    </svg> main</span><span class="dim">0 behind, 0 ahead</span></div>
+                            <div class="msg">
+                                <div class="msg-text" id="msg-text" aria-live="polite"><span class="ph">Message
+                                        (Ctrl+Enter to commit)</span></div>
+                                <button class="spark" id="spark" type="button"
+                                    aria-label="Write commit message with AI">
+                                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                                        <path
+                                            d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM18.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"
+                                            fill="currentColor" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <button class="commit" type="button" tabindex="-1" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                                    <path d="m5 12.5 4.5 4.5L19 7.5" fill="none" stroke="currentColor"
+                                        stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg> Commit
+                            </button>
+                            <p class="scm-h">Staged Changes <b>2</b></p>
+                            <ul class="scm-files">
+                                <li><span>scroll.rs</span><em>A</em></li>
+                                <li><span>ext_view.rs</span><em>M</em></li>
+                            </ul>
+                        </div>
+                        <p class="note">An illustration. Press the sparkle.</p>
+                    </div>
                 </div>
-                <p id="waitlist-status" class="small" role="status" aria-live="polite"></p>
-              </form>
+
+                <div class="more">
+                    <div>
+                        <h4>Language servers</h4>
+                        <p>Diagnostics, completion, hover, definition, references, rename, quick fix and format. Forge
+                            installs the servers it can into its own folder.</p>
+                    </div>
+                    <div>
+                        <h4>Debugging</h4>
+                        <p>F5 starts Python, Node or Rust under a debugger with breakpoints, stepping, variables and a
+                            call stack.</p>
+                    </div>
+                    <div>
+                        <h4>Terminal</h4>
+                        <p>Several integrated terminals in the bottom panel, each with its own tab and 5000 lines of
+                            scrollback.</p>
+                    </div>
+                    <div>
+                        <h4>Editing</h4>
+                        <p>Multi-cursor, move and copy lines, auto-closing brackets, expand selection by syntax, cursor
+                            undo, sort lines.</p>
+                    </div>
+                    <div>
+                        <h4>Markdown preview</h4>
+                        <p>A live preview beside the editor that scrolls with it. Links open in your browser or in
+                            Forge.</p>
+                    </div>
+                    <div>
+                        <h4>Themes and settings</h4>
+                        <p>Forge Dark, Forge Light and Forge High Contrast, a Settings page that edits
+                            <code>settings.json</code> in place, and a session that reopens where you left off.
+                        </p>
+                    </div>
+                </div>
+                <p class="also">Syntax highlighting covers 29 languages and file kinds, from Rust and TypeScript to
+                    Dockerfile and <code>.env</code>.</p>
             </div>
-          </div>
+        </section>
+
+        <section class="ext" id="extensions">
+            <div class="wrap">
+                <div class="ext-head">
+                    <h2 class="section-title">Your extensions come along.</h2>
+                    <p class="section-lead">Forge installs VS Code extensions from Open VSX, or from a
+                        <code>.vsix</code> file. It uses what they declare (themes, icon themes, languages, grammars,
+                        snippets) and, with Node.js on your <code>PATH</code>, runs their code in an extension host with
+                        Forge's own implementation of the <code>vscode</code> API.
+                    </p>
+                </div>
+                <figure class="shot">
+                    <img src="assets/forge-extensions.webp" width="2000" height="1089"
+                        alt="Forge's Extensions view searching Open VSX, with the page of Language Support for Java by Red Hat open in an editor tab."
+                        loading="lazy">
+                    <figcaption>Forge with an Open VSX extension's page open in its own tab.</figcaption>
+                </figure>
+                <div class="split">
+                    <div>
+                        <h3>Works today</h3>
+                        <ul class="ticks">
+                            <li>Color themes, product icon themes and file icon themes</li>
+                            <li>Languages and TextMate grammars</li>
+                            <li>Snippets with tab stops and mirrors</li>
+                            <li>Commands, status bar items, output channels and diagnostics</li>
+                            <li>Documents, settings, workspace edits and the file system API</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3>Not there yet</h3>
+                        <ul class="dashes">
+                            <li>Webviews, tree views, notebooks and the terminal API</li>
+                            <li>Language features from extension code, which are accepted and ignored</li>
+                            <li>Debug adapters, tasks and authentication from extensions</li>
+                        </ul>
+                        <p class="small">A call into a missing part of the API is ignored, so an extension still starts.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="status" id="status">
+            <div class="wrap">
+                <h2 class="section-title">Early, and honest about it.</h2>
+                <dl class="facts">
+                    <div>
+                        <dt>Windows only</dt>
+                        <dd>There is no macOS or Linux build yet.</dd>
+                    </div>
+                    <div>
+                        <dt>Unsigned installer</dt>
+                        <dd>Windows SmartScreen may warn when you run it.</dd>
+                    </div>
+                    <div>
+                        <dt>Part of the VS Code API</dt>
+                        <dd>Extensions that rely on webviews or tree views start, but those parts don't show.</dd>
+                    </div>
+                    <div>
+                        <dt>Bring some servers</dt>
+                        <dd>rust-analyzer, gopls, clangd and a few others are used once they are on your
+                            <code>PATH</code>.
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>Partial reopening</dt>
+                        <dd>Forge restores open files and carets, not unsaved edits, and only the first editor group's
+                            tabs.</dd>
+                    </div>
+                </dl>
+            </div>
+        </section>
+
+        <section class="get" id="get">
+            <div class="wrap">
+                <div class="panel">
+                    <h2 class="section-title">Get Forge.</h2>
+                    <div class="ways">
+                        <div class="way">
+                            <h3>Download</h3>
+                            <p>Windows 10 or 11. Installs for your user only, with no admin prompt, and offers <em>Open
+                                    with Forge</em> in the right-click menu, a desktop icon, and <code>forge .</code> on
+                                your <code>PATH</code>.</p>
+                            <a class="btn btn-white" href="https://github.com/sukantamajhi/forge-ide/releases/latest"
+                                rel="noopener">Download for Windows</a>
+                            <p class="small">Forge-Setup-0.1.0. Uninstall from Settings, Apps.</p>
+                        </div>
+                        <div class="way">
+                            <h3>Read the source</h3>
+                            <p>A Rust workspace: a text engine, syntax, a language-server client, an extension host and
+                                the GPUI app. Free and open source under the MIT license.</p>
+                            <a class="btn btn-ghost" href="https://github.com/sukantamajhi/forge-ide"
+                                rel="noopener">Star on GitHub</a>
+                            <p class="small">Build it with <code>cargo run -p forge-app</code>.</p>
+                        </div>
+                        <div class="way">
+                            <h3>Join early access</h3>
+                            <p>One short email when a release lands. Nothing else, and you can leave any time.</p>
+                            <form id="waitlist" novalidate>
+                                <label for="email">Email address</label>
+                                <div class="row-form">
+                                    <input id="email" name="email" type="email" autocomplete="email"
+                                        placeholder="you@example.com" required>
+                                    <button class="btn btn-white" type="submit">Join</button>
+                                </div>
+                                <p id="waitlist-status" class="small" role="status" aria-live="polite"></p>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="foot">
+        <div class="wrap foot-row">
+            <a class="brand" href="#top"><img src="assets/forge-logo.svg" alt="" width="26"
+                    height="26"><span>Forge</span></a>
+            <p>Free and open source under the MIT license. Windows only for now. Interface icons are VS Code's Codicons,
+                &copy; Microsoft, CC BY 4.0.</p>
         </div>
-      </div>
-    </section>
-  </main>
+    </footer>
 
-  <footer class="foot">
-    <div class="wrap foot-row">
-      <a class="brand" href="#top"><img src="assets/forge-logo.svg" alt="" width="26" height="26"><span>Forge</span></a>
-      <p>Free and open source under the MIT license. Windows only for now. Interface icons are VS Code's Codicons, &copy; Microsoft, CC BY 4.0.</p>
-    </div>
-  </footer>
-
-  <script src="js/main.js" defer></script>
+    <script src="js/main.js" defer></script>
 </body>
+
 </html>
