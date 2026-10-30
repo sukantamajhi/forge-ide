@@ -80,6 +80,8 @@ pub(crate) struct Doc {
     pub title: Option<String>,
     /// A new document that has no file yet (`Untitled-1`): Save asks where to put it.
     pub untitled: bool,
+    /// The language was picked by the user, so it is not guessed again from the name or the contents.
+    pub lang_manual: bool,
     /// Colors lines by their unified-diff prefix.
     pub diff: bool,
     /// Lines changed relative to HEAD, and the `(revision, git epoch)` they were computed for.
@@ -151,6 +153,7 @@ impl Doc {
             readonly: false,
             title: None,
             untitled: false,
+            lang_manual: false,
             diff: false,
             gutter: Vec::new(),
             gutter_key: (u64::MAX, 0),
@@ -260,6 +263,20 @@ impl Doc {
         doc.title = Some(title.to_owned());
         doc.diff = diff;
         doc
+    }
+
+    /// Give the document another language: its syntax tree (with the languages embedded in it) is built again.
+    pub fn set_language(&mut self, language: Option<Language>) {
+        self.language = language;
+        self.ext_lang = None;
+        self.tm = None;
+        self.syntax = language.and_then(Syntax::new);
+        if let Some(syntax) = self.syntax.as_mut() {
+            syntax.parse(self.buffer.rope(), &[]);
+        }
+        self.parse_pending = false;
+        // Colours, bracket depths and the like are cached per revision.
+        self.revision += 1;
     }
 
     /// An empty `Untitled-<n>` document. Its path is only a unique key, not a place on disk.
@@ -398,6 +415,8 @@ pub(crate) enum OverlayKind {
     OpenRecent,
     /// Pick the language whose snippets file to open (Configure User Snippets).
     SnippetFiles,
+    /// Change the language mode of the open file (the status bar's language).
+    Language,
     /// The second file of "Compare Active File With...".
     CompareWith,
     Theme,
@@ -444,6 +463,15 @@ pub(crate) enum OverlayKind {
     Snippets,
 }
 
+/// What the language picker can set a file to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LangChoice {
+    /// Work it out from the file name, else from the contents.
+    Auto,
+    PlainText,
+    Lang(Language),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ItemAction {
     Command(Command),
@@ -467,6 +495,7 @@ pub(crate) enum ItemAction {
     CompareWith(std::path::PathBuf),
     /// Open (and create) the user's snippets file for this language id, or `global`.
     SnippetFile(String),
+    SetLanguage(LangChoice),
     WorktreeAddBranch(usize),
     WorktreeRemove(usize),
     GitCommit(usize),
@@ -1270,6 +1299,12 @@ impl Workspace {
                     let mut new_doc = crate::prof::time("open: parse", || if defer { Doc::new_unparsed(path.to_path_buf(), &text) } else { Doc::new(path.to_path_buf(), &text) });
                     new_doc.bom = bom;
                     crate::prof::time("open: language", || self.attach_ext_language(&mut new_doc));
+                    // No telling name (a script with no extension, ...): look at what is in it.
+                    if new_doc.language.is_none() && new_doc.ext_lang.is_none() {
+                        if let Some(found) = Language::from_content(&text) {
+                            new_doc.set_language(Some(found));
+                        }
+                    }
                     self.docs.push(new_doc);
                     let new_ix = self.docs.len() - 1;
                     self.refresh_ext_diagnostics(new_ix);
@@ -1345,6 +1380,46 @@ impl Workspace {
         if let Some(view) = self.groups.get_mut(g).and_then(|gr| gr.views.get_mut(vi)) {
             view.preview = false;
         }
+    }
+
+    /// Set the language of document `ix` and bring everything that depends on it along: highlighting (and the
+    /// languages embedded in it), the language server, extensions, tab size.
+    pub fn choose_language(&mut self, ix: usize, choice: LangChoice, cx: &mut Context<Self>) {
+        let Some(doc) = self.docs.get_mut(ix) else { return };
+        if doc.readonly {
+            self.set_status("This document is read-only");
+            return;
+        }
+        let (old, was_open) = (doc.language, doc.lsp_open);
+        let manual = !matches!(choice, LangChoice::Auto);
+        let wanted = match choice {
+            LangChoice::PlainText => None,
+            LangChoice::Lang(l) => Some(l),
+            LangChoice::Auto => {
+                let by_name = if doc.untitled { None } else { Language::from_path(&doc.path) };
+                by_name.or_else(|| Language::from_content(&doc.buffer.text_head(6000)))
+            }
+        };
+        doc.lang_manual = manual;
+        doc.set_language(wanted);
+        if let (Some(language), true) = (old, was_open) {
+            let path = self.docs[ix].path.clone();
+            self.lsp.did_close(language, &path);
+            self.docs[ix].lsp_open = false;
+        }
+        // Back to automatic with nothing built in found: an extension's language for the name may fit.
+        if wanted.is_none() && !manual {
+            let mut doc = std::mem::replace(&mut self.docs[ix], Doc::new_virtual(PathBuf::new(), "", "", false));
+            self.attach_ext_language(&mut doc);
+            self.docs[ix] = doc;
+        }
+        self.refresh_ext_diagnostics(ix);
+        self.activate_for_doc(ix);
+        self.attach_lsp(ix);
+        self.outline_key = None;
+        let name = self.docs[ix].syntax.as_ref().map(|s| s.language().name().to_owned()).or_else(|| self.docs[ix].ext_lang.as_ref().map(|l| l.name.clone())).unwrap_or_else(|| "Plain Text".to_owned());
+        self.set_status(if manual { format!("Language mode: {name}") } else { format!("Language mode: Auto Detect ({name})") });
+        cx.notify();
     }
 
     /// A new empty `Untitled-<n>` tab (Ctrl+N), with nothing asked until it is saved.
@@ -1683,6 +1758,14 @@ impl Workspace {
             view.preview = false;
         }
         self.docs[doc_ix].revision += 1;
+        // A new untitled file takes the language of what is typed or pasted into it, until one is picked.
+        if self.docs[doc_ix].untitled && !self.docs[doc_ix].lang_manual {
+            let found = Language::from_content(&self.docs[doc_ix].buffer.text_head(6000));
+            if found.is_some() && found != self.docs[doc_ix].language {
+                self.docs[doc_ix].set_language(found);
+                self.attach_lsp(doc_ix);
+            }
+        }
         for (g, vi) in self.views_of(doc_ix).collect::<Vec<_>>() {
             let view = &mut self.groups[g].views[vi];
             if Some((g, vi)) != origin {

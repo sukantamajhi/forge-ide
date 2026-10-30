@@ -34,6 +34,7 @@ mod file_icons;
 mod server_support;
 mod session_support;
 mod settings_view;
+mod language_mode;
 mod outline_view;
 mod terminal_mouse;
 mod titlebar;

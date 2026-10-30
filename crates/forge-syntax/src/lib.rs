@@ -187,6 +187,17 @@ impl Syntax {
         }
     }
 
+    /// The language of the code at char offset `at`: the innermost embedded region that holds it (JavaScript inside
+    /// `<script>`, ...), else the document's own language.
+    pub fn language_at(&self, rope: &Rope, at: usize) -> Language {
+        let byte = rope.char_to_byte(at.min(rope.len_chars()));
+        self.layers
+            .iter()
+            .filter(|l| l.range.start_byte <= byte && byte <= l.range.end_byte)
+            .max_by_key(|l| l.depth)
+            .map_or(self.language, |l| l.language)
+    }
+
     /// The smallest syntax node strictly larger than the char range `start..end`, as char
     /// offsets: what Shift+Alt+Right selects next.
     pub fn enclosing_range(&self, rope: &Rope, start: usize, end: usize) -> Option<(usize, usize)> {

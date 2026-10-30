@@ -2535,6 +2535,7 @@ impl Workspace {
         let (errors, warnings) = self.docs.iter().fold((0, 0), |(e, w), d| {
             (e + d.diagnostics.iter().filter(|x| x.severity == Severity::Error).count(), w + d.diagnostics.iter().filter(|x| x.severity == Severity::Warning).count())
         });
+        let has_doc = doc.is_some() && view.is_some();
         let mut parts: Vec<String> = Vec::new();
         if let Some(p) = &self.lsp_progress {
             parts.push(p.clone());
@@ -2556,7 +2557,6 @@ impl Workspace {
             parts.push(if spaces { format!("Spaces: {tabs}") } else { format!("Tab Size: {tabs}") });
             parts.push("UTF-8".to_owned());
             parts.push(if doc.buffer.eol() == "\r\n" { "CRLF" } else { "LF" }.to_owned());
-            parts.push(doc.syntax.as_ref().map(|s| s.language().name().to_owned()).or_else(|| doc.ext_lang.as_ref().map(|l| l.name.clone())).unwrap_or_else(|| "Plain Text".to_owned()));
         }
         div()
             .flex()
@@ -2658,7 +2658,22 @@ impl Workspace {
                     .gap_4()
                     .whitespace_nowrap()
                     .children(self.ext_status_items(2).into_iter().map(|(id, item)| self.render_ext_status(id, item, cx)))
-                    .child(parts.join("    ")),
+                    .child(parts.join("    "))
+                    .children(has_doc.then(|| {
+                        div()
+                            .id("status-language")
+                            .flex_none()
+                            .cursor_pointer()
+                            .px_1()
+                            .rounded_sm()
+                            .hover(|s| s.bg(rgb(t.tab_active)).text_color(rgb(t.text)))
+                            .tooltip(self.tooltip("Select Language Mode", Some(Command::ChangeLanguageMode)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_command(Command::ChangeLanguageMode, false, cx);
+                                cx.notify();
+                            }))
+                            .child(self.language_label())
+                    })),
             )
     }
 }

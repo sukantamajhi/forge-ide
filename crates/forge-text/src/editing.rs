@@ -522,6 +522,71 @@ impl Buffer {
         self.remap_selections_through(selections, reps)
     }
 
+    /// Ctrl+/ in a language that only has block comments (HTML, XML, Markdown, CSS). As in VS Code, the touched
+    /// lines are wrapped in ONE block comment, from the first word of the first line to the end of the last
+    /// (a selection ending at the start of a line leaves that line out); a blank line gets an empty `open  close`.
+    /// When the range already is a block comment (or a run of them, as an older per-line toggle made), the
+    /// tokens come off instead.
+    pub fn toggle_line_block_comment(&mut self, selections: &SelectionSet, open: &str, close: &str) -> SelectionSet {
+        let (open_len, close_len) = (open.chars().count(), close.chars().count());
+        let mut reps: Vec<(usize, usize, String)> = Vec::new();
+        for (first, last) in self.touched_blocks(selections) {
+            let lead = self.line_text(first).chars().take_while(|c| c.is_whitespace()).count();
+            let start = self.line_start(first) + lead;
+            let last_text = self.line_text(last);
+            let end = self.line_start(last) + last_text.trim_end().chars().count();
+            if start >= end {
+                // Nothing but blanks: an empty comment at the caret, ready to type into.
+                let at = selections
+                    .as_slice()
+                    .iter()
+                    .map(|s| s.head)
+                    .find(|h| self.offset_to_point(*h).0 == first)
+                    .unwrap_or_else(|| self.line_end(first));
+                reps.push((at, at, format!("{open}  {close}")));
+                continue;
+            }
+            let chars: Vec<char> = self.rope().slice(start..end).chars().collect();
+            let at = |i: usize, token: &str| token.chars().enumerate().all(|(k, t)| chars.get(i + k) == Some(&t));
+            let wrapped = chars.len() >= open_len + close_len && at(0, open) && at(chars.len() - close_len, close);
+            if !wrapped {
+                reps.push((start, start, format!("{open} ")));
+                reps.push((end, end, format!(" {close}")));
+                continue;
+            }
+            // The comments inside the range, in order: usually one, or one per line from the old toggle.
+            let mut tokens: Vec<(usize, bool)> = Vec::new();
+            let mut i = 0;
+            while i < chars.len() {
+                if at(i, open) {
+                    tokens.push((i, true));
+                    i += open_len;
+                } else if at(i, close) {
+                    tokens.push((i, false));
+                    i += close_len;
+                } else {
+                    i += 1;
+                }
+            }
+            let balanced = tokens.len() % 2 == 0 && tokens.chunks(2).all(|p| p[0].1 && !p[1].1);
+            let pairs: Vec<(usize, usize)> = if balanced {
+                tokens.chunks(2).map(|p| (p[0].0, p[1].0)).collect()
+            } else {
+                vec![(0, chars.len() - close_len)]
+            };
+            for (o, c) in pairs {
+                let after_open = usize::from(chars.get(o + open_len) == Some(&' ') && o + open_len + 1 <= c);
+                let before_close = usize::from(c >= 1 && c - 1 >= o + open_len + after_open && chars.get(c - 1) == Some(&' '));
+                reps.push((start + o, start + o + open_len + after_open, String::new()));
+                reps.push((start + c - before_close, start + c + close_len, String::new()));
+            }
+        }
+        if reps.is_empty() {
+            return selections.clone();
+        }
+        self.remap_selections_through(selections, reps)
+    }
+
     /// Shift+Alt+A: wrap each selection (or the caret's line content) in a block comment,
     /// or unwrap it when it is already wrapped.
     pub fn toggle_block_comment(&mut self, selections: &SelectionSet, open: &str, close: &str) -> SelectionSet {
@@ -535,7 +600,23 @@ impl Buffer {
                     let lead = text.chars().take_while(|c| c.is_whitespace()).count();
                     (self.line_start(line) + lead, self.line_end(line))
                 } else {
-                    (s.start(), s.end())
+                    // A selection that takes whole lines (it ends at the start of the next one) is wrapped from the
+                    // first word of its first line to the end of its last, not around the line breaks and indents.
+                    let (mut start, mut end) = (s.start(), s.end());
+                    let (first, _) = self.offset_to_point(start);
+                    let (last, end_col) = self.offset_to_point(end);
+                    if last > first && end_col == 0 {
+                        end = self.line_end(last - 1);
+                    }
+                    if start == self.line_start(first) {
+                        let lead = self.line_text(first).chars().take_while(|c| c.is_whitespace()).count();
+                        start = (start + lead).min(end);
+                    }
+                    if start >= end {
+                        (s.start(), s.end())
+                    } else {
+                        (start, end)
+                    }
                 };
                 let inner = self.rope().slice(start..end).to_string();
                 let text = if inner.starts_with(open) && inner.ends_with(close) && inner.len() >= open.len() + close.len() {
@@ -1151,5 +1232,190 @@ mod tests {
         let mut end = Buffer::new("abc");
         end.transpose(&caret(3));
         assert_eq!(end.text(), "acb");
+    }
+}
+
+#[cfg(test)]
+mod block_line_comment_tests {
+    use crate::{Buffer, Selection, SelectionSet};
+
+    fn all(b: &Buffer) -> SelectionSet {
+        SelectionSet::single(Selection { anchor: 0, head: b.len_chars() })
+    }
+
+    #[test]
+    fn several_lines_become_one_block_comment_and_back() {
+        let text = "<div>\n  <p>hi</p>\n\n</div>\n";
+        let mut b = Buffer::new(text);
+        let s = b.toggle_line_block_comment(&all(&b), "<!--", "-->");
+        assert_eq!(b.text(), "<!-- <div>\n  <p>hi</p>\n\n</div> -->\n");
+        b.toggle_line_block_comment(&s, "<!--", "-->");
+        assert_eq!(b.text(), text);
+    }
+
+    #[test]
+    fn a_caret_comments_only_its_line() {
+        let mut b = Buffer::new("a { color: red; }\nb { margin: 0; }\n");
+        let caret = SelectionSet::single(Selection::caret(3));
+        b.toggle_line_block_comment(&caret, "/*", "*/");
+        assert_eq!(b.text(), "/* a { color: red; } */\nb { margin: 0; }\n");
+    }
+
+    #[test]
+    fn indentation_stays_outside_the_comment() {
+        let text = "<ul>\n    <li>a</li>\n    <li>b</li>\n</ul>\n";
+        let mut b = Buffer::new(text);
+        let s = SelectionSet::single(Selection { anchor: b.point_to_offset(1, 0), head: b.point_to_offset(3, 0) });
+        let s = b.toggle_line_block_comment(&s, "<!--", "-->");
+        assert_eq!(b.text(), "<ul>\n    <!-- <li>a</li>\n    <li>b</li> -->\n</ul>\n");
+        b.toggle_line_block_comment(&s, "<!--", "-->");
+        assert_eq!(b.text(), text);
+    }
+
+    #[test]
+    fn a_run_of_per_line_comments_is_removed_in_one_go() {
+        let text = "<!-- <html> -->\n\t<!-- <head> -->\n\t<!-- <title>x</title> -->\n<!-- </html> -->\n";
+        let mut b = Buffer::new(text);
+        b.toggle_line_block_comment(&all(&b), "<!--", "-->");
+        assert_eq!(b.text(), "<html>\n\t<head>\n\t<title>x</title>\n</html>\n");
+    }
+
+    #[test]
+    fn a_blank_line_gets_an_empty_comment_at_the_caret() {
+        let mut b = Buffer::new("a\n\nb\n");
+        b.toggle_line_block_comment(&SelectionSet::single(Selection::caret(2)), "/*", "*/");
+        assert_eq!(b.text(), "a\n/*  */\nb\n");
+    }
+
+    #[test]
+    fn separate_cursors_comment_their_own_lines() {
+        let mut b = Buffer::new("<a>\n<b>\n<c>\n");
+        let two = SelectionSet::new(vec![Selection::caret(1), Selection::caret(b.point_to_offset(2, 1))]);
+        b.toggle_line_block_comment(&two, "<!--", "-->");
+        assert_eq!(b.text(), "<!-- <a> -->\n<b>\n<!-- <c> -->\n");
+    }
+}
+
+#[cfg(test)]
+mod multi_line_comment_tests {
+    use crate::{Buffer, Selection, SelectionSet};
+
+    fn sel(b: &Buffer, from: (usize, usize), to: (usize, usize)) -> SelectionSet {
+        SelectionSet::single(Selection { anchor: b.point_to_offset(from.0, from.1), head: b.point_to_offset(to.0, to.1) })
+    }
+
+    #[test]
+    fn a_multi_line_selection_toggles_back_and_forth_with_the_selection_kept() {
+        let text = "fn a() {\n    let x = 1;\n\n    let y = 2;\n}\n";
+        let mut b = Buffer::new(text);
+        // From the middle of line 1 to the middle of line 3, with a blank line between.
+        let mut s = sel(&b, (1, 6), (3, 8));
+        s = b.toggle_line_comment(&s, "//");
+        assert_eq!(b.text(), "fn a() {\n    // let x = 1;\n\n    // let y = 2;\n}\n");
+        // The same keystroke again, on whatever is selected now, undoes it.
+        s = b.toggle_line_comment(&s, "//");
+        assert_eq!(b.text(), text);
+        let _ = s;
+    }
+
+    #[test]
+    fn a_selection_ending_at_column_zero_leaves_the_last_line_alone() {
+        let mut b = Buffer::new("a\nb\nc\n");
+        let s = sel(&b, (0, 0), (2, 0));
+        b.toggle_line_comment(&s, "#");
+        assert_eq!(b.text(), "# a\n# b\nc\n");
+    }
+
+    #[test]
+    fn mixed_lines_get_commented_first_then_uncommented() {
+        let mut b = Buffer::new("# a\nb\n");
+        let s = sel(&b, (0, 0), (1, 1));
+        let s = b.toggle_line_comment(&s, "#");
+        assert_eq!(b.text(), "# # a\n# b\n");
+        b.toggle_line_comment(&s, "#");
+        assert_eq!(b.text(), "# a\nb\n");
+    }
+
+    #[test]
+    fn several_cursors_each_comment_their_own_line() {
+        let mut b = Buffer::new("one\ntwo\nthree\nfour\n");
+        let s = SelectionSet::new(vec![Selection::caret(1), Selection::caret(b.point_to_offset(2, 2))]);
+        b.toggle_line_comment(&s, "//");
+        assert_eq!(b.text(), "// one\ntwo\n// three\nfour\n");
+    }
+
+    #[test]
+    fn indentation_is_kept_with_the_shallowest_level_commented() {
+        let mut b = Buffer::new("\tif x {\n\t\tgo();\n\t}\n");
+        let s = sel(&b, (0, 0), (2, 2));
+        b.toggle_line_comment(&s, "//");
+        assert_eq!(b.text(), "\t// if x {\n\t// \tgo();\n\t// }\n");
+    }
+
+    #[test]
+    fn block_comments_wrap_a_whole_multi_line_selection_and_unwrap_it_again() {
+        let text = "a\nb\nc\n";
+        let mut b = Buffer::new(text);
+        let s = sel(&b, (0, 0), (2, 1));
+        let s = b.toggle_block_comment(&s, "/*", "*/");
+        assert_eq!(b.text(), "/* a\nb\nc */\n");
+        b.toggle_block_comment(&s, "/*", "*/");
+        assert_eq!(b.text(), text);
+    }
+
+}
+
+#[cfg(test)]
+mod comment_selection_tests {
+    use crate::{Buffer, Selection, SelectionSet};
+
+    #[test]
+    fn the_selection_stays_on_the_same_text_through_a_comment_and_an_uncomment() {
+        let text = "fn a() {\n    let x = 1;\n    let y = 2;\n    let z = 3;\n}\n";
+        let mut b = Buffer::new(text);
+        let (start, end) = (b.point_to_offset(1, 0), b.point_to_offset(3, 0));
+        let s0 = SelectionSet::single(Selection { anchor: start, head: end });
+        let s1 = b.toggle_line_comment(&s0, "//");
+        let s2 = b.toggle_line_comment(&s1, "//");
+        assert_eq!(b.text(), text);
+        let sel = s2.primary();
+        assert_eq!((b.offset_to_point(sel.start()), b.offset_to_point(sel.end())), ((1, 0), (3, 0)), "{s2:?}");
+    }
+
+    #[test]
+    fn block_comment_selection_covers_the_wrapped_text() {
+        let mut b = Buffer::new("a\nb\nc\n");
+        let s0 = SelectionSet::single(Selection { anchor: 0, head: b.point_to_offset(1, 1) });
+        let s1 = b.toggle_block_comment(&s0, "/*", "*/");
+        assert_eq!(b.text(), "/* a\nb */\nc\n");
+        let s2 = b.toggle_block_comment(&s1, "/*", "*/");
+        assert_eq!(b.text(), "a\nb\nc\n");
+        assert_eq!((s2.primary().start(), s2.primary().end()), (0, 3));
+    }
+}
+
+#[cfg(test)]
+mod whole_line_block_comment_tests {
+    use crate::{Buffer, Selection, SelectionSet};
+
+    #[test]
+    fn whole_lines_are_wrapped_inside_their_indent_and_unwrapped_exactly() {
+        let text = "fn a() {
+    let x = 1;
+    let y = 2;
+    let z = 3;
+}
+";
+        let mut b = Buffer::new(text);
+        let s = SelectionSet::single(Selection { anchor: b.point_to_offset(1, 0), head: b.point_to_offset(3, 0) });
+        let s = b.toggle_block_comment(&s, "/*", "*/");
+        assert_eq!(b.text(), "fn a() {
+    /* let x = 1;
+    let y = 2; */
+    let z = 3;
+}
+");
+        b.toggle_block_comment(&s, "/*", "*/");
+        assert_eq!(b.text(), text);
     }
 }

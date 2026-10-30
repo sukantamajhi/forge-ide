@@ -122,6 +122,7 @@ commands! {
     OpenTab8, "workbench.action.openEditorAtIndex8", "Open Editor 8", ["alt+8"];
     OpenTab9, "workbench.action.openEditorAtIndex9", "Open Last Editor", ["alt+9"];
     NewFile, "workbench.action.files.newFile", "New File...", [];
+    ChangeLanguageMode, "workbench.action.editor.changeLanguageMode", "Change Language Mode", ["ctrl+k m"];
     NewUntitledFile, "workbench.action.files.newUntitledFile", "New Untitled Text File", ["ctrl+n"];
     NewFolder, "workbench.action.files.newFolder", "New Folder...", [];
     OpenFolder, "workbench.action.files.openFolder", "Open Folder...", ["ctrl+k ctrl+o"];

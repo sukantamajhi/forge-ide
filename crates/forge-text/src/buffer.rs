@@ -203,6 +203,11 @@ impl Buffer {
         self.rope.to_string()
     }
 
+    /// The first `max_chars` characters of the text (all of it when it is shorter).
+    pub fn text_head(&self, max_chars: usize) -> String {
+        self.rope.slice(..max_chars.min(self.rope.len_chars())).to_string()
+    }
+
     /// Text of line `idx` without its trailing newline.
     pub fn line(&self, idx: usize) -> String {
         let line = self.rope.line(idx).to_string();

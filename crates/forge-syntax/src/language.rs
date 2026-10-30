@@ -173,6 +173,11 @@ impl Language {
         })
     }
 
+    /// The language of a text that has no telling file name: a `#!` line, an opening tag, the shape of the code.
+    pub fn from_content(text: &str) -> Option<Self> {
+        detect_content(text)
+    }
+
     /// Highlighted line by line instead of by a syntax tree.
     pub fn is_line_based(self) -> bool {
         matches!(self, Self::Env | Self::Ini | Self::Dockerfile | Self::Makefile | Self::Ignore | Self::Diff)
@@ -290,7 +295,9 @@ impl Language {
             Self::Python | Self::Toml | Self::Yaml | Self::Shell | Self::Ruby | Self::Env | Self::Dockerfile | Self::Makefile | Self::Ignore => Some("#"),
             Self::Lua | Self::Sql => Some("--"),
             Self::Ini => Some(";"),
-            Self::Json | Self::Html | Self::Css | Self::Xml | Self::Markdown | Self::Diff => None,
+            // JSON files take comments in an editor (VS Code treats them as JSON with Comments).
+            Self::Json => Some("//"),
+            Self::Html | Self::Css | Self::Xml | Self::Markdown | Self::Diff => None,
         }
     }
 
@@ -298,7 +305,7 @@ impl Language {
     pub fn block_comment(self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::Rust | Self::JavaScript | Self::JavaScriptReact | Self::TypeScript | Self::TypeScriptReact | Self::Go | Self::C | Self::Cpp
-            | Self::Java | Self::CSharp | Self::Php | Self::Css | Self::Sql => Some(("/*", "*/")),
+            | Self::Java | Self::CSharp | Self::Php | Self::Css | Self::Sql | Self::Json => Some(("/*", "*/")),
             Self::Html | Self::Xml | Self::Markdown => Some(("<!--", "-->")),
             Self::Lua => Some(("--[[", "]]")),
             _ => None,
@@ -492,5 +499,181 @@ mod tests {
         assert_eq!(HighlightClass::from_capture("tag.attribute"), Some(HighlightClass::Attribute));
         assert_eq!(HighlightClass::from_capture("embedded"), None);
         assert_eq!(HighlightClass::from_capture("spell"), None);
+    }
+}
+
+/// Guess the language of a text from what is in it: a `#!` line, an opening tag, or the shape of the code.
+/// Only strong signals count, so a file that is not clearly one language stays plain text.
+pub fn detect_content(text: &str) -> Option<Language> {
+    // The first few thousand bytes say enough.
+    let mut end = text.len().min(6000);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &text[..end];
+    let first = head.lines().find(|l| !l.trim().is_empty())?.trim();
+    let lower = head.to_ascii_lowercase();
+    let lines: Vec<&str> = head.lines().map(str::trim_end).collect();
+    let has_line = |starts: &[&str]| lines.iter().any(|l| starts.iter().any(|s| l.starts_with(s)));
+
+    if let Some(shebang) = first.strip_prefix("#!") {
+        let s = shebang.to_ascii_lowercase();
+        let word = |names: &[&str]| names.iter().any(|n| s.split(|c: char| !c.is_alphanumeric()).any(|w| w == *n || w.starts_with(&format!("{n}3")) && *n == "python"));
+        return if word(&["python"]) || s.contains("python") {
+            Some(Language::Python)
+        } else if word(&["node", "deno", "bun"]) {
+            Some(Language::JavaScript)
+        } else if word(&["ruby"]) {
+            Some(Language::Ruby)
+        } else if word(&["php"]) {
+            Some(Language::Php)
+        } else if word(&["lua"]) {
+            Some(Language::Lua)
+        } else if word(&["sh", "bash", "zsh", "dash", "ash", "ksh"]) {
+            Some(Language::Shell)
+        } else {
+            None
+        };
+    }
+    let first_lower = first.to_ascii_lowercase();
+    if first_lower.starts_with("<?php") {
+        return Some(Language::Php);
+    }
+    if first_lower.starts_with("<?xml") {
+        return Some(Language::Xml);
+    }
+    if first_lower.starts_with("<!doctype html") || first_lower.starts_with("<html") || (first_lower.starts_with('<') && lower.contains("<head") && lower.contains("<body")) {
+        return Some(Language::Html);
+    }
+    if first.starts_with("diff --git ") || (first.starts_with("--- ") && lines.iter().any(|l| l.starts_with("+++ ")) && lines.iter().any(|l| l.starts_with("@@ "))) {
+        return Some(Language::Diff);
+    }
+    if looks_like_json(head) {
+        return Some(Language::Json);
+    }
+    // Headings with a fenced block: Markdown, whatever the code inside looks like.
+    let heading = |l: &&str| l.starts_with('#') && l.trim_start_matches('#').starts_with(' ') && l.len() - l.trim_start_matches('#').len() <= 6;
+    if lines.iter().any(|l| l.starts_with("```")) && lines.iter().any(heading) {
+        return Some(Language::Markdown);
+    }
+    if first.starts_with("package ") && lines.iter().any(|l| l.starts_with("func ") || l.starts_with("import ")) {
+        return Some(Language::Go);
+    }
+    if has_line(&["#include <", "#include \""]) {
+        let cpp = lower.contains("std::") || lower.contains("using namespace") || lower.contains("template <") || lower.contains("template<") || has_line(&["class "]);
+        return Some(if cpp { Language::Cpp } else { Language::C });
+    }
+    if lower.contains("public static void main") || (has_line(&["import java.", "package "]) && lower.contains("public class ")) {
+        return Some(Language::Java);
+    }
+    if lines.iter().any(|l| l.starts_with("using System") || l.starts_with("namespace ")) && lower.contains("class ") {
+        return Some(Language::CSharp);
+    }
+    if has_line(&["fn main(", "pub fn ", "pub struct ", "use std::", "impl ", "#![", "#[derive("]) && lines.iter().any(|l| l.contains("fn ") || l.contains("struct ") || l.starts_with("use ")) {
+        return Some(Language::Rust);
+    }
+    if lines.iter().any(|l| l.starts_with("if __name__") || l.starts_with("def ") || l.starts_with("class ") && l.ends_with(':')) && !lower.contains("function ") {
+        return Some(Language::Python);
+    }
+    if lines.iter().any(|l| l.starts_with("import ") && l.contains(" from ")) || has_line(&["const ", "let ", "function ", "export ", "module.exports", "console.log("]) && (lower.contains("require(") || lower.contains("=>") || lower.contains("function") || lower.contains("console.")) {
+        let typed = lines.iter().any(|l| l.starts_with("interface ") || l.starts_with("type ") && l.contains('=') || l.starts_with("export interface ") || l.starts_with("export type "))
+            || lower.contains(": string") || lower.contains(": number") || lower.contains(": boolean");
+        let jsx = lower.contains("</") && lower.contains("return (");
+        return Some(match (typed, jsx) {
+            (true, true) => Language::TypeScriptReact,
+            (true, false) => Language::TypeScript,
+            (false, true) => Language::JavaScriptReact,
+            (false, false) => Language::JavaScript,
+        });
+    }
+    if lines.iter().any(|l| l.starts_with("@media") || l.starts_with("@import") || l.starts_with("@charset") || l.starts_with(":root")) {
+        return Some(Language::Css);
+    }
+    let sql_start = ["select ", "insert into ", "update ", "delete from ", "create table", "alter table", "drop table", "create index", "with "].iter().any(|k| first_lower.starts_with(k));
+    if sql_start && (lower.contains(" from ") || lower.contains(" values") || lower.contains(" set ") || lower.contains("create ") || lower.contains("alter ") || lower.contains("drop ")) && lower.contains(';') {
+        return Some(Language::Sql);
+    }
+    if first == "---" || first.starts_with("--- ") && !lines.iter().any(|l| l.starts_with("+++ ")) {
+        if lines.iter().any(|l| l.contains(": ") || l.ends_with(':') || l.starts_with("- ")) {
+            return Some(Language::Yaml);
+        }
+    }
+    if first.starts_with('[') && first.ends_with(']') && !first.contains('"') && lines.iter().any(|l| l.contains(" = ") && !l.starts_with(' ')) {
+        return Some(Language::Toml);
+    }
+    let pairs = lines.iter().filter(|l| { let t = l.trim_start(); !t.starts_with('#') && t.split_once(": ").is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')) }).count();
+    let other = lines.iter().filter(|l| { let t = l.trim(); !t.is_empty() && !t.starts_with('#') && !t.starts_with("- ") && !l.starts_with(' ') && t.split_once(": ").is_none() && !t.ends_with(':') }).count();
+    if pairs >= 3 && other == 0 {
+        return Some(Language::Yaml);
+    }
+    None
+}
+
+/// A JSON text, judged without parsing it: it opens and closes like an object or array, and starts with a key or value.
+fn looks_like_json(head: &str) -> bool {
+    let t = head.trim();
+    let (open, close) = match t.chars().next() {
+        Some('{') => ('{', '}'),
+        Some('[') => ('[', ']'),
+        _ => return false,
+    };
+    if !t.ends_with(close) && t.len() < 6000 {
+        return false;
+    }
+    let inner = t[open.len_utf8()..].trim_start();
+    match open {
+        '{' => inner.starts_with('"') || inner.starts_with('}'),
+        _ => inner.starts_with(['{', '[', '"', ']']) || inner.starts_with(|c: char| c.is_ascii_digit() || c == '-') || ["true", "false", "null"].iter().any(|w| inner.starts_with(w)),
+    }
+}
+
+#[cfg(test)]
+mod detect_tests {
+    use super::*;
+
+    fn d(text: &str) -> Option<Language> {
+        detect_content(text)
+    }
+
+    #[test]
+    fn a_shebang_names_the_interpreter() {
+        assert_eq!(d("#!/usr/bin/env python3\nprint(1)\n"), Some(Language::Python));
+        assert_eq!(d("#!/bin/bash\necho hi\n"), Some(Language::Shell));
+        assert_eq!(d("#!/usr/bin/env node\nconsole.log(1)\n"), Some(Language::JavaScript));
+        assert_eq!(d("#!/usr/bin/ruby\nputs 1\n"), Some(Language::Ruby));
+    }
+
+    #[test]
+    fn markup_and_data_are_recognised_by_their_opening() {
+        assert_eq!(d("<?php echo 1;"), Some(Language::Php));
+        assert_eq!(d("<?xml version=\"1.0\"?>\n<a/>"), Some(Language::Xml));
+        assert_eq!(d("<!DOCTYPE html>\n<html></html>"), Some(Language::Html));
+        assert_eq!(d("{\n  \"a\": 1\n}"), Some(Language::Json));
+        assert_eq!(d("[1, 2, 3]"), Some(Language::Json));
+        assert_eq!(d("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n"), Some(Language::Diff));
+        assert_eq!(d("---\nname: app\nitems:\n  - a\n"), Some(Language::Yaml));
+        assert_eq!(d("[package]\nname = \"x\"\nversion = \"1\"\n"), Some(Language::Toml));
+        assert_eq!(d("name: a\nversion: 1\nauthor: me\n"), Some(Language::Yaml));
+    }
+
+    #[test]
+    fn code_is_recognised_by_its_shape() {
+        assert_eq!(d("use std::io;\n\nfn main() {}\n"), Some(Language::Rust));
+        assert_eq!(d("import os\n\ndef run():\n    pass\n"), Some(Language::Python));
+        assert_eq!(d("const a = require('x');\nfunction f() {}\n"), Some(Language::JavaScript));
+        assert_eq!(d("interface A { x: string }\nexport const a: number = 1;\nfunction f() {}\n"), Some(Language::TypeScript));
+        assert_eq!(d("package main\n\nfunc main() {}\n"), Some(Language::Go));
+        assert_eq!(d("#include <stdio.h>\nint main() { return 0; }\n"), Some(Language::C));
+        assert_eq!(d("#include <vector>\nusing namespace std;\n"), Some(Language::Cpp));
+        assert_eq!(d("SELECT id FROM users;\n"), Some(Language::Sql));
+        assert_eq!(d("@media print { a { color: red } }\n"), Some(Language::Css));
+    }
+
+    #[test]
+    fn plain_prose_stays_plain() {
+        assert_eq!(d("Hello there, this is a note.\nNothing special.\n"), None);
+        assert_eq!(d("   \n\n"), None);
+        assert_eq!(d("{ not json"), None);
+        assert_eq!(d("Shopping list:\n- milk\n- eggs\n"), None);
     }
 }

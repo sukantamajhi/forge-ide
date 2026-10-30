@@ -99,14 +99,31 @@ impl Workspace {
             InsertLineBelow => self.mutate(cx, |b, s| b.insert_line(s, false)),
             InsertLineAbove => self.mutate(cx, |b, s| b.insert_line(s, true)),
             JoinLines => self.mutate(cx, |b, s| b.join_lines(s)),
-            ToggleLineComment => match language.and_then(|l| l.line_comment()).map(str::to_owned).or_else(|| ext_config.as_ref().and_then(|c| c.line_comment.clone())) {
-                Some(token) => self.mutate(cx, move |b, s| b.toggle_line_comment(s, &token)),
-                None => self.set_status("This language has no line comment"),
-            },
-            ToggleBlockComment => match language.and_then(|l| l.block_comment()).map(|(o, c)| (o.to_owned(), c.to_owned())).or_else(|| ext_config.as_ref().and_then(|c| c.block_comment.clone())) {
-                Some((open, close)) => self.mutate(cx, move |b, s| b.toggle_block_comment(s, &open, &close)),
-                None => self.set_status("This language has no block comment"),
-            },
+            ToggleLineComment => {
+                // The language at the caret: JavaScript inside <script> in an HTML file, for example.
+                let here = self.language_at_caret().or(language);
+                let line = here.and_then(|l| l.line_comment()).map(str::to_owned).or_else(|| ext_config.as_ref().and_then(|c| c.line_comment.clone()));
+                let block = here.and_then(|l| l.block_comment()).map(|(o, c)| (o.to_owned(), c.to_owned())).or_else(|| ext_config.as_ref().and_then(|c| c.block_comment.clone()));
+                match (line, block) {
+                    (Some(token), _) => self.mutate(cx, move |b, s| b.toggle_line_comment(s, &token)),
+                    // HTML, CSS and Markdown have no line comment: each line gets its own block comment.
+                    (None, Some((open, close))) => self.mutate(cx, move |b, s| b.toggle_line_block_comment(s, &open, &close)),
+                    (None, None) => {
+                        let name = here.map_or("Plain Text", |l| l.name());
+                        self.set_status(format!("{name} has no comment syntax"));
+                    }
+                }
+            }
+            ToggleBlockComment => {
+                let here = self.language_at_caret().or(language);
+                match here.and_then(|l| l.block_comment()).map(|(o, c)| (o.to_owned(), c.to_owned())).or_else(|| ext_config.as_ref().and_then(|c| c.block_comment.clone())) {
+                    Some((open, close)) => self.mutate(cx, move |b, s| b.toggle_block_comment(s, &open, &close)),
+                    None => {
+                        let name = here.map_or("Plain Text", |l| l.name());
+                        self.set_status(format!("{name} has no block comment"));
+                    }
+                }
+            }
             TransformUppercase => self.mutate(cx, |b, s| b.transform_selection(s, |t| t.to_uppercase())),
             TransformLowercase => self.mutate(cx, |b, s| b.transform_selection(s, |t| t.to_lowercase())),
             SortLinesAscending => self.mutate(cx, |b, s| b.sort_lines(s, false)),
@@ -175,6 +192,13 @@ impl Workspace {
             }
             NewFile => self.prompt_new_entry(false),
             NewUntitledFile => self.new_untitled(cx),
+            ChangeLanguageMode => {
+                if self.active_doc().is_some_and(|d| !d.readonly) {
+                    self.open_overlay(OverlayKind::Language, "");
+                } else {
+                    self.set_status("Open a file to change its language mode");
+                }
+            }
             SaveAs => self.save_as(cx),
             NewFolder => self.prompt_new_entry(true),
             OpenFolder => self.open_folder_dialog(cx),
@@ -884,6 +908,13 @@ impl Workspace {
             return;
         }
         self.open_virtual(&format!("compare:{}:{}", base.display(), other.display()), &format!("{} \u{2194} {}", name(&base), name(other)), &text, true, cx);
+    }
+
+    /// The language of the code under the caret, which differs from the file's in embedded code.
+    fn language_at_caret(&self) -> Option<forge_syntax::Language> {
+        let (doc, view) = self.active_doc().zip(self.active_view())?;
+        let syntax = doc.syntax.as_ref()?;
+        Some(syntax.language_at(doc.buffer.rope(), view.selections.primary().head))
     }
 
     fn open_symbols(&mut self) {

@@ -489,6 +489,7 @@ impl Workspace {
             OverlayKind::Symbols => "Go to symbol in editor",
             OverlayKind::OpenRecent => "Select a folder to open",
             OverlayKind::SnippetFiles => "Select a language for the snippets file, or a global one",
+            OverlayKind::Language => "Select the language mode for the file, or Auto Detect",
             OverlayKind::CompareWith => "Select the file to compare the active file with",
             OverlayKind::Theme => "Select a color theme",
             OverlayKind::IconTheme => "Select a file icon theme",
@@ -621,6 +622,7 @@ impl Workspace {
                 self.symbol_items(&text)
             }
             OverlayKind::SnippetFiles => self.snippet_file_items(&text),
+            OverlayKind::Language => self.language_items(&text),
             OverlayKind::OpenRecent => {
                 let folders = &self.recent_folders;
                 if folders.is_empty() {
@@ -1142,6 +1144,12 @@ impl Workspace {
             }
             ItemAction::CompareWith(path) => self.compare_with(&path, cx),
             ItemAction::SnippetFile(id) => self.open_snippet_file(&id, cx),
+            ItemAction::SetLanguage(choice) => {
+                if let Some((_, vi)) = self.active_ix() {
+                    let ix = self.groups[self.focused_group].views[vi].doc;
+                    self.choose_language(ix, choice, cx);
+                }
+            }
             ItemAction::WorktreeAddBranch(i) => {
                 if let (Some(name), Some(root)) = (self.branches.get(i).map(|b| b.name.clone()), self.git.as_ref().map(|g| g.root.clone())) {
                     let folder = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".to_owned());
