@@ -48,6 +48,7 @@ impl Workspace {
         let c = |label: &str, command: Command| self.command_item(label, command, true);
         match ix {
             0 => vec![
+                c("New Text File", NewUntitledFile),
                 c("New File...", NewFile),
                 c("New Folder...", NewFolder),
                 c("New Window", NewWindow),

@@ -97,6 +97,7 @@ commands! {
     PreviousProblem, "editor.action.marker.prev", "Go to Previous Problem", ["shift+f8"];
 
     Save, "workbench.action.files.save", "Save", ["ctrl+s"];
+    SaveAs, "workbench.action.files.saveAs", "Save As...", ["ctrl+shift+s"];
     SaveAll, "workbench.action.files.saveAll", "Save All", ["ctrl+k s"];
     CloseTab, "workbench.action.closeActiveEditor", "Close Editor", ["ctrl+w", "ctrl+f4"];
     CloseOtherTabs, "workbench.action.closeOtherEditors", "Close Other Editors", [];
@@ -120,7 +121,8 @@ commands! {
     OpenTab7, "workbench.action.openEditorAtIndex7", "Open Editor 7", ["alt+7"];
     OpenTab8, "workbench.action.openEditorAtIndex8", "Open Editor 8", ["alt+8"];
     OpenTab9, "workbench.action.openEditorAtIndex9", "Open Last Editor", ["alt+9"];
-    NewFile, "workbench.action.files.newFile", "New File...", ["ctrl+n"];
+    NewFile, "workbench.action.files.newFile", "New File...", [];
+    NewUntitledFile, "workbench.action.files.newUntitledFile", "New Untitled Text File", ["ctrl+n"];
     NewFolder, "workbench.action.files.newFolder", "New Folder...", [];
     OpenFolder, "workbench.action.files.openFolder", "Open Folder...", ["ctrl+k ctrl+o"];
 

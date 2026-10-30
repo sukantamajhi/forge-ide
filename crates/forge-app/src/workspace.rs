@@ -78,6 +78,8 @@ pub(crate) struct Doc {
     pub readonly: bool,
     /// Tab title for generated documents.
     pub title: Option<String>,
+    /// A new document that has no file yet (`Untitled-1`): Save asks where to put it.
+    pub untitled: bool,
     /// Colors lines by their unified-diff prefix.
     pub diff: bool,
     /// Lines changed relative to HEAD, and the `(revision, git epoch)` they were computed for.
@@ -148,6 +150,7 @@ impl Doc {
             revision: 0,
             readonly: false,
             title: None,
+            untitled: false,
             diff: false,
             gutter: Vec::new(),
             gutter_key: (u64::MAX, 0),
@@ -259,6 +262,14 @@ impl Doc {
         doc
     }
 
+    /// An empty `Untitled-<n>` document. Its path is only a unique key, not a place on disk.
+    pub fn new_untitled(n: usize) -> Self {
+        let mut doc = Self::new(PathBuf::from(format!("untitled:Untitled-{n}")), "");
+        doc.title = Some(format!("Untitled-{n}"));
+        doc.untitled = true;
+        doc
+    }
+
     pub fn name(&self) -> String {
         self.title.clone().unwrap_or_else(|| self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
     }
@@ -295,6 +306,8 @@ pub(crate) struct View {
     pub doc: usize,
     /// A pinned tab sits at the left, shows a pin instead of a close button, and survives "Close Others / All".
     pub pinned: bool,
+    /// A replaceable tab (shown in italics): the next single-click open takes its place until it is edited or double-clicked.
+    pub preview: bool,
     pub selections: SelectionSet,
     /// Column kept across vertical moves through short lines.
     pub goal: Option<usize>,
@@ -322,6 +335,7 @@ impl View {
         Self {
             doc,
             pinned: false,
+            preview: false,
             selections: SelectionSet::single(Selection::caret(0)),
             goal: None,
             history: Vec::new(),
@@ -1274,6 +1288,126 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Open `path` in a replaceable tab, as a single click in the Explorer does: it takes the place of the
+    /// group's current preview tab. A file already open keeps its tab as it is.
+    pub fn open_file_preview(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if !self.settings.enable_preview {
+            self.open_file(path, None, cx);
+            return;
+        }
+        let g = self.focused_group;
+        let was_open = self.groups[g].views.iter().any(|v| same_path(&self.docs[v.doc].path, path));
+        let old_doc = self.groups[g].views.iter().find(|v| v.preview && !same_path(&self.docs[v.doc].path, path)).map(|v| v.doc);
+        self.open_file(path, None, cx);
+        if was_open {
+            return;
+        }
+        let Some(new_vi) = self.groups[g].views.iter().position(|v| same_path(&self.docs[v.doc].path, path)) else { return };
+        self.groups[g].views[new_vi].preview = true;
+        if let Some(old) = old_doc {
+            if let Some(vi) = self.groups[g].views.iter().position(|v| v.doc == old && v.preview) {
+                if !self.docs[old].dirty {
+                    self.close_view(g, vi, cx);
+                    // Closing a tab to the left shifts the one just opened.
+                    if let Some(vi) = self.groups[g].views.iter().position(|v| same_path(&self.docs[v.doc].path, path)) {
+                        self.groups[g].active = vi;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Make a replaceable tab permanent.
+    pub fn keep_open(&mut self, g: usize, vi: usize) {
+        if let Some(view) = self.groups.get_mut(g).and_then(|gr| gr.views.get_mut(vi)) {
+            view.preview = false;
+        }
+    }
+
+    /// A new empty `Untitled-<n>` tab (Ctrl+N), with nothing asked until it is saved.
+    pub fn new_untitled(&mut self, cx: &mut Context<Self>) {
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.untitled && d.title.as_deref() == Some(format!("Untitled-{n}").as_str()))).unwrap_or(1);
+        self.auto_save_on_focus_change();
+        self.mark_jump();
+        self.image_page = None;
+        self.docs.push(Doc::new_untitled(n));
+        let doc = self.docs.len() - 1;
+        let g = self.focused_group;
+        self.groups[g].views.push(View::new(doc));
+        self.groups[g].active = self.groups[g].views.len() - 1;
+        self.completion = None;
+        self.hover = None;
+        self.signature = None;
+        self.focus = Focus::Editor;
+        cx.notify();
+    }
+
+    /// Save the open document under a name picked in the system's save dialog. An untitled document becomes
+    /// that file; a saved one is written to the new place and its tab follows.
+    pub fn save_as(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.active_view() else { return };
+        let doc = &self.docs[view.doc];
+        if doc.readonly {
+            self.set_status("This document is read-only");
+            return;
+        }
+        let old = doc.path.clone();
+        let (dir, suggested) = if doc.untitled {
+            (self.root().to_path_buf(), doc.name())
+        } else {
+            (old.parent().map(Path::to_path_buf).unwrap_or_else(|| self.root().to_path_buf()), doc.name())
+        };
+        let picked = cx.prompt_for_new_path(&dir, Some(&suggested));
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(path))) = picked.await {
+                let _ = this.update(cx, |workspace, cx| workspace.finish_save_as(&old, path, cx));
+            }
+        })
+        .detach();
+    }
+
+    fn finish_save_as(&mut self, old: &Path, new: PathBuf, cx: &mut Context<Self>) {
+        let Some(ix) = self.doc_index(old) else { return };
+        if self.docs.iter().enumerate().any(|(i, d)| i != ix && same_path(&d.path, &new)) {
+            self.set_status(format!("{} is open in another tab: close it first", new.display()));
+            return;
+        }
+        let mut contents = self.docs[ix].buffer.text();
+        if self.docs[ix].bom {
+            contents.insert(0, char::from_u32(0xFEFF).unwrap_or(' '));
+        }
+        if let Err(err) = std::fs::write(&new, &contents) {
+            self.set_status(format!("Save failed: {err}"));
+            return;
+        }
+        let (language, was_open) = (self.docs[ix].language, self.docs[ix].lsp_open);
+        if let (Some(language), true) = (language, was_open) {
+            self.lsp.did_close(language, &self.docs[ix].path);
+        }
+        // The same text under its new name: the language, highlighting and server follow the extension.
+        let text = self.docs[ix].buffer.text();
+        let mut fresh = Doc::new(new.clone(), &text);
+        fresh.bom = self.docs[ix].bom;
+        fresh.buffer = std::mem::replace(&mut self.docs[ix].buffer, forge_text::Buffer::new(""));
+        self.attach_ext_language(&mut fresh);
+        self.docs[ix] = fresh;
+        self.refresh_ext_diagnostics(ix);
+        self.activate_for_doc(ix);
+        self.attach_lsp(ix);
+        for view in self.groups.iter_mut().flat_map(|g| g.views.iter_mut()).filter(|v| v.doc == ix) {
+            view.preview = false;
+            view.folds_revision = u64::MAX;
+        }
+        self.recent_files.retain(|p| !same_path(p, &new));
+        self.recent_files.insert(0, new.clone());
+        self.file_index = None;
+        self.tree.refresh();
+        self.tree.reveal(&new);
+        self.git_request_refresh();
+        self.set_status(format!("Saved {}", new.display()));
+        cx.notify();
+    }
+
     /// Remember the caret as a place to return to with Go Back (Alt+Left).
     pub fn mark_jump(&mut self) {
         if self.navigating {
@@ -1369,6 +1503,10 @@ impl Workspace {
 
     pub fn write_doc(&mut self, doc_ix: usize) {
         let Some(doc) = self.docs.get_mut(doc_ix) else { return };
+        // An untitled document has no file to write to: Save (or Save As) asks where it goes.
+        if doc.untitled {
+            return;
+        }
         if doc.readonly {
             self.set_status("This document is read-only");
             return;
@@ -1518,6 +1656,9 @@ impl Workspace {
     /// Update everything that depends on a document's text after `edits`.
     pub fn after_edits(&mut self, doc_ix: usize, origin: Option<(usize, usize)>, edits: &[TextEdit]) {
         self.docs[doc_ix].dirty = true;
+        for view in self.groups.iter_mut().flat_map(|g| g.views.iter_mut()).filter(|v| v.doc == doc_ix) {
+            view.preview = false;
+        }
         self.docs[doc_ix].revision += 1;
         for (g, vi) in self.views_of(doc_ix).collect::<Vec<_>>() {
             let view = &mut self.groups[g].views[vi];
@@ -2056,5 +2197,17 @@ mod encoding_tests {
         // Only a leading mark counts, and invalid UTF-8 is still rejected.
         assert_eq!(decode_utf8("a\u{FEFF}b".as_bytes().to_vec()), Some(("a\u{FEFF}b".to_owned(), false)));
         assert_eq!(decode_utf8(vec![0xEF, 0xBB, 0xBF, 0xFF]), None);
+    }
+}
+
+#[cfg(test)]
+mod untitled_tests {
+    use super::Doc;
+
+    #[test]
+    fn an_untitled_document_has_a_name_but_no_file() {
+        let doc = Doc::new_untitled(3);
+        assert_eq!(doc.name(), "Untitled-3");
+        assert!(doc.untitled && !doc.dirty && !doc.path.is_file());
     }
 }

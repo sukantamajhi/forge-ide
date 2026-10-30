@@ -181,10 +181,13 @@ impl Workspace {
                 // A thin divider on the right, and a bar across the top that marks the selected tab.
                 .child(div().absolute().top_0().right_0().bottom_0().w(px(1.0)).bg(rgb(t.border)))
                 .children(active.then(|| div().absolute().top_0().left_0().right_0().h(px(2.0)).bg(rgb(if focused_group { t.info } else { t.dim }))))
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                     this.auto_save_on_focus_change();
                     this.focused_group = g;
                     this.groups[g].active = vi;
+                    if ev.click_count() >= 2 {
+                        this.keep_open(g, vi);
+                    }
                     this.focus = Focus::Editor;
                     this.completion = None;
                     cx.notify();
@@ -195,7 +198,7 @@ impl Workspace {
                     this.open_tab_context_menu(g, vi, ev.position, cx);
                 }))
                 .child(if doc.ext_page.is_some() { crate::icons::glyph(crate::codicons::EXTENSIONS, 1.0, t.dim) } else { file_icon(self.icon_theme.as_ref(), &doc.name()) })
-                .child(doc.name())
+                .child(div().when(view.preview, |d| d.italic()).child(doc.name()))
                 .child(
                     div()
                         .id(("close", g * 1000 + vi))
@@ -295,7 +298,7 @@ impl Workspace {
         let t = &self.theme;
         let crumbs = self.groups[g].views.get(self.groups[g].active).map(|v| {
             let doc = &self.docs[v.doc];
-            if doc.readonly {
+            if doc.readonly || doc.untitled {
                 return doc.name();
             }
             let path = &doc.path;
@@ -346,7 +349,7 @@ impl Workspace {
         let t = &self.theme;
         let actions = [
             (Command::OpenFolder, "Open Folder...", crate::codicons::FOLDER_OPENED),
-            (Command::NewFile, "New File...", crate::codicons::NEW_FILE),
+            (Command::NewUntitledFile, "New Text File", crate::codicons::NEW_FILE),
             (Command::QuickOpen, "Go to File...", crate::codicons::GO_TO_FILE),
             (Command::CommandPalette, "Show All Commands", crate::codicons::CHEVRON_RIGHT),
             (Command::FindInFiles, "Find in Files", crate::codicons::SEARCH),
@@ -932,8 +935,6 @@ impl Workspace {
                 .justify_center()
                 .rounded_md()
                 .cursor_pointer()
-                .border_1()
-                .border_color(rgb(if active { t.dim } else { t.sidebar }))
                 .when(active, |d| d.bg(rgb(t.tab_active)))
                 .hover(|s| s.bg(rgb(t.tab_active)))
                 .tooltip(self.tooltip(name, Some(command)))
@@ -950,8 +951,18 @@ impl Workspace {
                     }
                     cx.notify();
                 }))
+                // The outline of the open view is its own layer under the badge: a border on the button itself
+                // would be painted over the badge's edge.
+                .children(active.then(|| div().absolute().top_0().left_0().size_full().rounded_md().border_1().border_color(rgb(t.dim))))
                 .child(crate::icons::glyph(icon, 1.25, if active { t.text } else { t.dim }))
-                .children((badge > 0).then(|| div().absolute().bottom(px(-2.0)).right(px(-2.0)).min_w(rems(0.9)).h(rems(0.9)).px(px(3.0)).rounded_full().flex().items_center().justify_center().text_size(px(9.0)).bg(rgb(t.button)).text_color(rgb(t.button_text)).child(badge.to_string())))
+                // The change count: a pill with a ring in the sidebar's colour, so it reads as cut out of the icon.
+                .children((badge > 0).then(|| {
+                    let label = if badge > 99 { "99+".to_owned() } else { badge.to_string() };
+                    // The ring is a separate, larger circle behind the pill: a border would let the blue show at its edge.
+                    div().absolute().bottom(px(-4.0)).right(px(-5.0)).p(px(2.0)).rounded(px(10.0)).bg(rgb(t.sidebar)).child(
+                        div().min_w(px(16.0)).h(px(16.0)).px(px(4.0)).rounded(px(8.0)).flex().items_center().justify_center().text_size(px(10.0)).line_height(px(12.0)).font_weight(FontWeight::MEDIUM).bg(rgb(t.button)).text_color(rgb(t.button_text)).child(label),
+                    )
+                }))
         };
         let body: AnyElement = match self.sidebar_view {
             SidebarView::Explorer => self.render_explorer(cx).into_any_element(),
@@ -1091,13 +1102,18 @@ impl Workspace {
                                         .when(selected, |d| d.bg(rgb(if this.focus == Focus::Explorer { t.selection } else { t.tab_active })))
                                         .when(open && !selected, |d| d.bg(rgb(t.tab_active)))
                                         .hover(|s| s.bg(rgb(t.tab_active)))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                        .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
                                             this.focus = Focus::Explorer;
                                             this.explorer_selected = Some(ix);
                                             if is_dir {
                                                 this.tree.toggle(&path);
-                                            } else {
+                                            } else if ev.click_count() >= 2 {
+                                                // A double-click keeps the tab.
                                                 this.open_file(&path, None, cx);
+                                                let g = this.focused_group;
+                                                this.keep_open(g, this.groups[g].active);
+                                            } else {
+                                                this.open_file_preview(&path, cx);
                                             }
                                             cx.notify();
                                         }))

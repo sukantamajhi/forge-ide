@@ -97,6 +97,8 @@ pub struct Settings {
     pub sticky_scroll: bool,
     /// `editor.wordBasedSuggestions`: with no language server, complete from words already in the file.
     pub word_suggestions: bool,
+    /// `workbench.editor.enablePreview`: a single click in the Explorer opens a replaceable (italic) tab.
+    pub enable_preview: bool,
     pub sticky_max_lines: usize,
     /// `"[language]": { ... }` blocks, keyed by VS Code language id (`rust`, `python`, ...).
     pub languages: std::collections::BTreeMap<String, LangOverrides>,
@@ -138,6 +140,7 @@ impl Default for Settings {
             bracket_colors: true,
             sticky_scroll: true,
             word_suggestions: true,
+            enable_preview: true,
             sticky_max_lines: 5,
             languages: Default::default(),
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
@@ -281,6 +284,9 @@ impl Settings {
         }
         if let Some(v) = map.get("editor.stickyScroll.maxLineCount").and_then(Value::as_u64) {
             s.sticky_max_lines = (v as usize).clamp(1, 10);
+        }
+        if let Some(v) = map.get("workbench.editor.enablePreview").and_then(Value::as_bool) {
+            s.enable_preview = v;
         }
         if let Some(v) = map.get("editor.linkedEditing").and_then(Value::as_bool) {
             s.linked_editing = v;
@@ -473,6 +479,8 @@ mod tests {
         assert!(Settings::default().auto_closing_tags && Settings::default().linked_editing);
         let off = Settings::parse(r#"{ "html.autoClosingTags": false, "editor.linkedEditing": false }"#);
         assert!(!off.auto_closing_tags && !off.linked_editing);
+        assert!(Settings::default().enable_preview);
+        assert!(!Settings::parse(r#"{ "workbench.editor.enablePreview": false }"#).enable_preview);
         assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);
         assert!(Settings::parse(r#"{ "editor.snippetSuggestions": "top" }"#).snippet_suggestions);
         let f = Settings::parse(r#"{ "editor.fontFamily": " JetBrains Mono ", "workbench.fontFamily": "Inter" }"#);

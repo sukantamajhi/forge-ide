@@ -174,6 +174,8 @@ impl Workspace {
                 }
             }
             NewFile => self.prompt_new_entry(false),
+            NewUntitledFile => self.new_untitled(cx),
+            SaveAs => self.save_as(cx),
             NewFolder => self.prompt_new_entry(true),
             OpenFolder => self.open_folder_dialog(cx),
 
@@ -601,6 +603,10 @@ impl Workspace {
         let doc_ix = view.doc;
         if self.docs[doc_ix].readonly {
             self.set_status("This document is read-only");
+            return;
+        }
+        if self.docs[doc_ix].untitled {
+            self.save_as(cx);
             return;
         }
         if self.settings.trim_trailing_whitespace {
