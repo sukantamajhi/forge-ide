@@ -43,27 +43,32 @@ fn job_title(label: &str) -> &'static str {
 }
 
 impl Workspace {
+    /// Look for the repository around the project folder. Asking git takes two process starts (about 90 ms), so it
+    /// happens on a thread and the Source Control view fills in a moment after the window shows.
     pub fn init_git(&mut self) {
         self.git = None;
-        if !git::is_available() {
-            return;
-        }
-        if let Some(root) = git::discover(self.tree.root()) {
-            self.git = Some(GitState {
-                root,
-                status: Default::default(),
-                refreshing: false,
-                refresh_wanted: true,
-                last_refresh: Instant::now(),
-                head: HashMap::new(),
-                head_pending: HashSet::new(),
-                epoch: 0,
-                decor: HashMap::new(),
-                job: None,
-                job_started: None,
-                cancel: None,
-            });
-        }
+        let (folder, tx) = (self.tree.root().to_path_buf(), self.git_tx.clone());
+        std::thread::spawn(move || {
+            let repo = if git::is_available() { git::discover(&folder) } else { None };
+            let _ = tx.send(GitMsg::Repo { folder, repo });
+        });
+    }
+
+    fn open_repo(&mut self, root: PathBuf) {
+        self.git = Some(GitState {
+            root,
+            status: Default::default(),
+            refreshing: false,
+            refresh_wanted: true,
+            last_refresh: Instant::now(),
+            head: HashMap::new(),
+            head_pending: HashSet::new(),
+            epoch: 0,
+            decor: HashMap::new(),
+            job: None,
+            job_started: None,
+            cancel: None,
+        });
     }
 
     pub fn git_request_refresh(&mut self) {
@@ -190,6 +195,14 @@ impl Workspace {
 
     fn handle_git_msg(&mut self, msg: GitMsg, cx: &mut Context<Self>) {
         match msg {
+            GitMsg::Repo { folder, repo } => {
+                // An answer for a folder that is no longer open is dropped.
+                if crate::workspace::same_path(&folder, self.tree.root()) {
+                    if let Some(root) = repo {
+                        self.open_repo(root);
+                    }
+                }
+            }
             GitMsg::Status(Ok(status)) => self.apply_status(status),
             GitMsg::Status(Err(_)) => {
                 if let Some(g) = self.git.as_mut() {

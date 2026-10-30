@@ -418,8 +418,23 @@ The editing aids run on every keystroke, so they are kept cheap (release-build t
 Run the timings yourself: `cargo test --release -p forge-text bench -- --ignored --nocapture` and
 `cargo test --release -p forge-core --test bench -- --ignored --nocapture`. Parsing 100,000 CSV rows (7.7 MB) takes about 130 ms, once, when the preview opens.
 
+### Whole-project profile
+
+Measured on this machine (the `cargo build` profile, a 21,000-line / 0.8 MB Rust file in a git repository for typing, the Forge repository for startup):
+
+| Work | Before | After | How |
+|---|---|---|---|
+| Building the minimap while typing in a 21,000-line file | 4 to 12 ms per frame (grew with the file) | 0.00 ms | only the lines an edit touched are measured again |
+| Time to build one frame while typing in that file | 9 to 17 ms | 2 to 5 ms | the above, and the next two rows |
+| Colouring the visible lines (asked for 3 times per frame) | 3 x 0.65 ms | 1 x 0.65 ms | the result is kept for the frame and, when the text is unchanged, for a few dozen lines around it |
+| Opening a second file in a language already used | 17 ms (Rust) to 5 ms (others) to compile the highlight query | 3 microseconds | the compiled query is shared by every document of a language |
+| Starting the window (first frame) | about 960 ms | about 760 ms | git is found on a thread (was 90 ms, two process starts); the gpg lookup waits until a git command needs it (was 58 ms); restored tabs that are not in front are parsed when first shown |
+| Choosing the fonts | listed every installed font on every frame | once, and again when the font settings change | |
+
+Where the rest goes: about 670 ms of startup is GPUI starting up (graphics device, fonts, window), which Forge cannot change; a tree-sitter reparse after a keystroke takes about 4 ms in a 0.8 MB file (8 ms in the dev profile) because the parser walks the file's 9,000 top-level nodes. Idle CPU is about 1.5 to 2% (no frames are built while nothing happens; the 50 ms background tick costs about 12 microseconds); an adaptive tick was tried and removed because it did not lower it.
+
 ## Testing aid
 
-`FORGE_REPLAY="ctrl+p text:main enter"` feeds keystrokes through the normal key handler after startup
+`FORGE_PROFILE=1` prints, every five seconds, the frames built per second and where the time went (folds, minimap, highlight, syntax reparse, opening a file...), and the startup phases with their times. `FORGE_REPLAY="ctrl+p text:main enter"` feeds keystrokes through the normal key handler after startup
 (`FORGE_REPLAY_DELAY_MS` sets the initial delay). Tokens are chords (`ctrl+shift+p`, `f2`), `text:...` to
 type, and `wait:MS`.

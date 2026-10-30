@@ -55,11 +55,14 @@ impl Workspace {
         let root = self.root().to_path_buf();
         if let Some(session) = store.session(&root).cloned() {
             let mut opened = 0;
+            let saved_active = session.files.get(session.active).map(|f| f.path.clone());
             for file in session.files.iter().filter(|f| f.path.is_file()) {
+                // Only the tab that will be in front is parsed now; the others when they are first shown.
+                self.defer_syntax = also.is_some() || saved_active.as_ref().is_none_or(|a| !same_path(a, &file.path));
                 self.open_file(&file.path, Some((file.line, file.col)), cx);
                 opened += 1;
             }
-            let saved_active = session.files.get(session.active).map(|f| f.path.clone());
+            self.defer_syntax = false;
             if let Some(path) = saved_active {
                 if let Some(vi) = self.groups[0].views.iter().position(|v| same_path(&self.docs[v.doc].path, &path)) {
                     self.groups[0].active = vi;

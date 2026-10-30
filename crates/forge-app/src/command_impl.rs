@@ -549,7 +549,7 @@ impl Workspace {
         }
         self.after_type_markup(text, cx);
         self.sync_paired_tag(cx);
-        self.refresh_completion_after_edit(Some(text), false);
+        crate::prof::time("completion refresh", || self.refresh_completion_after_edit(Some(text), false));
         if text == "(" || text == "," {
             self.request_signature();
         } else if text == ")" {

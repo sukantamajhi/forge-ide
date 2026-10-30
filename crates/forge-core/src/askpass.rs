@@ -30,11 +30,16 @@ struct Config {
     exe: PathBuf,
     port: u16,
     token: String,
-    /// The gpg program git would run by itself, which the signing wrapper runs in turn.
-    gpg: String,
 }
 
 static CONFIG: RwLock<Option<Config>> = RwLock::new(None);
+
+/// The gpg program git would run by itself, which the signing wrapper runs in turn. Asking git for it starts a
+/// process, so it is done the first time a git command needs it, not at startup.
+fn real_gpg() -> &'static str {
+    static GPG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    GPG.get_or_init(configured_gpg_program)
+}
 
 /// How long the editor waits for the user to answer before giving up on the command.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(600);
@@ -68,9 +73,8 @@ pub fn start(exe: &Path) -> Option<Receiver<Request>> {
             std::thread::spawn(move || handle(stream, &expected, tx));
         }
     });
-    let gpg = configured_gpg_program();
     if let Ok(mut config) = CONFIG.write() {
-        *config = Some(Config { exe: exe.to_path_buf(), port, token, gpg });
+        *config = Some(Config { exe: exe.to_path_buf(), port, token });
     }
     Some(rx)
 }
@@ -135,7 +139,7 @@ pub fn env_vars() -> Vec<(&'static str, String)> {
         ("DISPLAY", "forge:0".to_owned()),
         (PORT_VAR, config.port.to_string()),
         (TOKEN_VAR, config.token.clone()),
-        ("FORGE_GPG_REAL", config.gpg.clone()),
+        ("FORGE_GPG_REAL", real_gpg().to_owned()),
     ]
 }
 

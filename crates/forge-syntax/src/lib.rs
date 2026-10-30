@@ -32,24 +32,40 @@ pub struct Span {
     pub class: HighlightClass,
 }
 
-/// A tree-sitter parser with its highlight query, ready to run.
-struct Engine {
-    parser: Parser,
+/// A language's highlight query, compiled. Compiling it takes several milliseconds, so one copy is shared by every
+/// document in that language.
+struct Compiled {
     query: Query,
     /// Highlight class per query capture index; `None` captures are ignored.
     classes: Vec<Option<HighlightClass>>,
 }
 
+/// A tree-sitter parser (one per document, it keeps parse state) with its language's shared highlight query.
+struct Engine {
+    parser: Parser,
+    compiled: std::sync::Arc<Compiled>,
+}
+
 impl Engine {
     /// `None` if the grammar and its bundled query cannot be loaded together.
     fn load(language: Language) -> Option<Self> {
+        static CACHE: std::sync::Mutex<Option<HashMap<Language, Option<std::sync::Arc<Compiled>>>>> = std::sync::Mutex::new(None);
         let Grammar::Tree(ts_language, queries) = language.grammar() else { return None };
         let mut parser = Parser::new();
         parser.set_language(&ts_language).ok()?;
-        // Combined queries can name nodes a grammar variant lacks; fall back to a simpler one.
-        let query = queries.iter().find_map(|q| Query::new(&ts_language, q).ok())?;
-        let classes = query.capture_names().iter().map(|name| HighlightClass::from_capture(name)).collect();
-        Some(Self { parser, query, classes })
+        let compiled = CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .entry(language)
+            .or_insert_with(|| {
+                // Combined queries can name nodes a grammar variant lacks; fall back to a simpler one.
+                let query = queries.iter().find_map(|q| Query::new(&ts_language, q).ok())?;
+                let classes = query.capture_names().iter().map(|name| HighlightClass::from_capture(name)).collect();
+                Some(std::sync::Arc::new(Compiled { query, classes }))
+            })
+            .clone()?;
+        Some(Self { parser, compiled })
     }
 }
 
@@ -277,10 +293,10 @@ fn collect_captures(rope: &Rope, tree: &Tree, engine: &Engine, bytes: Range<usiz
     let (start, end) = rows;
     let mut cursor = QueryCursor::new();
     cursor.set_byte_range(bytes);
-    let mut captures = cursor.captures(&engine.query, tree.root_node(), RopeText(rope));
+    let mut captures = cursor.captures(&engine.compiled.query, tree.root_node(), RopeText(rope));
     while let Some((m, index)) = captures.next() {
         let capture = m.captures()[*index];
-        let Some(class) = engine.classes[capture.index as usize] else { continue };
+        let Some(class) = engine.compiled.classes[capture.index as usize] else { continue };
         let node = capture.node;
         let first = node.start_position().row.max(start);
         let last = node.end_position().row.min(end - 1);

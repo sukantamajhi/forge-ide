@@ -17,13 +17,41 @@ const MAX_ROW_PX: f32 = 2.0;
 /// Indent and length (in characters) of each line, for drawing its bar.
 pub(crate) type LineStats = Vec<(u8, u8)>;
 
+/// The bar for one line: its indent and how many characters follow it. Only as many characters as the bar can show
+/// are counted, so a line costs the same however long it is.
+fn stat(line: &str) -> (u8, u8) {
+    let trimmed = line.trim_end();
+    let mut indent = 0usize;
+    let mut lead_chars = 0usize;
+    for c in trimmed.chars() {
+        if !c.is_whitespace() {
+            break;
+        }
+        indent += if c == '\t' { 4 } else { 1 };
+        lead_chars += 1;
+    }
+    let len = trimmed.chars().skip(lead_chars).take(MAX_CHARS).count();
+    (indent.min(40) as u8, len as u8)
+}
+
+#[cfg(test)]
 pub(crate) fn line_stats(lines: impl Iterator<Item = String>) -> LineStats {
-    lines
-        .map(|text| {
-            let trimmed = text.trim_end();
-            let indent: usize = trimmed.chars().take_while(|c| c.is_whitespace()).map(|c| if c == '\t' { 4 } else { 1 }).sum();
-            let len = trimmed.chars().count().saturating_sub(trimmed.chars().take_while(|c| c.is_whitespace()).count());
-            (indent.min(40) as u8, len.min(MAX_CHARS) as u8)
+    lines.map(|text| stat(&text)).collect()
+}
+
+/// The stats of every line of `buffer`, reading each line in place instead of copying it out.
+pub(crate) fn rope_line_stats(buffer: &forge_text::Buffer) -> LineStats {
+    let mut joined = String::new();
+    buffer.rope().lines()
+        .map(|line| match line.as_str() {
+            Some(text) => stat(text),
+            None => {
+                joined.clear();
+                for chunk in line.chunks() {
+                    joined.push_str(chunk);
+                }
+                stat(&joined)
+            }
         })
         .collect()
 }
@@ -58,9 +86,22 @@ impl Workspace {
             return;
         }
         if view.minimap.as_ref().is_some_and(|(revision, _)| *revision == doc.revision) {
+            view.minimap_pending.clear();
             return;
         }
-        let stats = line_stats((0..total).map(|l| doc.buffer.line(l)));
+        // One edit since the strip was built (a keystroke): only the lines it touched are measured again.
+        let pending = std::mem::take(&mut view.minimap_pending);
+        if let (Some((revision, stats)), [(first, old_last, new_last)]) = (view.minimap.as_mut(), pending.as_slice()) {
+            if *revision + 1 == doc.revision && *old_last < stats.len() && *new_last < total {
+                let fresh: Vec<(u8, u8)> = (*first..=*new_last).map(|l| stat(&doc.buffer.line(l))).collect();
+                stats.splice(*first..=*old_last, fresh);
+                if stats.len() == total {
+                    *revision = doc.revision;
+                    return;
+                }
+            }
+        }
+        let stats = rope_line_stats(&doc.buffer);
         view.minimap = Some((doc.revision, stats));
     }
 

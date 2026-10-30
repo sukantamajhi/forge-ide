@@ -87,6 +87,9 @@ pub(crate) struct Doc {
     pub bracket_depths: std::cell::RefCell<(u64, std::rc::Rc<Vec<i32>>)>,
     /// Width in cells of the longest line, and the `revision` it was measured for (the sideways scroll range).
     pub widest: std::cell::Cell<(u64, usize)>,
+    /// Syntax colours of a stretch of lines (`revision`, first line, spans per line), so building a frame, which asks
+    /// for the visible lines several times, and scrolling a few lines, colour them once.
+    pub span_cache: std::cell::RefCell<(u64, usize, Vec<Vec<forge_syntax::Span>>)>,
     /// The file began with a UTF-8 byte-order mark. It is kept out of the text (language
     /// servers choke on it) and written back on save.
     pub bom: bool,
@@ -94,6 +97,8 @@ pub(crate) struct Doc {
     pub ext_lang: Option<forge_core::ext_lang::ExtLanguage>,
     /// That language's TextMate tokenizer, when its extension ships a grammar.
     pub tm: Option<forge_syntax::TextMateSyntax>,
+    /// The syntax tree has not been built yet; [`Doc::ensure_parsed`] does it.
+    pub parse_pending: bool,
     /// Set when the tab shows an extension's page instead of text.
     pub ext_page: Option<Box<ExtDetail>>,
 }
@@ -110,13 +115,26 @@ pub(crate) fn decode_utf8(bytes: Vec<u8>) -> Option<(String, bool)> {
 
 impl Doc {
     pub fn new(path: PathBuf, text: &str) -> Self {
+        Self::with_parse(path, text, true)
+    }
+
+    /// A document whose syntax tree is built when it is first shown (see [`Self::ensure_parsed`]): the tabs restored
+    /// at startup that are not in front do not hold up the first window.
+    pub fn new_unparsed(path: PathBuf, text: &str) -> Self {
+        Self::with_parse(path, text, false)
+    }
+
+    fn with_parse(path: PathBuf, text: &str, parse_now: bool) -> Self {
         let buffer = Buffer::new(text);
         let language = Language::from_path(&path);
         let syntax = language.and_then(Syntax::new).map(|mut syntax| {
-            syntax.parse(buffer.rope(), &[]);
+            if parse_now {
+                syntax.parse(buffer.rope(), &[]);
+            }
             syntax
         });
         Self {
+            parse_pending: !parse_now && syntax.is_some(),
             path,
             buffer,
             dirty: false,
@@ -135,11 +153,43 @@ impl Doc {
             gutter_key: (u64::MAX, 0),
             bracket_depths: std::cell::RefCell::new((u64::MAX, std::rc::Rc::new(Vec::new()))),
             widest: std::cell::Cell::new((u64::MAX, 0)),
+            span_cache: std::cell::RefCell::new((u64::MAX, 0, Vec::new())),
             bom: false,
             ext_lang: None,
             tm: None,
             ext_page: None,
         }
+    }
+
+    /// Build the syntax tree now if it was put off.
+    pub fn ensure_parsed(&mut self) {
+        if std::mem::take(&mut self.parse_pending) {
+            if let Some(syntax) = self.syntax.as_mut() {
+                syntax.parse(self.buffer.rope(), &[]);
+            }
+        }
+    }
+
+    /// The coloured runs of lines `range`, from the cache when it holds them. When the text has not changed, a margin
+    /// of lines around the request is coloured too, so scrolling a little does not start over; right after an edit
+    /// only what is asked for is coloured, since that is what the next keystroke will throw away.
+    pub fn highlight_cached(&self, range: std::ops::Range<usize>) -> Vec<Vec<forge_syntax::Span>> {
+        const MARGIN: usize = 40;
+        let mut cache = self.span_cache.borrow_mut();
+        let (revision, first, lines) = &*cache;
+        if *revision != self.revision || range.start < *first || range.end > *first + lines.len() {
+            let total = self.buffer.len_lines();
+            let margin = if *revision == self.revision { MARGIN } else { 0 };
+            let wanted = range.start.saturating_sub(margin)..(range.end + margin).min(total);
+            let spans = match (self.syntax.as_ref(), self.tm.as_ref()) {
+                (Some(s), _) => s.highlight_lines(self.buffer.rope(), wanted.clone()),
+                (None, Some(t)) => t.highlight_lines(self.buffer.rope(), wanted.clone()),
+                (None, None) => Vec::new(),
+            };
+            *cache = (self.revision, wanted.start, spans);
+        }
+        let (_, first, lines) = &*cache;
+        lines.iter().skip(range.start.saturating_sub(*first)).take(range.len()).cloned().collect()
     }
 
     /// Display width in cells of the longest line (tabs expanded), kept until the text changes.
@@ -260,6 +310,9 @@ pub(crate) struct View {
     pub wrap: Option<crate::wrap::WrapMap>,
     /// The minimap's per-line bars, with the document revision they were built for.
     pub minimap: Option<(u64, crate::minimap::LineStats)>,
+    /// Lines `(first, last before, last after)` of the edits made since the minimap was built, so a keystroke
+    /// updates only the lines it touched.
+    pub minimap_pending: Vec<(usize, usize, usize)>,
     /// How far the text is scrolled sideways, in pixels (always 0 with word wrap on).
     pub scroll_x: f32,
 }
@@ -279,6 +332,7 @@ impl View {
             folds_lines: 0,
             wrap: None,
             minimap: None,
+            minimap_pending: Vec::new(),
             scroll_x: 0.0,
         }
     }
@@ -544,6 +598,8 @@ pub(crate) struct HoverInfo {
 
 /// Results of git work done on background threads.
 pub(crate) enum GitMsg {
+    /// The repository found around a folder (none if it is not in one, or git is missing).
+    Repo { folder: PathBuf, repo: Option<PathBuf> },
     Status(Result<Status, String>),
     Head(PathBuf, Option<String>),
     Done { label: String, result: Result<String, String> },
@@ -716,6 +772,14 @@ pub(crate) struct Workspace {
     pub preview_open: bool,
     /// The Markdown file shown as a full page instead of its source (Markdown: Open Preview).
     pub preview_full: Option<PathBuf>,
+    /// The pointer is over a link in a Markdown preview, or over a word with Ctrl held in the editor (a
+    /// go-to-definition link): the cursor becomes a hand.
+    pub md_link_hover: bool,
+    /// While set, files being opened get their syntax tree later (startup tabs that are not in front).
+    pub defer_syntax: bool,
+    /// The font settings the code and UI fonts and the character width were worked out for.
+    pub font_key: Option<(String, String, u32)>,
+    pub code_link_hover: bool,
     /// The parsed table of the CSV file in the full-page preview, its list scroll and its sideways scroll.
     pub csv_cache: Option<crate::csv_view::CsvCache>,
     pub csv_scroll: UniformListScrollHandle,
@@ -816,11 +880,16 @@ impl Workspace {
                 status = format!("keybindings.json: {first}");
             }
         }
+        crate::prof::mark("  settings, keys, layout read");
         let extensions = crate::ext_support::load_extensions();
+        crate::prof::mark("  extensions loaded");
         let (ext_langs, tm, _warnings) = crate::ext_support::build_ext_languages(&extensions);
+        crate::prof::mark("  extension languages built");
         let snippets = crate::snippet_support::load_snippets(&extensions, settings.builtin_snippets);
+        crate::prof::mark("  snippets loaded");
         let theme = crate::ext_support::resolve_theme(&extensions, &settings.theme);
         let icon_theme = crate::ext_support::resolve_icon_theme(&extensions, &settings.icon_theme);
+        crate::prof::mark("  themes resolved");
         let (git_tx, git_rx) = mpsc::channel();
         let mut workspace = Self {
             lsp: LspManager::new(root.clone()),
@@ -923,6 +992,10 @@ impl Workspace {
             session_checked: Instant::now(),
             preview_open: false,
             preview_full: None,
+            md_link_hover: false,
+            defer_syntax: false,
+            font_key: None,
+            code_link_hover: false,
             csv_cache: None,
             csv_scroll: UniformListScrollHandle::new(),
             csv_scroll_x: 0.0,
@@ -980,13 +1053,17 @@ impl Workspace {
             ext_langs,
             tm,
         };
+        crate::prof::mark("  struct built");
         // Git asks for logins through this program; the questions come back here.
         if let Ok(exe) = std::env::current_exe() {
             workspace.askpass_rx = forge_core::askpass::start(&exe);
         }
         workspace.lsp.set_overrides(workspace.settings.language_servers.clone());
+        crate::prof::mark("  askpass started");
         workspace.init_git();
+        crate::prof::mark("  git initialised");
         workspace.restore_session(initial_file, cx);
+        crate::prof::mark("  session restored");
         // Closing the window saves the session one last time, however recently it last changed.
         cx.on_app_quit(|this, _| {
             this.save_session(true);
@@ -1001,6 +1078,7 @@ impl Workspace {
         })
         .detach();
         workspace.activate_for(forge_ext_host::host::ActivationEvent::Startup);
+        crate::prof::mark("  extensions activated");
         if workspace.settings.lsp_autostart {
             workspace.autostart_pending = true;
             workspace.ensure_file_index();
@@ -1141,11 +1219,12 @@ impl Workspace {
             self.groups[group].views.push(View::new(doc));
             self.groups[group].active = self.groups[group].views.len() - 1;
         } else {
-            match Self::read_file(path) {
+            match crate::prof::time("open: read file", || Self::read_file(path)) {
                 Ok((text, bom)) => {
-                    let mut new_doc = Doc::new(path.to_path_buf(), &text);
+                    let defer = self.defer_syntax;
+                    let mut new_doc = crate::prof::time("open: parse", || if defer { Doc::new_unparsed(path.to_path_buf(), &text) } else { Doc::new(path.to_path_buf(), &text) });
                     new_doc.bom = bom;
-                    self.attach_ext_language(&mut new_doc);
+                    crate::prof::time("open: language", || self.attach_ext_language(&mut new_doc));
                     self.docs.push(new_doc);
                     let new_ix = self.docs.len() - 1;
                     self.refresh_ext_diagnostics(new_ix);
@@ -1153,7 +1232,7 @@ impl Workspace {
                     let doc = self.docs.len() - 1;
                     self.groups[group].views.push(View::new(doc));
                     self.groups[group].active = self.groups[group].views.len() - 1;
-                    self.attach_lsp(doc);
+                    crate::prof::time("open: attach server", || self.attach_lsp(doc));
                 }
                 Err(err) => {
                     // A file that is not text opens as a read-only hex dump (the start of it).
@@ -1420,9 +1499,9 @@ impl Workspace {
         view.goal = None;
         view.expand.clear();
         let doc_ix = view.doc;
-        let edits = doc.sync_syntax();
+        let edits = crate::prof::time("syntax reparse", || doc.sync_syntax());
         if !edits.is_empty() {
-            self.after_edits(doc_ix, Some((g, vi)), &edits);
+            crate::prof::time("after edits", || self.after_edits(doc_ix, Some((g, vi)), &edits));
         }
         self.reveal_caret(g, vi, false);
         cx.notify();
@@ -1439,6 +1518,13 @@ impl Workspace {
             }
             for e in edits {
                 view.folds.apply_edit(e.start_point.0, e.old_end_point.0, e.new_end_point.0);
+            }
+            // More than one edit between two builds is not worth tracking: the strip is rebuilt whole then.
+            if view.minimap.is_some() {
+                view.minimap_pending.clear();
+                if let [e] = edits {
+                    view.minimap_pending.push((e.start_point.0, e.old_end_point.0, e.new_end_point.0));
+                }
             }
         }
         self.snippet_follow(doc_ix, edits);

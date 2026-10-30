@@ -19,6 +19,7 @@ mod icons;
 mod markup_support;
 mod menu_bar;
 mod image_view;
+mod prof;
 mod product_icons;
 mod snippet_support;
 mod ext_support;
@@ -47,6 +48,7 @@ use gpui::{
 use workspace::Workspace;
 
 fn main() {
+    prof::mark("process started");
     // Git runs this program to ask for a password or passphrase (see `forge_core::askpass`).
     let args: Vec<String> = std::env::args().collect();
     if let Some(code) = forge_core::askpass::run_as_helper(&args) {
@@ -72,8 +74,13 @@ fn main() {
         (target, None)
     };
 
-    Application::new().run(move |cx: &mut App| {
+    prof::mark("folder chosen");
+    let application = Application::new();
+    prof::mark("GPUI created");
+    application.run(move |cx: &mut App| {
+        prof::mark("application running");
         icons::register_font(cx);
+        prof::mark("icon font registered");
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -81,7 +88,9 @@ fn main() {
             ..Default::default()
         };
         cx.open_window(options, move |window, cx| {
+            prof::mark("window opened");
             let workspace = cx.new(|cx| Workspace::new(root.clone(), initial_file.as_deref(), cx));
+            prof::mark("workspace built");
             window.focus(&workspace.focus_handle(cx));
             workspace
         })

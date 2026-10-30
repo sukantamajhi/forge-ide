@@ -414,6 +414,14 @@ impl Workspace {
         }
         let moved_far = self.mouse.is_none_or(|p| (p.x - ev.position.x).abs() > px_f(2.0) || (p.y - ev.position.y).abs() > px_f(2.0));
         self.mouse = Some(ev.position);
+        let over_word = (ev.modifiers.control || ev.modifiers.platform) && self.point_at(ev.position).is_some_and(|(g, line, col)| {
+            let doc = self.groups[g].views.get(self.groups[g].active).map(|v| &self.docs[v.doc]);
+            doc.is_some_and(|d| d.buffer.line(line).chars().nth(col).is_some_and(|c| c.is_alphanumeric() || c == '_'))
+        });
+        if over_word != self.code_link_hover {
+            self.code_link_hover = over_word;
+            cx.notify();
+        }
         if moved_far {
             self.mouse_moved = Instant::now();
             if self.hover.take().is_some() {

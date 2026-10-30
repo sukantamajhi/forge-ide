@@ -45,6 +45,8 @@ struct LineCtx {
     lifetimes: bool,
     /// Pixels the text is scrolled sideways.
     scroll_x: f32,
+    /// Ctrl is held over a word: the text area shows a hand (Ctrl+click goes to the definition).
+    link_cursor: bool,
 }
 
 /// A pinned line: its text with tabs expanded, and its coloured runs.
@@ -102,18 +104,23 @@ fn px_f(v: f32) -> Pixels {
 impl Workspace {
     pub fn measure_font(&mut self, cx: &App) {
         let system = cx.text_system();
-        // The first installed family of: the one in settings, then the usual good ones.
-        let installed = system.all_font_names();
-        let pick = |wanted: &str, fallbacks: &[&str], keep: &str| -> SharedString {
-            let have = |name: &str| installed.iter().any(|n| n.eq_ignore_ascii_case(name));
-            let first = std::iter::once(wanted).filter(|w| !w.is_empty()).chain(fallbacks.iter().copied()).find(|n| have(n));
-            SharedString::from(first.unwrap_or(keep).to_owned())
-        };
-        self.code_font = pick(&self.settings.font_family, &["Cascadia Mono", "Cascadia Code", "Consolas"], FONT);
-        self.ui_font = pick(&self.settings.ui_font_family, &["Segoe UI Variable Text", "Segoe UI", "Arial"], "Segoe UI");
-        let id = system.resolve_font(&font(self.code_font.clone()));
-        if let Ok(size) = system.advance(id, px(self.settings.font_size), 'm') {
-            self.char_width = size.width;
+        // Listing every installed font is slow, so the families are chosen again only when the settings change.
+        let key = (self.settings.font_family.clone(), self.settings.ui_font_family.clone(), self.settings.font_size.to_bits());
+        if self.font_key.as_ref() != Some(&key) {
+            // The first installed family of: the one in settings, then the usual good ones.
+            let installed = system.all_font_names();
+            let pick = |wanted: &str, fallbacks: &[&str], keep: &str| -> SharedString {
+                let have = |name: &str| installed.iter().any(|n| n.eq_ignore_ascii_case(name));
+                let first = std::iter::once(wanted).filter(|w| !w.is_empty()).chain(fallbacks.iter().copied()).find(|n| have(n));
+                SharedString::from(first.unwrap_or(keep).to_owned())
+            };
+            self.code_font = pick(&self.settings.font_family, &["Cascadia Mono", "Cascadia Code", "Consolas"], FONT);
+            self.ui_font = pick(&self.settings.ui_font_family, &["Segoe UI Variable Text", "Segoe UI", "Arial"], "Segoe UI");
+            let id = system.resolve_font(&font(self.code_font.clone()));
+            if let Ok(size) = system.advance(id, px(self.settings.font_size), 'm') {
+                self.char_width = size.width;
+            }
+            self.font_key = Some(key);
         }
     }
 
@@ -122,7 +129,7 @@ impl Workspace {
         let text = input.text();
         let split = text.char_indices().nth(input.cursor()).map_or(text.len(), |(b, _)| b);
         let (before, after) = text.split_at(split);
-        let row = div().flex().flex_row().items_center().h(rems(1.375)).px_2().bg(rgb(t.bg)).border_1().border_color(rgb(if focused { t.info } else { t.border })).rounded_sm().overflow_hidden().whitespace_nowrap();
+        let row = div().flex().flex_row().items_center().h(rems(1.375)).px_2().cursor_text().bg(rgb(t.bg)).border_1().border_color(rgb(if focused { t.info } else { t.border })).rounded_sm().overflow_hidden().whitespace_nowrap();
         if text.is_empty() {
             return row.child(div().w(px(1.0)).h(rems(0.875)).bg(rgb(if focused { t.caret } else { t.bg }))).child(div().text_color(rgb(t.dim)).child(placeholder.to_owned()));
         }
@@ -361,14 +368,16 @@ impl Workspace {
 
     fn render_editor(&mut self, g: usize, cx: &mut Context<Self>) -> impl IntoElement {
         let vi = self.groups[g].active;
-        self.ensure_folds(g, vi, false);
-        self.ensure_wrap(g, vi);
-        self.ensure_minimap_stats(g, vi);
+        let shown_doc = self.groups[g].views[vi].doc;
+        self.docs[shown_doc].ensure_parsed();
+        crate::prof::time("folds", || self.ensure_folds(g, vi, false));
+        crate::prof::time("wrap", || self.ensure_wrap(g, vi));
+        crate::prof::time("minimap stats", || self.ensure_minimap_stats(g, vi));
         if self.preview_open && g == self.focused_group && self.is_markdown(g) {
             self.ensure_markdown(g);
         }
         let doc_ix = self.groups[g].views[vi].doc;
-        self.ensure_gutter(doc_ix);
+        crate::prof::time("git gutter", || self.ensure_gutter(doc_ix));
         let view = &self.groups[g].views[vi];
         let doc = &self.docs[view.doc];
         let total = doc.buffer.len_lines();
@@ -379,8 +388,8 @@ impl Workspace {
         };
         let scroll = view.scroll.clone();
         let focused = g == self.focused_group;
-        let minimap = self.render_minimap(g, count, cx);
-        let sticky = self.render_sticky(g, cx);
+        let minimap = crate::prof::time("minimap", || self.render_minimap(g, count, cx));
+        let sticky = crate::prof::time("sticky", || self.render_sticky(g, cx));
         let preview = self.render_markdown_preview(g, cx);
         div().size_full().flex().flex_row().child(
             div()
@@ -388,13 +397,14 @@ impl Workspace {
                 .min_w_0()
                 .h_full()
                 .relative()
+                .cursor_text()
                 .on_scroll_wheel(cx.listener(move |this, ev: &gpui::ScrollWheelEvent, _, cx| this.editor_hscroll(g, ev, cx)))
                 .child(
                     crate::scroll::restrict_to_axis(
                         uniform_list(
                             ("editor", g),
                             count,
-                            cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
+                            cx.processor(move |this, range: Range<usize>, _window, _cx| crate::prof::time("lines", || this.render_lines(g, range))),
                         )
                         .track_scroll(scroll),
                     )
@@ -537,11 +547,7 @@ impl Workspace {
         };
         let (Some(first), Some(last)) = (rows.first().map(|r| r.line), rows.last().map(|r| r.line)) else { return Vec::new() };
         let focused = g == self.focused_group;
-        let spans = match (doc.syntax.as_ref(), doc.tm.as_ref()) {
-            (Some(s), _) => s.highlight_lines(doc.buffer.rope(), first..last + 1),
-            (None, Some(t)) => t.highlight_lines(doc.buffer.rope(), first..last + 1),
-            (None, None) => Vec::new(),
-        };
+        let spans = crate::prof::time("highlight", || doc.highlight_cached(first..last + 1));
         let caret = view.selections.primary().head;
         let bracket = if focused { matching_bracket(doc.buffer.rope(), caret) } else { None };
         let (matches, current_match) = if focused && self.find.open && self.find_revision.0 == view.doc {
@@ -557,7 +563,7 @@ impl Workspace {
         let depths = (self.settings.bracket_colors && !doc.diff && !doc.readonly_text_only()).then(|| doc.bracket_depths()).flatten();
         let line_comment = doc.language.and_then(|l| l.line_comment());
         let lifetimes = doc.language == Some(forge_syntax::Language::Rust);
-        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused, breakpoints, debug_line, depths, line_comment, lifetimes, scroll_x: view.scroll_x };
+        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused, breakpoints, debug_line, depths, line_comment, lifetimes, scroll_x: view.scroll_x, link_cursor: focused && self.code_link_hover };
         rows.into_iter().map(|row| self.render_line(view, row.line, &ctx, row)).collect()
     }
 
@@ -722,13 +728,15 @@ impl Workspace {
                     .text_color(rgb(number_color))
                     .child(if row.k == 0 { (line + 1).to_string() } else { String::new() }),
             )
-            .child(div().w(px(FOLD_WIDTH)).flex_none().flex().items_center().justify_center().children(chevron.filter(|_| row.k == 0).map(|icon| crate::icons::glyph(icon, 0.875, t.dim))))
+            .child(div().w(px(FOLD_WIDTH)).flex_none().flex().items_center().justify_center().when(chevron.is_some() && row.k == 0, |d| d.cursor_pointer()).children(chevron.filter(|_| row.k == 0).map(|icon| crate::icons::glyph(icon, 0.875, t.dim))))
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .h(line_h)
                     .overflow_hidden()
+                    .when(ctx.link_cursor, |d| d.cursor_pointer())
+                    .when(!ctx.link_cursor, |d| d.cursor_text())
                     .child(
                         // A row that wrapped early is narrower than the editor: clip it to its own cells so
                         // the rest of the line does not show through beside it.
@@ -1249,6 +1257,7 @@ impl Workspace {
                                                 })
                                                 .collect();
                                             row.pl(rems(2.25))
+                                                .cursor_pointer()
                                                 .when(selected, |d| d.bg(rgb(t.selection)))
                                                 .hover(|s| s.bg(rgb(t.tab_active)))
                                                 .on_click(cx.listener(move |this, _, _, cx| this.open_hit(first, cx)))
@@ -2003,6 +2012,7 @@ impl Workspace {
                         .items_center()
                         .justify_center()
                         .rounded_sm()
+                        .cursor_pointer()
                         .hover(|s| s.bg(rgb(t.border)))
                         .tooltip(self.tooltip("Kill Terminal", None))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -2093,6 +2103,7 @@ impl Workspace {
             .id("terminal-view")
             .relative()
             .size_full()
+            .cursor_text()
             .px_2()
             .py_1()
             .overflow_hidden()
@@ -2545,6 +2556,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let frame_started = std::time::Instant::now();
         self.measure_font(cx);
         if std::mem::take(&mut self.product_dirty) {
             let loaded = crate::ext_support::resolve_product_icons(&self.extensions, &self.settings.product_icon_theme)
@@ -2614,6 +2626,10 @@ impl Render for Workspace {
             .children(self.render_debug_toolbar(f32::from(window.viewport_size().width), cx))
             .children(self.render_overlay(cx))
             .children(self.render_context_menu(window.viewport_size(), cx))
+            .map(|root| {
+                crate::prof::frame(frame_started.elapsed());
+                root
+            })
     }
 }
 

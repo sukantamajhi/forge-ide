@@ -174,6 +174,7 @@ impl Workspace {
             .child(
                 div()
                     .px_2()
+                    .cursor_text()
                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
                         this.focus = Focus::Extensions;
                         cx.notify();

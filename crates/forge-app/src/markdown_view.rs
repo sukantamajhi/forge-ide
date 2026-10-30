@@ -71,7 +71,19 @@ fn text(ctx: &Ctx, spans: &[Span], bold_all: bool) -> AnyElement {
     let id = ctx.next_id.get();
     ctx.next_id.set(id + 1);
     let (workspace, base) = (ctx.workspace.clone(), ctx.base.clone());
+    let hover_ranges = link_ranges.clone();
+    let hover_workspace = workspace.clone();
     InteractiveText::new(("markdown-text", id), styled)
+        .on_hover(move |ix, _event, _window, app| {
+            // The preview's container turns the cursor into a hand while this is set.
+            let over = ix.is_some_and(|i| hover_ranges.iter().any(|r| r.contains(&i)));
+            hover_workspace.update(app, |ws, cx| {
+                if ws.md_link_hover != over {
+                    ws.md_link_hover = over;
+                    cx.notify();
+                }
+            });
+        })
         .on_click(link_ranges, move |ix, _window, app| {
             let url = link_urls[ix].clone();
             let base = base.clone();
@@ -255,6 +267,7 @@ impl Workspace {
                         .id(("markdown-preview", g))
                         .flex_1()
                         .min_h_0()
+                        .when(self.md_link_hover, |d| d.cursor_pointer())
                         .track_scroll(&self.preview_scroll)
                         .overflow_y_scroll()
                         .px(rems(1.5))
@@ -348,6 +361,7 @@ impl Workspace {
             div()
                 .id(("markdown-full", g))
                 .size_full()
+                .when(self.md_link_hover, |d| d.cursor_pointer())
                 .bg(rgb(t.bg))
                 .track_scroll(&self.preview_scroll)
                 .overflow_y_scroll()

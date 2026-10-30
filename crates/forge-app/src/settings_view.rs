@@ -180,6 +180,7 @@ impl Workspace {
         let model_focused = self.settings_model_focus;
         let model_input = div()
             .w(rems(14.0))
+            .cursor_text()
             .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
                 this.settings_model_focus = true;
                 cx.stop_propagation();
