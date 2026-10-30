@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Forge
+GenericName=Code Editor
+Comment=A fast, GPU-rendered code editor
+Exec=forge %F
+Icon=forge
+Terminal=false
+Categories=Development;TextEditor;IDE;
+MimeType=text/plain;text/x-rust;text/markdown;application/json;text/x-python;text/html;text/css;text/csv;inode/directory;
+StartupWMClass=forge
+Keywords=editor;code;ide;rust;

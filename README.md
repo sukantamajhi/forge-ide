@@ -8,15 +8,32 @@ An original, GPU-rendered code editor written in Rust on [GPUI](https://crates.i
 aiming for Zed-class responsiveness and VS Code-style editing. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and for what is and is not built.
 
-## Build and run (Windows)
+## Build and run
 
-Needs Rust (stable) and Visual Studio Build Tools with the C++ workload.
+Forge is built and released for **Windows**. A **Linux** build is set up through the Makefile but has not been compiled or run yet (see "Linux" below); macOS is not supported yet.
+
+**Windows:** needs Rust (stable) and Visual Studio Build Tools with the C++ workload.
 
 ```bash
 cargo run -p forge-app -- path/to/folder      # or path/to/file.rs
 cargo test --workspace
 cargo build --release -p forge-app            # LTO; slow first build
 ```
+
+**Makefile** (GNU make; on Windows from Git Bash, `winget install ezwinports.make`). `make help` lists everything:
+
+| Command | What it does |
+|---|---|
+| `make release-windows` | Windows build, `targeteleaseorge.exe` (run on Windows) |
+| `make release-linux` | Linux build. On Linux it builds in place; on Windows it runs inside WSL2 and writes to `target-linux/` |
+| `make release-all` | both, from Windows with WSL2 |
+| `make package-windows` | `dist/Forge-Setup-<version>.exe` (needs Inno Setup 6) |
+| `make package-linux` | `dist/forge-<version>-linux-x86_64.tar.gz`: the program, a launcher entry, the icon and `install.sh` |
+| `make package-all` | both packages |
+| `make linux-deps` | install the libraries the Linux build needs (Ubuntu / Debian, asks for sudo) |
+
+**Linux:** needs Rust and the system libraries from `make linux-deps` (fontconfig, Wayland, xkbcommon, X11/xcb, Vulkan loader, OpenSSL, ALSA), and a Vulkan-capable graphics driver to run. From Windows, install Rust inside your WSL distribution first, then `make linux-deps` and `make package-linux`. Unpack the archive and run `./install.sh` to install for the current user (`./install.sh --uninstall` removes it).
+Not done for Linux: the OpenAI / Gemini key cannot be saved yet (it is encrypted with a Windows-only mechanism, so it is kept for the session), "Reveal in File Explorer" still calls Windows tools, and the default fonts are Windows ones (Forge falls back to what is installed).
 
 ## What it does
 
