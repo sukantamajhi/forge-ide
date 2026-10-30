@@ -15,6 +15,9 @@ use crate::workspace::{same_path, Focus, Group, OverlayKind, PanelView, SidebarV
 
 impl Workspace {
     pub fn run_command(&mut self, command: Command, extend: bool, cx: &mut Context<Self>) {
+        if command != Command::Quit {
+            self.quit_armed = false;
+        }
         if !command.is_movement() {
             self.recent_commands.retain(|c| *c != command);
             self.recent_commands.insert(0, command);
@@ -122,7 +125,10 @@ impl Workspace {
             Replace => self.open_find(true),
             FindNext => self.find_next(true, cx),
             FindPrevious => self.find_next(false, cx),
-            FindInFiles => self.open_search_panel(),
+            FindInFiles => {
+                self.search.scope = None;
+                self.open_search_panel();
+            }
             ReplaceInFiles => {
                 self.open_search_panel();
                 self.search.replace_open = true;
@@ -235,6 +241,30 @@ impl Workspace {
             FormatSelection => self.format_selection(),
             OrganizeImports => self.organize_imports(),
             ShowOutline => self.open_symbols(),
+            CollapseExplorer => {
+                self.tree.collapse_all();
+                self.explorer_selected = None;
+            }
+            RefreshExplorer => {
+                self.tree.refresh();
+                self.file_index = None;
+                self.git_request_refresh();
+                self.set_status("Explorer refreshed");
+            }
+            NewWindow => {
+                let root = self.root().to_path_buf();
+                self.open_in_new_window(&root);
+            }
+            Quit => {
+                if self.docs.iter().any(|d| d.dirty && !d.readonly) && !self.quit_armed {
+                    self.quit_armed = true;
+                    self.set_status("There are unsaved changes: Save All (Ctrl+K S), or choose Exit again to discard them");
+                } else {
+                    self.save_session(true);
+                    cx.quit();
+                }
+            }
+            ShowAbout => self.set_status(format!("Forge {}: a GPU-rendered code editor built on GPUI", env!("CARGO_PKG_VERSION"))),
             ReopenClosedTab => self.reopen_closed_tab(cx),
             NavigateBack => self.navigate(false, cx),
             NavigateForward => self.navigate(true, cx),

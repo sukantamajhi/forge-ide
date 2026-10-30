@@ -705,9 +705,26 @@ impl Workspace {
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(div().px_3().py_1().text_xs().text_color(rgb(t.dim)).child(root_name))
             .child(
-                div().flex_1().min_h_0().child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .pl_3()
+                    .pr_2()
+                    .py_1()
+                    .child(div().text_xs().text_color(rgb(t.dim)).child(root_name))
+                    .child(self.render_explorer_toolbar(cx)),
+            )
+            .child(
+                div().flex_1().min_h_0()
+                    .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.focus = Focus::Explorer;
+                        this.open_explorer_root_menu(ev.position, cx);
+                    }))
+                    .child(
                     uniform_list(
                         "tree",
                         self.tree.entries.len(),
@@ -906,6 +923,7 @@ impl Workspace {
                             .child("Replace All"),
                     )
             }))
+            .children(s.scope.as_ref().map(|p| div().text_xs().text_color(rgb(t.accent)).child(format!("In folder: {} (Ctrl+Shift+F searches everywhere)", self.display_path(p)))))
             .child(div().text_xs().text_color(rgb(if s.error.is_some() { t.error } else { t.dim })).child(status))
             .child(
                 div().flex_1().min_h_0().child(
@@ -2321,6 +2339,7 @@ impl Render for Workspace {
             .text_color(rgb(t.text))
             .font_family(FONT)
             .text_size(px(self.settings.font_size))
+            .child(self.render_menu_bar(cx))
             .child(main)
             .child(self.render_status(cx))
             .children(self.render_completion())

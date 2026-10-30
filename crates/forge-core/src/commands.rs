@@ -178,6 +178,11 @@ commands! {
     ToggleAutoSave, "workbench.action.toggleAutoSave", "Toggle Auto Save", [];
     CompareActiveFileWith, "workbench.files.action.compareFileWith", "Compare Active File With...", [];
     ShowOutline, "outline.focus", "Focus on Outline View", [];
+    CollapseExplorer, "workbench.files.action.collapseExplorerFolders", "Collapse Folders in Explorer", [];
+    RefreshExplorer, "workbench.files.action.refreshFilesExplorer", "Refresh Explorer", [];
+    NewWindow, "workbench.action.newWindow", "New Window", ["ctrl+shift+n"];
+    Quit, "workbench.action.quit", "Exit", ["alt+f4"];
+    ShowAbout, "workbench.action.showAbout", "About Forge", [];
 
     Fold, "editor.fold", "Fold", ["ctrl+shift+["];
     Unfold, "editor.unfold", "Unfold", ["ctrl+shift+]"];

@@ -102,6 +102,22 @@ cargo build --release -p forge-app            # LTO; slow first build
   shows a pin instead of a close button (click the pin to unpin), and is not pinned again after a restart. Each item is also a
   command with VS Code's shortcut where it has one (Close Saved Ctrl+K U, Close All Ctrl+K Ctrl+W, Pin Ctrl+K Shift+Enter,
   Copy Path Shift+Alt+C, Copy Relative Path Ctrl+K Ctrl+Shift+C, Reveal in File Explorer Shift+Alt+R, Reveal in Explorer View Ctrl+K R).
+- **Menu bar and Explorer buttons:** a menu bar under the title bar has File, Edit, Selection, View, Go, Run, Terminal and Help.
+  Click a title to open its menu, then move across the bar to switch menus. Every entry runs a command and shows its shortcut.
+  File also has New Window and Exit (Alt+F4; with unsaved changes it asks once and a second Exit discards them). The Explorer
+  header has **New File**, **New Folder**, **Refresh** and **Collapse Folders** buttons (also commands in the palette). New File
+  and New Folder go in the selected folder, or the project root when nothing is selected. The Explorer's right-click menu (folders and files) also has
+  **Open in Integrated Terminal** and **Find in Folder...** (folders: the search then looks only in that folder, until Ctrl+Shift+F),
+  and **Cut / Copy / Paste** of files and folders (also Ctrl+X / C / V with the Explorer focused; paste goes into the selected folder,
+  a copy that would clash gets "name copy", a cut never replaces anything, and open tabs follow a moved file).
+  Right-clicking the empty part of the Explorer opens a menu for the project folder (New File, New Folder, Reveal, Open in
+  Integrated Terminal, Find in Folder, Paste, Copy Path, Copy Relative Path); Add / Remove Folder from Workspace are not offered
+  (no multi-root workspaces).
+  A file's menu also has **Open to the Side** (Ctrl+Enter with the Explorer focused), **Open in Integrated Terminal** (in its folder),
+  **Select for Compare** then **Compare with Selected** on another file, and, inside a git repository, **File History** and
+  **Copy Remote File URL** (the `origin` remote's web page for the file on the current branch; GitHub, GitLab and Bitbucket style
+  addresses). VS Code's Open With, Share, Open Changes, Open on Remote, Timeline, Add to Chat, Images Preview and
+  Copy Remote File URL From... entries are not offered. Menus open by mouse only (no Alt+F access keys yet).
 - **Editor navigation and files:**
   - **Go Back / Go Forward** (Alt+Left / Alt+Right) return to where you were before a jump: opening another file, go to definition,
     a symbol or a line. **Reopen Closed Editor** (Ctrl+Shift+T) brings back the last closed tab with its caret (30 are kept this session).
@@ -277,42 +293,56 @@ run yet**: that is the next step and needs you to choose which ones.
 
 ## Status: what is built and what is not
 
-**Built** (details in the sections above): multi-cursor editing, find/replace and Replace in Files, Quick Open and the
-Command Palette, language-server features (with a go-to-definition picker and servers started automatically), a
-VS Code-style Source Control view (stage, commit, push, publish, pull, sync, fetch, stash, branches, history, blame, AI
-commit messages (OpenAI or Gemini), visible progress and results, side-by-side diffs, hunk and line staging (also for new files, with
-discard), merge-conflict resolution with a base column, rebase (including interactive), merge, cherry-pick and revert with continue /
-skip / abort, login and GPG-passphrase prompts, cancel, a commit graph, a file timeline, submodules and worktrees), Markdown preview with scroll sync, minimap, word wrap, a Settings page,
-right-click menus, resizable and remembered panels, editor tab-bar buttons and menu, Codicons icons with hover tooltips,
-session restore, debugging for Python / Node / Rust, VS Code extensions from Open VSX (themes, languages, grammars,
-snippets, and a partial `vscode` API for running code), and syntax highlighting for 29 languages. Editor navigation (Go Back /
-Forward, Reopen Closed Editor, Open Recent, Zen mode), auto save, per-language settings, comparing two files and an image / hex
-viewer are described under "Editor navigation and files".
+**Built** (details in the sections above):
+
+- **Editing:** multi-cursor editing, find / replace, Replace in Files, folding, snippets, Format Document / Selection, Organize Imports,
+  auto save (`afterDelay`, `onFocusChange`), per-language settings (`"[rust]": { ... }` for tab size, spaces, format on save).
+- **Navigation:** Quick Open, Command Palette, Go to Symbol / Line / Bracket, Go Back / Forward, Reopen Closed Editor,
+  Open Recent, Zen mode, tab pinning and the tab right-click menu, split editors, compare two files.
+- **Workbench:** a menu bar (File, Edit, Selection, View, Go, Run, Terminal, Help); the Explorer with New File / New Folder /
+  Refresh / Collapse buttons and right-click menus for files, folders and empty space (Open to the Side, Open in Integrated
+  Terminal, Find in Folder, Cut / Copy / Paste, Select for Compare, File History, Copy Remote File URL); a Settings page;
+  resizable and remembered panels; Codicons icons with hover tooltips; session restore; an integrated terminal with several
+  tabs and scrollback; Markdown preview with scroll sync; minimap; word wrap; an image viewer and a hex view for binary files.
+- **Language servers:** completion, hover, signature help, go to definition (with a picker), references, rename, quick fix,
+  diagnostics; servers start automatically.
+- **Source Control:** stage, commit, push, publish, pull, sync, fetch, stash, branches, history, blame, AI commit messages
+  (OpenAI or Gemini), side-by-side diffs, hunk and line staging (also new files, with discard), merge-conflict resolution with a
+  base column, rebase (including interactive), merge, cherry-pick and revert with continue / skip / abort, login and
+  GPG-passphrase prompts, cancel, commit graph, file timeline, submodules, worktrees.
+- **Debugging:** Python, JavaScript / Node and Rust.
+- **Extensions:** VS Code extensions from Open VSX (themes, languages, grammars, snippets, and a partial `vscode` API).
+- **Highlighting:** 29 languages.
 
 **Not built yet:**
 
-- Source control: interactive rebase steps `edit` and `break` and `--rebase-merges`; accepting the base side or editing a merged
-  result in the conflict view (it shows the base but only keeps current, incoming or both); actions on a commit inside the graph
-  (checkout, cherry-pick, branch from it); submodule-specific commits and a Source Control view per submodule; adding a worktree for
-  a new or remote branch; stash management beyond push and pop; hardware-token PIN prompts for signing.
-- Workbench: multi-root workspaces, drag-and-drop of tabs or text, sticky scroll, inlay hints, semantic highlighting,
-  restoring unsaved edits or a second editor group's tabs, mouse-driven checks of the new
-  hover tooltips (verified by keyboard replay only).
-- Editor features: Peek Definition / References, Call Hierarchy, Type Hierarchy, Code Lens, Linked Editing, workspace symbol
-  search (Ctrl+T), a permanent Outline view, bookmarks, a Search Editor, Emmet, spell checking, auto save of a file that is not
-  in front, per-language settings other than tab size, spaces and format on save, and Format Selection / Organize Imports have
-  only been checked to build, not against a running language server.
-- Debugging: only Python, JavaScript/Node and Rust; no conditional breakpoints or watch expressions.
-- Extensions: webviews, tree views, terminals, notebooks, debugging and tasks APIs, language-feature providers, and
-  VS Code's own extensions as language servers. No third-party extension has been run yet. Plan: `docs/EXTENSIONS_PLAN.md`.
-- Text and files: layout assumes a monospace font, one cell per char (tabs = 4); files must be UTF-8 (a leading BOM is
-  kept out of the text and written back on save) and under 64 MiB; highlighting is skipped above 4 MiB.
-- Highlighting: embedded code is highlighted (`<script>`/`<style>` in HTML, fenced code in Markdown) but not above
-  512 KiB, and not inside template strings, `style=""` attributes or PHP/HTML mixes. SCSS/Less use the CSS grammar and
-  `.h` files are treated as C.
-- Completions are plain text, and snippets are not offered in the completion popup.
-- Language servers: rust-analyzer, gopls, clangd, jdtls, csharp-ls, ruby-lsp, lua-language-server, taplo and sqls are
+- **Source control:** interactive rebase steps `edit` and `break` and `--rebase-merges`; accepting the base side or editing a
+  merged result in the conflict view (it shows the base but only keeps current, incoming or both); actions on a commit inside
+  the graph (checkout, cherry-pick, branch from it); submodule-specific commits and a Source Control view per submodule; adding a
+  worktree for a new or remote branch; stash management beyond push and pop; hardware-token PIN prompts for signing.
+- **Workbench:** multi-root workspaces (so no Add / Remove Folder from Workspace), drag-and-drop of tabs or text, restoring
+  unsaved edits or a second editor group's tabs after a restart, Alt+letter access keys for the menu bar, Share / Open Changes /
+  Open on Remote / Timeline / Add to Chat entries in the Explorer menus.
+- **Language features:** sticky scroll, inlay hints, semantic highlighting, Peek Definition / References, Call Hierarchy, Type
+  Hierarchy, Code Lens, Linked Editing, workspace symbol search (Ctrl+T), a permanent Outline view (only a symbol picker),
+  bookmarks, a Search Editor, Emmet, spell checking.
+- **Not verified against a running server:** Format Selection and Organize Imports (they build and send the requests, but were
+  not tried with a language server); mouse-driven checks of some hover tooltips (verified by keyboard replay only); Cut / Copy /
+  Paste in the Explorer (unit-tested, not tried by mouse); Exit with unsaved changes.
+- **Auto save** only saves the file in front (afterDelay) or all modified files on a tab / file switch (onFocusChange); format on
+  save is not run by it.
+- **Debugging:** only Python, JavaScript / Node and Rust; no conditional breakpoints or watch expressions.
+- **Extensions:** webviews, tree views, terminals, notebooks, debugging and tasks APIs, language-feature providers, and VS Code's
+  own extensions as language servers. No third-party extension has been run yet. Plan: `docs/EXTENSIONS_PLAN.md`.
+- **Text and files:** layout assumes a monospace font, one cell per char (tabs = 4); files must be UTF-8 (a leading BOM is kept
+  out of the text and written back on save) and under 64 MiB; highlighting is skipped above 4 MiB.
+- **Highlighting:** embedded code is highlighted (`<script>` / `<style>` in HTML, fenced code in Markdown) but not above 512 KiB,
+  and not inside template strings, `style=""` attributes or PHP / HTML mixes. SCSS / Less use the CSS grammar and `.h` files are
+  treated as C.
+- **Completions** are plain text, and snippets are not offered in the completion popup.
+- **Language servers:** rust-analyzer, gopls, clangd, jdtls, csharp-ls, ruby-lsp, lua-language-server, taplo and sqls are
   configured but you install them yourself; `.env`, INI, Makefile, ignore files and diffs get highlighting only.
+- **Packaging:** the installer in `dist\` was built before the latest changes and has not been rebuilt.
 
 ## Testing aid
 

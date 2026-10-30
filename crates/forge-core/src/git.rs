@@ -738,6 +738,67 @@ pub fn relative_path(root: &Path, abs: &Path) -> Option<String> {
     (matches && a.as_bytes()[r.len()] == b'/').then(|| a[r.len() + 1..].to_owned())
 }
 
+/// The web page for `rel` on the branch `branch` of a remote, for GitHub-, GitLab- and Bitbucket-style hosts.
+/// `remote` may be `https://host/owner/repo(.git)`, `git@host:owner/repo.git` or `ssh://git@host/owner/repo.git`.
+pub fn web_url(remote: &str, branch: &str, rel: &str) -> Option<String> {
+    let remote = remote.trim().trim_end_matches('/').trim_end_matches(".git");
+    let (host, path) = if let Some(rest) = remote.strip_prefix("https://").or_else(|| remote.strip_prefix("http://")) {
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+        rest.split_once('/')?
+    } else if let Some(rest) = remote.strip_prefix("ssh://") {
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+        let (host, path) = rest.split_once('/')?;
+        (host.split(':').next()?, path)
+    } else {
+        let rest = remote.rsplit_once('@').map_or(remote, |(_, r)| r);
+        rest.split_once(':')?
+    };
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    let encoded: String = rel
+        .split('/')
+        .map(|part| part.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("/");
+    let kind = if host.contains("gitlab") {
+        "-/blob"
+    } else if host.contains("bitbucket") {
+        "src"
+    } else {
+        "blob"
+    };
+    Some(format!("https://{host}/{path}/{kind}/{branch}/{encoded}"))
+}
+
+/// The URL of `rel` on the first remote (origin when there is one), at the current branch.
+pub fn remote_file_url(root: &Path, rel: &str) -> Result<String, String> {
+    let remotes = run(root, &["remote"])?;
+    let name = remotes.lines().find(|r| *r == "origin").or_else(|| remotes.lines().next()).ok_or("This repository has no remote")?.to_owned();
+    let remote = run(root, &["remote", "get-url", &name])?;
+    let branch = run(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = branch.trim();
+    let branch = if branch == "HEAD" { run(root, &["rev-parse", "HEAD"])?.trim().to_owned() } else { branch.to_owned() };
+    web_url(&remote, &branch, rel).ok_or_else(|| format!("Cannot make a web address from the remote '{}'", remote.trim()))
+}
+
+#[cfg(test)]
+mod web_url_tests {
+    use super::web_url;
+
+    #[test]
+    fn remotes_become_web_addresses() {
+        let want = "https://github.com/o/r/blob/main/src/a%20b.rs";
+        assert_eq!(web_url("https://github.com/o/r.git", "main", "src/a b.rs").as_deref(), Some(want));
+        assert_eq!(web_url("git@github.com:o/r.git", "main", "src/a b.rs").as_deref(), Some(want));
+        assert_eq!(web_url("ssh://git@github.com:22/o/r", "main", "src/a b.rs").as_deref(), Some(want));
+        assert_eq!(web_url("https://user:tok@github.com/o/r/", "main", "src/a b.rs").as_deref(), Some(want));
+        assert_eq!(web_url("git@gitlab.com:g/s/r.git", "dev", "x").as_deref(), Some("https://gitlab.com/g/s/r/-/blob/dev/x"));
+        assert_eq!(web_url("https://bitbucket.org/o/r.git", "dev", "x").as_deref(), Some("https://bitbucket.org/o/r/src/dev/x"));
+        assert_eq!(web_url("not a remote", "m", "x"), None);
+    }
+}
+
 /// Whether git tracks `rel` (it has an index entry).
 pub fn is_tracked(root: &Path, rel: &str) -> bool {
     run(root, &["ls-files", "--error-unmatch", "--", rel]).is_ok()

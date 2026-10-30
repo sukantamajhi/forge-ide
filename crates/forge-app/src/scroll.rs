@@ -20,5 +20,5 @@ pub fn scroll_page(id: impl Into<ElementId>) -> Stateful<Div> {
 /// A scrolling page drawn over the editor area (Settings): it covers everything right of the sidebar
 /// down to the status bar and swallows mouse input.
 pub fn overlay_page(id: impl Into<ElementId>, left: f32, bg: u32, text: u32) -> Stateful<Div> {
-    scroll_page(id).absolute().top_0().left(px(left)).right_0().bottom(rems(1.5)).bg(rgb(bg)).text_color(rgb(text)).occlude()
+    scroll_page(id).absolute().top(px(crate::menu_bar::MENU_BAR_HEIGHT)).left(px(left)).right_0().bottom(rems(1.5)).bg(rgb(bg)).text_color(rgb(text)).occlude()
 }

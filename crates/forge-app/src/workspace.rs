@@ -389,6 +389,8 @@ pub(crate) struct SearchPanel {
     pub cancel: Arc<AtomicBool>,
     pub scroll: UniformListScrollHandle,
     pub selected: usize,
+    /// "Find in Folder": search only here instead of the whole project.
+    pub scope: Option<PathBuf>,
 }
 
 /// The Extensions view: the search box and what Open VSX answered.
@@ -608,6 +610,10 @@ pub(crate) struct Workspace {
     pub nav_forward: Vec<(PathBuf, usize)>,
     /// Set while Go Back / Forward move, so they do not record themselves.
     pub navigating: bool,
+    /// Files cut or copied in the Explorer: the path, and whether it moves (cut) when pasted.
+    pub explorer_clipboard: Option<(PathBuf, bool)>,
+    /// Exit was chosen once with unsaved changes; choosing it again quits.
+    pub quit_armed: bool,
     /// Sidebar and panel visibility from before Zen mode; `Some` while it is on.
     pub zen_saved: Option<(bool, bool)>,
     /// `(document, revision, since)` of the unsaved edit waiting for `files.autoSave: afterDelay`.
@@ -810,6 +816,7 @@ impl Workspace {
                 cancel: Arc::new(AtomicBool::new(false)),
                 scroll: UniformListScrollHandle::new(),
                 selected: 0,
+                scope: None,
             },
             file_index: None,
             file_index_rx: None,
@@ -818,6 +825,8 @@ impl Workspace {
             nav_back: Vec::new(),
             nav_forward: Vec::new(),
             navigating: false,
+            explorer_clipboard: None,
+            quit_armed: false,
             zen_saved: None,
             auto_save_since: None,
             compare_base: None,

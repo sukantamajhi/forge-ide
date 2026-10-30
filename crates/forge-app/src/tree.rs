@@ -59,6 +59,12 @@ impl FileTree {
         self.refresh();
     }
 
+    /// Fold every open folder back up.
+    pub fn collapse_all(&mut self) {
+        self.expanded.clear();
+        self.refresh();
+    }
+
     /// Expand every folder above `path` so it is listed.
     pub fn reveal(&mut self, path: &Path) {
         for ancestor in path.ancestors().skip(1) {
@@ -134,6 +140,20 @@ mod tests {
 
         tree.toggle(&root.join("src"));
         assert_eq!(tree.entries.len(), 3);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn collapse_all_folds_every_open_folder() {
+        let root = scratch("collapse");
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("a/b/f.txt"), "").unwrap();
+        let mut tree = FileTree::new(root.clone());
+        tree.reveal(&root.join("a/b/f.txt"));
+        assert!(tree.entries.len() > 1);
+        tree.collapse_all();
+        assert_eq!(tree.entries.len(), 1);
+        assert!(!tree.entries[0].expanded);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

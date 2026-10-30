@@ -16,6 +16,7 @@ mod scroll;
 mod host_support;
 mod codicons;
 mod icons;
+mod menu_bar;
 mod image_view;
 mod product_icons;
 mod snippet_support;

@@ -1323,7 +1323,7 @@ impl Workspace {
             }
         };
         let (tx, rx) = mpsc::channel();
-        let root = self.root().to_path_buf();
+        let root = self.search.scope.clone().unwrap_or_else(|| self.root().to_path_buf());
         std::thread::spawn(move || {
             let tx_hits = tx.clone();
             let capped = project_search::search(&root, &finder, &cancel, move |batch| {
@@ -1567,6 +1567,20 @@ impl Workspace {
 
     fn explorer_key(&mut self, k: &Keystroke, _pressed: &str, cx: &mut Context<Self>) -> bool {
         let m = k.modifiers;
+        if (m.control || m.platform) && !m.alt && !m.shift && matches!(k.key.as_str(), "x" | "c" | "v") {
+            let target = self.selected_entry_path();
+            match k.key.as_str() {
+                "v" => self.explorer_paste(target, cx),
+                key => self.explorer_copy(target.map(|t| t.0), key == "x"),
+            }
+            return true;
+        }
+        if m.control && !m.alt && !m.shift && k.key == "enter" {
+            if let Some((path, false)) = self.selected_entry_path() {
+                self.open_to_side(&path, cx);
+            }
+            return true;
+        }
         if m.control || m.alt || m.platform {
             return false;
         }
@@ -1698,8 +1712,14 @@ impl Workspace {
     }
 
     pub fn new_terminal(&mut self) {
+        let root = self.root().to_path_buf();
+        self.new_terminal_in(&root);
+    }
+
+    /// A new terminal whose shell starts in `cwd`.
+    pub fn new_terminal_in(&mut self, cwd: &Path) {
         let (program, args) = Terminal::default_shell();
-        match Terminal::spawn(&program, &args, self.root(), 12, 100) {
+        match Terminal::spawn(&program, &args, cwd, 12, 100) {
             Ok(terminal) => {
                 self.terminals.push(terminal);
                 self.active_terminal = self.terminals.len() - 1;

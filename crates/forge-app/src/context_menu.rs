@@ -23,6 +23,16 @@ pub(crate) enum MenuAction {
     DeleteEntry,
     CopyPath { relative: bool },
     RevealEntry,
+    OpenInTerminal,
+    OpenToSide,
+    SelectForCompare,
+    CompareWithSelected,
+    FileHistory,
+    CopyRemoteUrl,
+    FindInFolder,
+    CutEntry,
+    CopyEntry,
+    PasteEntry,
     CloseOthers,
     CloseAll,
     /// A choice from the menu of one particular tab: group `g`, tab `vi`.
@@ -57,14 +67,16 @@ pub(crate) struct ContextMenu {
     pub entries: Vec<MenuEntry>,
     /// The explorer entry the menu was opened on, and whether it is a folder.
     pub target: Option<(PathBuf, bool)>,
+    /// The menu-bar title (File, Edit...) this menu hangs from, if it came from the bar.
+    pub bar: Option<usize>,
 }
 
 impl Workspace {
-    fn menu_item(&self, label: &str, action: MenuAction, shortcut: Option<String>, enabled: bool) -> MenuEntry {
+    pub(crate) fn menu_item(&self, label: &str, action: MenuAction, shortcut: Option<String>, enabled: bool) -> MenuEntry {
         MenuEntry::Item { label: label.to_owned(), shortcut: shortcut.unwrap_or_default(), action, enabled }
     }
 
-    fn command_item(&self, label: &str, command: Command, enabled: bool) -> MenuEntry {
+    pub(crate) fn command_item(&self, label: &str, command: Command, enabled: bool) -> MenuEntry {
         self.menu_item(label, MenuAction::Command(command), self.keymap.shortcut_label(command), enabled)
     }
 
@@ -90,7 +102,7 @@ impl Workspace {
             MenuEntry::Separator,
             self.command_item("Command Palette...", Command::CommandPalette, true),
         ];
-        self.context_menu = Some(ContextMenu { position, entries, target: None });
+        self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
         cx.notify();
     }
 
@@ -116,7 +128,7 @@ impl Workspace {
             self.command_item("Pop Latest Stash", Command::GitStashPop, true),
             self.command_item("View History", Command::GitLog, true),
         ];
-        self.context_menu = Some(ContextMenu { position, entries, target: None });
+        self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
         cx.notify();
     }
 
@@ -145,7 +157,7 @@ impl Workspace {
             self.command_item("Git: Show Blame for Line", Command::GitBlame, git),
             self.command_item("Git: View File History", Command::GitFileHistory, git),
         ];
-        self.context_menu = Some(ContextMenu { position, entries, target });
+        self.context_menu = Some(ContextMenu { position, entries, target, bar: None });
         cx.notify();
     }
 
@@ -186,7 +198,7 @@ impl Workspace {
             self.menu_item("Reveal in Explorer View", tab(TabOp::RevealInExplorer), self.keymap.shortcut_label(Command::ShowActiveFileInExplorer), on_disk && doc.path.starts_with(self.root())),
         ];
         let target = on_disk.then(|| (doc.path.clone(), false));
-        self.context_menu = Some(ContextMenu { position, entries, target });
+        self.context_menu = Some(ContextMenu { position, entries, target, bar: None });
         cx.notify();
     }
 
@@ -313,6 +325,28 @@ impl Workspace {
         }
     }
 
+    /// The menu for the empty part of the Explorer: it acts on the project folder.
+    pub fn open_explorer_root_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let root = self.root().to_path_buf();
+        let entries = vec![
+            self.menu_item("New File...", MenuAction::NewFile, None, true),
+            self.menu_item("New Folder...", MenuAction::NewFolder, None, true),
+            self.menu_item("Reveal in File Explorer", MenuAction::RevealEntry, None, true),
+            self.menu_item("Open in Integrated Terminal", MenuAction::OpenInTerminal, None, true),
+            MenuEntry::Separator,
+            self.menu_item("Find in Folder...", MenuAction::FindInFolder, None, true),
+            MenuEntry::Separator,
+            self.menu_item("Paste", MenuAction::PasteEntry, Some("Ctrl+V".to_owned()), self.explorer_clipboard.is_some()),
+            MenuEntry::Separator,
+            self.menu_item("Copy Path", MenuAction::CopyPath { relative: false }, None, true),
+            self.menu_item("Copy Relative Path", MenuAction::CopyPath { relative: true }, None, true),
+        ];
+        // Nothing is selected, so New File / New Folder go in the project folder.
+        self.explorer_selected = None;
+        self.context_menu = Some(ContextMenu { position, entries, target: Some((root, true)), bar: None });
+        cx.notify();
+    }
+
     /// The explorer's menu for row `ix`.
     pub fn open_explorer_menu(&mut self, ix: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(entry) = self.tree.entries.get(ix) else { return };
@@ -322,20 +356,98 @@ impl Workspace {
             (true, false) => "Expand",
             (true, true) => "Collapse",
         };
-        let entries = vec![
-            self.menu_item(open_label, MenuAction::OpenEntry, None, true),
+        let mut entries = vec![self.menu_item(open_label, MenuAction::OpenEntry, None, true)];
+        if !is_dir {
+            entries.push(self.menu_item("Open to the Side", MenuAction::OpenToSide, None, true));
+        }
+        entries.extend([
             MenuEntry::Separator,
             self.menu_item("New File...", MenuAction::NewFile, None, true),
             self.menu_item("New Folder...", MenuAction::NewFolder, None, true),
+            self.menu_item("Reveal in File Explorer", MenuAction::RevealEntry, None, true),
+        ]);
+        if !is_dir {
+            entries.push(self.menu_item("Open in Integrated Terminal", MenuAction::OpenInTerminal, None, true));
+            entries.push(MenuEntry::Separator);
+            entries.push(self.menu_item("Select for Compare", MenuAction::SelectForCompare, None, true));
+            if self.compare_base.as_ref().is_some_and(|b| !crate::workspace::same_path(b, &path)) {
+                entries.push(self.menu_item("Compare with Selected", MenuAction::CompareWithSelected, None, true));
+            }
+            if self.git.is_some() {
+                entries.push(MenuEntry::Separator);
+                entries.push(self.menu_item("File History", MenuAction::FileHistory, None, true));
+                entries.push(self.menu_item("Copy Remote File URL", MenuAction::CopyRemoteUrl, None, true));
+            }
+        }
+        if is_dir {
+            entries.push(self.menu_item("Open in Integrated Terminal", MenuAction::OpenInTerminal, None, true));
+            entries.push(MenuEntry::Separator);
+            entries.push(self.menu_item("Find in Folder...", MenuAction::FindInFolder, None, true));
+        }
+        entries.extend([
             MenuEntry::Separator,
-            self.menu_item("Rename...", MenuAction::RenameEntry, Some("F2".to_owned()), true),
-            self.menu_item("Delete", MenuAction::DeleteEntry, Some("Delete".to_owned()), true),
+            self.menu_item("Cut", MenuAction::CutEntry, Some("Ctrl+X".to_owned()), true),
+            self.menu_item("Copy", MenuAction::CopyEntry, Some("Ctrl+C".to_owned()), true),
+            self.menu_item("Paste", MenuAction::PasteEntry, Some("Ctrl+V".to_owned()), self.explorer_clipboard.is_some()),
             MenuEntry::Separator,
             self.menu_item("Copy Path", MenuAction::CopyPath { relative: false }, None, true),
             self.menu_item("Copy Relative Path", MenuAction::CopyPath { relative: true }, None, true),
-            self.menu_item("Reveal in File Explorer", MenuAction::RevealEntry, None, true),
-        ];
-        self.context_menu = Some(ContextMenu { position, entries, target: Some((path, is_dir)) });
+            MenuEntry::Separator,
+            self.menu_item("Rename...", MenuAction::RenameEntry, Some("F2".to_owned()), true),
+            self.menu_item("Delete", MenuAction::DeleteEntry, Some("Delete".to_owned()), true),
+        ]);
+        self.context_menu = Some(ContextMenu { position, entries, target: Some((path, is_dir)), bar: None });
+        cx.notify();
+    }
+
+    /// Open `path` in the second editor group, making it if there is only one.
+    pub fn open_to_side(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if self.groups.len() < 2 {
+            self.groups.push(crate::workspace::Group { views: Vec::new(), active: 0 });
+        }
+        self.focused_group = 1;
+        self.open_file(path, None, cx);
+    }
+
+    /// Ctrl+C / Ctrl+X on a file or folder in the Explorer.
+    pub fn explorer_copy(&mut self, path: Option<PathBuf>, cut: bool) {
+        let Some(path) = path else { return };
+        self.set_status(format!("{} {}", if cut { "Cut" } else { "Copied" }, path.display()));
+        self.explorer_clipboard = Some((path, cut));
+    }
+
+    /// Paste into `target` when it is a folder, else next to it (or into the project root).
+    pub fn explorer_paste(&mut self, target: Option<(PathBuf, bool)>, cx: &mut Context<Self>) {
+        let Some((from, cut)) = self.explorer_clipboard.clone() else { return };
+        let dir = match target {
+            Some((path, true)) => path,
+            Some((path, false)) => path.parent().map(Path::to_path_buf).unwrap_or_else(|| self.root().to_path_buf()),
+            None => self.root().to_path_buf(),
+        };
+        if !from.exists() {
+            self.explorer_clipboard = None;
+            self.set_status("What was cut or copied no longer exists");
+            return;
+        }
+        let result = if cut { forge_core::fileops::move_into(&from, &dir) } else { forge_core::fileops::copy_into(&from, &dir) };
+        match result {
+            Ok(new_path) => {
+                if cut {
+                    self.explorer_clipboard = None;
+                    // Open tabs under the moved path follow it.
+                    for doc in &mut self.docs {
+                        if let Ok(rest) = doc.path.strip_prefix(&from) {
+                            doc.path = new_path.join(rest);
+                        }
+                    }
+                }
+                self.tree.reveal(&new_path);
+                self.file_index = None;
+                self.git_request_refresh();
+                self.set_status(format!("{} {}", if cut { "Moved to" } else { "Pasted as" }, new_path.display()));
+            }
+            Err(message) => self.set_status(message),
+        }
         cx.notify();
     }
 
@@ -366,6 +478,67 @@ impl Workspace {
             MenuAction::NewFile => self.prompt_new_entry(false),
             MenuAction::NewFolder => self.prompt_new_entry(true),
             MenuAction::RenameEntry => self.prompt_rename_entry(),
+            MenuAction::OpenInTerminal => {
+                if let Some((path, is_dir)) = target {
+                    let dir = if is_dir { Some(path) } else { path.parent().map(Path::to_path_buf) };
+                    if let Some(dir) = dir {
+                        self.new_terminal_in(&dir);
+                    }
+                }
+            }
+            MenuAction::OpenToSide => {
+                if let Some((path, false)) = target {
+                    self.open_to_side(&path, cx);
+                }
+            }
+            MenuAction::SelectForCompare => {
+                if let Some((path, false)) = target {
+                    self.set_status(format!("Selected {} for compare: right-click another file and choose Compare with Selected", path.display()));
+                    self.compare_base = Some(path);
+                }
+            }
+            MenuAction::CompareWithSelected => {
+                if let Some((path, false)) = target {
+                    self.compare_with(&path, cx);
+                }
+            }
+            MenuAction::FileHistory => {
+                if let Some((path, false)) = target {
+                    match self.git.as_ref().and_then(|g| forge_core::git::relative_path(&g.root, &path)) {
+                        Some(rel) => {
+                            self.history.clear();
+                            self.open_overlay(OverlayKind::GitHistory, "");
+                            self.git_request_history(Some(rel));
+                        }
+                        None => self.set_status("This file is not inside the repository"),
+                    }
+                }
+            }
+            MenuAction::CopyRemoteUrl => {
+                if let Some((path, false)) = target {
+                    let found = self.git.as_ref().and_then(|g| forge_core::git::relative_path(&g.root, &path).map(|rel| (g.root.clone(), rel)));
+                    match found {
+                        Some((root, rel)) => match forge_core::git::remote_file_url(&root, &rel) {
+                            Ok(url) => {
+                                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                                self.set_status(format!("Copied {url}"));
+                            }
+                            Err(message) => self.set_status(message),
+                        },
+                        None => self.set_status("This file is not inside the repository"),
+                    }
+                }
+            }
+            MenuAction::FindInFolder => {
+                if let Some((path, true)) = target {
+                    self.search.scope = Some(path);
+                    self.open_search_panel();
+                    self.start_search();
+                }
+            }
+            MenuAction::CutEntry => self.explorer_copy(target.map(|t| t.0), true),
+            MenuAction::CopyEntry => self.explorer_copy(target.map(|t| t.0), false),
+            MenuAction::PasteEntry => self.explorer_paste(target, cx),
             MenuAction::DeleteEntry => {
                 if let Some((path, _)) = target {
                     self.open_overlay(OverlayKind::ConfirmDelete(path), "");
@@ -373,7 +546,7 @@ impl Workspace {
             }
             MenuAction::CopyPath { relative } => {
                 if let Some((path, _)) = target {
-                    let text = if relative { self.display_path(&path) } else { path.display().to_string() };
+                    let text = if relative { Some(self.display_path(&path)).filter(|t| !t.is_empty()).unwrap_or_else(|| ".".to_owned()) } else { path.display().to_string() };
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     self.set_status(if relative { "Copied the relative path" } else { "Copied the path" });
                 }
