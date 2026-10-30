@@ -75,6 +75,8 @@ pub struct Settings {
     /// `files.autoSave` and `files.autoSaveDelay` (milliseconds).
     pub auto_save: AutoSave,
     pub auto_save_delay_ms: u64,
+    /// `explorer.confirmDragAndDrop`: ask before a dragged file or folder is moved.
+    pub confirm_drag_and_drop: bool,
     /// `"[language]": { ... }` blocks, keyed by VS Code language id (`rust`, `python`, ...).
     pub languages: std::collections::BTreeMap<String, LangOverrides>,
     /// `ai.model` in settings.json: the OpenAI model that writes commit messages.
@@ -104,6 +106,7 @@ impl Default for Settings {
             lsp_autostart: true,
             auto_save: AutoSave::Off,
             auto_save_delay_ms: 1000,
+            confirm_drag_and_drop: true,
             languages: Default::default(),
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
             ai_provider: crate::ai::Provider::default(),
@@ -225,6 +228,9 @@ impl Settings {
         }
         if let Some(v) = map.get("files.autoSave").and_then(Value::as_str).and_then(AutoSave::from_id) {
             s.auto_save = v;
+        }
+        if let Some(v) = map.get("explorer.confirmDragAndDrop").and_then(Value::as_bool) {
+            s.confirm_drag_and_drop = v;
         }
         if let Some(v) = map.get("files.autoSaveDelay").and_then(Value::as_u64) {
             s.auto_save_delay_ms = v.clamp(200, 600_000);
@@ -396,6 +402,8 @@ mod tests {
         assert_eq!(s.tab_size_for(None), 4);
         assert_eq!(Settings::parse(r#"{ "files.autoSave": "onWindowChange" }"#).auto_save, AutoSave::OnFocusChange);
         assert_eq!(Settings::parse(r#"{ "files.autoSave": "nonsense" }"#).auto_save, AutoSave::Off);
+        assert!(Settings::default().confirm_drag_and_drop);
+        assert!(!Settings::parse(r#"{ "explorer.confirmDragAndDrop": false }"#).confirm_drag_and_drop);
     }
 
     #[test]

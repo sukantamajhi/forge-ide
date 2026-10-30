@@ -471,7 +471,7 @@ impl Workspace {
             OverlayKind::NewEntry { folder: false, .. } => "File name (a/b/c.txt creates folders)",
             OverlayKind::NewEntry { folder: true, .. } => "Folder name",
             OverlayKind::RenameEntry(_) => "New name",
-            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. } => "",
+            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. } => "",
             OverlayKind::GitCheckout => "Select a branch to switch to",
             OverlayKind::GitRebase => "Select the branch to rebase the current branch onto",
             OverlayKind::GitMerge => "Select a branch to merge into the current branch",
@@ -666,6 +666,11 @@ impl Workspace {
             }
             OverlayKind::RenameEntry(path) => {
                 overlay.note = Some(format!("Rename {}", path.display()));
+                Vec::new()
+            }
+            OverlayKind::ConfirmMove { from, dir } => {
+                let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string());
+                overlay.note = Some(format!("Press Enter to move '{}' into '{}', Escape to cancel (hold Ctrl while dropping to copy instead)", name(from), name(dir)));
                 Vec::new()
             }
             OverlayKind::ConfirmDelete(path) => {
@@ -913,7 +918,7 @@ impl Workspace {
                 }
             }
             _ => {
-                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. }) {
+                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. }) {
                     return true;
                 }
                 match overlay.input.apply(&k.key, ctrl, k.key_char.as_deref()) {
@@ -1001,6 +1006,7 @@ impl Workspace {
             }
             OverlayKind::RenameEntry(path) => self.finish_rename_entry(&path, &text),
             OverlayKind::ConfirmDelete(path) => self.finish_delete_entry(&path, cx),
+            OverlayKind::ConfirmMove { from, dir } => self.transfer_entries(&[from], &dir, false, cx),
             OverlayKind::ConfirmDiscard { rel, untracked } => self.finish_discard(&rel, untracked),
             OverlayKind::ConfirmDiscardHunk { patch, what, .. } => {
                 self.git_job("hunk", move |root| git::apply_patch(root, &patch, false, true).map(|_| format!("Discarded {what}")));

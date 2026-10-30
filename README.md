@@ -113,6 +113,12 @@ cargo build --release -p forge-app            # LTO; slow first build
   Right-clicking the empty part of the Explorer opens a menu for the project folder (New File, New Folder, Reveal, Open in
   Integrated Terminal, Find in Folder, Paste, Copy Path, Copy Relative Path); Add / Remove Folder from Workspace are not offered
   (no multi-root workspaces).
+  **Drag and drop:** drag a file or folder by its row onto a folder to move it there (onto a file to move it next to that file, onto
+  the empty part of the list for the project folder). A chip with the name follows the pointer and the target folder is
+  highlighted. Moves ask first ("Press Enter to move 'a.txt' into 'src'"; turn that off with `"explorer.confirmDragAndDrop": false`);
+  hold Ctrl while dropping to copy instead, which does not ask. Files dropped from Windows Explorer onto the Explorer are copied in.
+  Open tabs follow a moved file, a folder cannot go into itself, and nothing is ever replaced. Not done: folders do not open
+  while you hold a drag over them, and only one item can be dragged at a time.
   A file's menu also has **Open to the Side** (Ctrl+Enter with the Explorer focused), **Open in Integrated Terminal** (in its folder),
   **Select for Compare** then **Compare with Selected** on another file, and, inside a git repository, **File History** and
   **Copy Remote File URL** (the `origin` remote's web page for the file on the current branch; GitHub, GitLab and Bitbucket style
@@ -176,7 +182,7 @@ The release build is a GUI program, so no console window opens.
 { "editor.fontSize": 14, "editor.tabSize": 4, "editor.insertSpaces": true,
   "editor.autoClosingBrackets": "always", "workbench.colorTheme": "Forge Dark",
   "files.trimTrailingWhitespace": false, "editor.formatOnSave": false,
-  "files.autoSave": "afterDelay", "files.autoSaveDelay": 1000,
+  "files.autoSave": "afterDelay", "files.autoSaveDelay": 1000, "explorer.confirmDragAndDrop": true,
   "[python]": { "editor.tabSize": 4 }, "[javascript][typescript]": { "editor.tabSize": 2 } }
 // keybindings.json: add or remove (prefix the command with -) bindings
 [ { "key": "ctrl+shift+d", "command": "editor.action.copyLinesDownAction" },
@@ -320,7 +326,7 @@ run yet**: that is the next step and needs you to choose which ones.
   merged result in the conflict view (it shows the base but only keeps current, incoming or both); actions on a commit inside
   the graph (checkout, cherry-pick, branch from it); submodule-specific commits and a Source Control view per submodule; adding a
   worktree for a new or remote branch; stash management beyond push and pop; hardware-token PIN prompts for signing.
-- **Workbench:** multi-root workspaces (so no Add / Remove Folder from Workspace), drag-and-drop of tabs or text, restoring
+- **Workbench:** multi-root workspaces (so no Add / Remove Folder from Workspace), drag-and-drop of tabs or text (files and folders in the Explorer can be dragged), restoring
   unsaved edits or a second editor group's tabs after a restart, Alt+letter access keys for the menu bar, Share / Open Changes /
   Open on Remote / Timeline / Add to Chat entries in the Explorer menus.
 - **Language features:** sticky scroll, inlay hints, semantic highlighting, Peek Definition / References, Call Hierarchy, Type
@@ -328,7 +334,8 @@ run yet**: that is the next step and needs you to choose which ones.
   bookmarks, a Search Editor, Emmet, spell checking.
 - **Not verified against a running server:** Format Selection and Organize Imports (they build and send the requests, but were
   not tried with a language server); mouse-driven checks of some hover tooltips (verified by keyboard replay only); Cut / Copy /
-  Paste in the Explorer (unit-tested, not tried by mouse); Exit with unsaved changes.
+  Paste in the Explorer (unit-tested, not tried by mouse); dropping files from Windows Explorer into the Explorer (the drop is
+  wired up but could not be tried here); Exit with unsaved changes.
 - **Auto save** only saves the file in front (afterDelay) or all modified files on a tab / file switch (onFocusChange); format on
   save is not run by it.
 - **Debugging:** only Python, JavaScript / Node and Rust; no conditional breakpoints or watch expressions.

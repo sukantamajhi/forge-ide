@@ -429,24 +429,70 @@ impl Workspace {
             self.set_status("What was cut or copied no longer exists");
             return;
         }
-        let result = if cut { forge_core::fileops::move_into(&from, &dir) } else { forge_core::fileops::copy_into(&from, &dir) };
-        match result {
-            Ok(new_path) => {
-                if cut {
-                    self.explorer_clipboard = None;
-                    // Open tabs under the moved path follow it.
-                    for doc in &mut self.docs {
-                        if let Ok(rest) = doc.path.strip_prefix(&from) {
-                            doc.path = new_path.join(rest);
+        if cut {
+            self.explorer_clipboard = None;
+        }
+        self.transfer_entries(&[from], &dir, !cut, cx);
+    }
+
+    /// A file or folder was dropped on the Explorer: `sources` go into `dir`. `copy` is Ctrl held, or a drop from
+    /// outside the editor; `internal` is a drag from the Explorer itself, which asks first unless turned off.
+    pub fn drop_entries(&mut self, sources: Vec<PathBuf>, dir: PathBuf, copy: bool, internal: bool, cx: &mut Context<Self>) {
+        let sources: Vec<PathBuf> = sources.into_iter().filter(|s| s.exists()).collect();
+        if sources.is_empty() {
+            return;
+        }
+        if internal && !copy {
+            // Dropping on the folder an item is already in changes nothing.
+            if sources.iter().all(|s| s.parent().is_some_and(|p| crate::workspace::same_path(p, &dir))) {
+                return;
+            }
+            if self.settings.confirm_drag_and_drop && sources.len() == 1 {
+                self.open_overlay(OverlayKind::ConfirmMove { from: sources[0].clone(), dir }, "");
+                cx.notify();
+                return;
+            }
+        }
+        self.transfer_entries(&sources, &dir, copy, cx);
+    }
+
+    /// Copy or move `sources` into `dir`, keeping open tabs and the tree in step, and say what happened.
+    pub fn transfer_entries(&mut self, sources: &[PathBuf], dir: &Path, copy: bool, cx: &mut Context<Self>) {
+        if !copy && self.docs.iter().any(|d| d.dirty && sources.iter().any(|s| d.path.starts_with(s))) {
+            self.set_status("Save or close modified files before moving them");
+            return;
+        }
+        let (mut done, mut last_error) = (Vec::new(), None);
+        for from in sources {
+            let result = if copy { forge_core::fileops::copy_into(from, dir) } else { forge_core::fileops::move_into(from, dir) };
+            match result {
+                Ok(new_path) => {
+                    if !copy && new_path != *from {
+                        // Open tabs under the moved path follow it.
+                        for doc in &mut self.docs {
+                            if let Ok(rest) = doc.path.strip_prefix(from) {
+                                doc.path = new_path.join(rest);
+                            }
                         }
                     }
+                    done.push(new_path);
                 }
-                self.tree.reveal(&new_path);
-                self.file_index = None;
-                self.git_request_refresh();
-                self.set_status(format!("{} {}", if cut { "Moved to" } else { "Pasted as" }, new_path.display()));
+                Err(message) => last_error = Some(message),
             }
-            Err(message) => self.set_status(message),
+        }
+        if let Some(last) = done.last() {
+            self.tree.reveal(last);
+            self.file_index = None;
+            self.git_request_refresh();
+            let verb = if copy { "Copied" } else { "Moved" };
+            let into = dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned());
+            self.set_status(match (done.len(), &last_error) {
+                (1, None) => format!("{verb} {} into {into}", last.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+                (n, None) => format!("{verb} {n} items into {into}"),
+                (n, Some(e)) => format!("{verb} {n}, but: {e}"),
+            });
+        } else if let Some(e) = last_error {
+            self.set_status(e);
         }
         cx.notify();
     }

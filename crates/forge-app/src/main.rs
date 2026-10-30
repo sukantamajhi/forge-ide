@@ -23,6 +23,7 @@ mod snippet_support;
 mod ext_support;
 mod ext_view;
 mod diff_view;
+mod explorer_dnd;
 mod conflict_view;
 mod rebase_view;
 mod git_panels;

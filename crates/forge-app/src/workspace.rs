@@ -295,6 +295,8 @@ pub(crate) enum OverlayKind {
     NewEntry { dir: PathBuf, folder: bool },
     RenameEntry(PathBuf),
     ConfirmDelete(PathBuf),
+    /// A file or folder was dragged onto another folder in the Explorer.
+    ConfirmMove { from: PathBuf, dir: PathBuf },
     GitCheckout,
     GitRebase,
     GitMerge,

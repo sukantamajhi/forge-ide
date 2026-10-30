@@ -99,18 +99,22 @@ impl Workspace {
             let problems = doc.diagnostics.iter().filter(|d| d.severity == Severity::Error).count();
             div()
                 .id(("tab", g * 1000 + vi))
+                .group("tab")
+                .relative()
                 .flex()
                 .items_center()
                 .gap_2()
-                .px_3()
+                .pl_3()
+                .pr_2()
                 .h(px(TAB_BAR_HEIGHT))
                 .cursor_pointer()
-                .border_r_1()
-                .border_color(rgb(t.border))
-                .border_t_2()
-                .border_color(rgb(if active && focused_group { t.info } else if active { t.border } else { t.sidebar }))
                 .bg(rgb(if active { t.bg } else { t.sidebar }))
+                .when(!active, |d| d.hover(|s| s.bg(rgb(t.tab_active))))
                 .text_color(rgb(if problems > 0 { t.error } else if active { t.text } else { t.dim }))
+                .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+                // A thin divider on the right, and a bar across the top that marks the selected tab.
+                .child(div().absolute().top_0().right_0().bottom_0().w(px(1.0)).bg(rgb(t.border)))
+                .children(active.then(|| div().absolute().top_0().left_0().right_0().h(px(2.0)).bg(rgb(if focused_group { t.info } else { t.dim }))))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.auto_save_on_focus_change();
                     this.focused_group = g;
@@ -136,6 +140,8 @@ impl Workspace {
                         .justify_center()
                         .rounded_sm()
                         .cursor_pointer()
+                        // The close button of a tab you are not on shows only while the pointer is over the tab (unless it holds a dot or a pin).
+                        .when(!active && !doc.dirty && !view.pinned, |d| d.opacity(0.0).group_hover("tab", |s| s.opacity(1.0)))
                         .hover(|s| s.bg(rgb(t.border)))
                         .tooltip(self.tooltip(if view.pinned { "Unpin" } else if doc.dirty { "Unsaved changes: close" } else { "Close" }, if view.pinned { None } else { Some(Command::CloseTab) }))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -719,6 +725,16 @@ impl Workspace {
             )
             .child(
                 div().flex_1().min_h_0()
+                    .drag_over::<crate::explorer_dnd::DraggedEntry>(|s, _, _, _| s.bg(rgba(0x3b82f61f)))
+                    .drag_over::<gpui::ExternalPaths>(|s, _, _, _| s.bg(rgba(0x3b82f61f)))
+                    .on_drop(cx.listener(|this, dragged: &crate::explorer_dnd::DraggedEntry, window, cx| {
+                        let (root, copy) = (this.root().to_path_buf(), window.modifiers().control);
+                        this.drop_entries(vec![dragged.path.clone()], root, copy, true, cx);
+                    }))
+                    .on_drop(cx.listener(|this, dropped: &gpui::ExternalPaths, _, cx| {
+                        let root = this.root().to_path_buf();
+                        this.drop_entries(dropped.paths().to_vec(), root, true, false, cx);
+                    }))
                     .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         this.focus = Focus::Explorer;
@@ -746,10 +762,26 @@ impl Workspace {
                                         None => t.text,
                                     };
                                     let badge = decor.filter(|c| *c != '•').map(|c| c.to_string()).unwrap_or_default();
+                                    // Dropping on a folder puts the item inside it; on a file, next to it.
+                                    let drop_dir = if is_dir { path.clone() } else { path.parent().map(std::path::Path::to_path_buf).unwrap_or_else(|| this.root().to_path_buf()) };
+                                    let (chip_bg, chip_fg, chip_border, hover_bg) = (t.popup, t.text, t.border, t.selection);
+                                    let chip_name = entry.name.clone();
+                                    let (dir_for_entries, dir_for_files) = (drop_dir.clone(), drop_dir);
                                     div()
                                         .id(("entry", ix))
                                         .w_full()
                                         .h(px(line_h))
+                                        .on_drag(crate::explorer_dnd::DraggedEntry { path: entry.path.clone(), is_dir }, move |_, _, _, cx| {
+                                            cx.new(|_| crate::explorer_dnd::DragChip { name: chip_name.clone(), bg: chip_bg, fg: chip_fg, border: chip_border })
+                                        })
+                                        .when(is_dir, |d| d.drag_over::<crate::explorer_dnd::DraggedEntry>(move |s, _, _, _| s.bg(rgb(hover_bg))).drag_over::<gpui::ExternalPaths>(move |s, _, _, _| s.bg(rgb(hover_bg))))
+                                        .on_drop(cx.listener(move |this, dragged: &crate::explorer_dnd::DraggedEntry, window, cx| {
+                                            let copy = window.modifiers().control;
+                                            this.drop_entries(vec![dragged.path.clone()], dir_for_entries.clone(), copy, true, cx);
+                                        }))
+                                        .on_drop(cx.listener(move |this, dropped: &gpui::ExternalPaths, _, cx| {
+                                            this.drop_entries(dropped.paths().to_vec(), dir_for_files.clone(), true, false, cx);
+                                        }))
                                         .pl(px(8.0 + entry.depth as f32 * 14.0))
                                         .cursor_pointer()
                                         .whitespace_nowrap()
@@ -2040,7 +2072,7 @@ impl Workspace {
     fn render_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
         let t = &self.theme;
         let overlay = self.overlay.as_ref()?;
-        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. });
+        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. });
         let start = overlay.selected.saturating_sub(11);
         let end = (start + 12).min(overlay.items.len());
         let rows = (start..end).map(|ix| {

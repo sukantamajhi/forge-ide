@@ -218,7 +218,10 @@ impl Workspace {
             .w_full()
             .max_w(rems(46.0))
             .px(rems(2.0))
-            .py(rems(1.5))
+            .pt(rems(1.5))
+            // The page's scroll range is measured from this box, and wrapped descriptions paint taller than they
+            // measure, so without this room the last rows stay out of reach.
+            .pb(rems(8.0))
             .child(
                 div()
                     .flex()
