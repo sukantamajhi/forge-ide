@@ -315,7 +315,55 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Whether group `g` is showing its Markdown file as a full-page preview.
+    pub fn full_preview_shown(&self, g: usize) -> bool {
+        let Some(path) = self.preview_full.as_ref() else { return false };
+        self.groups.get(g).and_then(|gr| gr.views.get(gr.active)).is_some_and(|v| crate::workspace::same_path(&self.docs[v.doc].path, path))
+    }
+
+    /// Markdown: Open Preview. The preview replaces the source in this tab; the same command (or "Show Source") goes back.
+    pub fn toggle_full_preview(&mut self) {
+        if self.full_preview_shown(self.focused_group) {
+            self.preview_full = None;
+            self.set_status("Showing the Markdown source");
+        } else if self.is_markdown(self.focused_group) || self.is_csv(self.focused_group) {
+            // Only one preview at a time: the side one gives way.
+            self.preview_open = false;
+            self.preview_full = self.active_doc().map(|d| d.path.clone());
+            self.csv_scroll_x = 0.0;
+            self.completion = None;
+            self.set_status("Showing the preview: Ctrl+Shift+V shows the source again");
+        } else {
+            self.set_status("Open a Markdown (.md) or CSV (.csv, .tsv) file to preview it");
+        }
+    }
+
+    /// The preview as the whole page of group `g`, in a readable column.
+    pub fn render_markdown_full(&self, g: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, _, blocks) = self.md_cache.as_ref()?;
+        let doc = self.active_doc()?;
+        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base: doc.path.parent().map(Path::to_path_buf).unwrap_or_default(), next_id: Cell::new(0) };
+        let t = &self.theme;
+        Some(
+            div()
+                .id(("markdown-full", g))
+                .size_full()
+                .bg(rgb(t.bg))
+                .track_scroll(&self.preview_scroll)
+                .overflow_y_scroll()
+                .flex()
+                .justify_center()
+                .items_start()
+                .child(div().flex().flex_col().w_full().max_w(rems(54.0)).px(rems(2.0)).py(rems(1.5)).pb(rems(4.0)).children(blocks.iter().map(|b| block(&ctx, b))))
+                .into_any_element(),
+        )
+    }
+
     pub fn toggle_markdown_preview(&mut self) {
+        // The side preview and the full page are alternatives; asking for the side one shows the source again.
+        if self.full_preview_shown(self.focused_group) {
+            self.preview_full = None;
+        }
         if self.preview_open {
             self.preview_open = false;
             self.set_status("Markdown preview closed");

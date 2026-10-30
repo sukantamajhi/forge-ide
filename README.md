@@ -142,6 +142,16 @@ cargo build --release -p forge-app            # LTO; slow first build
     **Focus on Outline View** opens the symbols picker for the file (the same list as Go to Symbol in Editor), not a permanent tree.
   - **Images and binary files:** PNG, JPEG, GIF, BMP, WebP and ICO files open in a viewer over the editor (Escape or Close to leave).
     Any other file that is not UTF-8 opens as a read-only hex dump of its first 256 KiB.
+- **CSV / TSV preview:** the same **Open Preview** command (Ctrl+Shift+V, or the page icon in the tab bar) shows a `.csv` or `.tsv` file as a table: the first row is the header, with row
+  numbers, aligned columns (numbers right-aligned), zebra rows and a summary (data rows, columns, delimiter). Quoted fields, doubled quotes and line breaks inside quotes are read
+  correctly, and the delimiter (comma, semicolon, tab or pipe) is guessed from the first lines. It scrolls both ways (a horizontal swipe or Shift + the wheel for sideways). Only the first
+  100,000 rows are shown; editing is blocked while it shows, and Ctrl+Shift+V returns to the text. Not done: sorting, filtering, editing cells, a header-less mode.
+- **Markdown preview:** **Markdown: Open Preview** (Ctrl+Shift+V, the page icon in the tab bar, View menu) replaces the source in the tab with the rendered page in a readable column;
+  press it again, or the "Show Source" icon, to get the source back. While the page is showing, typing is blocked (the status bar says why) so you cannot edit what you cannot see.
+  **Open Preview to the Side** (Ctrl+K V) is still there and scrolls in step with the source; the two are alternatives, asking for one closes the other.
+- **Scrolling sideways:** long lines scroll with a horizontal mouse wheel or trackpad swipe, or Shift + the wheel; the line numbers stay put, and moving the caret
+  (End, arrow keys, typing) scrolls it into view. In a side-by-side diff both columns scroll together. When many tabs are open, the tab strip scrolls with the wheel
+  (the active tab is brought into view when you switch to it). With word wrap on, lines wrap instead.
 - **Markup and CSS help:**
   - **Auto closing tags** (HTML, XML, JSX, TSX, and `.vue` / `.svelte` when an extension names them): typing `>` after `<div class="x"` adds `</div>` with the
     caret between; `</` finishes with the innermost open tag; void tags (`br`, `img`...), self-closing tags and generics like `Array<string>` get nothing.

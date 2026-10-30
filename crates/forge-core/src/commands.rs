@@ -142,6 +142,7 @@ commands! {
     ZoomReset, "workbench.action.zoomReset", "Reset Zoom", ["ctrl+numpad0"];
     ToggleWordWrap, "editor.action.toggleWordWrap", "Toggle Word Wrap", ["alt+z"];
     MarkdownPreview, "markdown.showPreviewToSide", "Markdown: Open Preview to the Side", ["ctrl+k v"];
+    MarkdownPreviewFull, "markdown.showPreview", "Markdown: Open Preview", ["ctrl+shift+v"];
     ToggleMinimap, "editor.action.toggleMinimap", "View: Toggle Minimap", [];
 
     OpenSettings, "workbench.action.openSettings", "Open Settings", ["ctrl+,"];

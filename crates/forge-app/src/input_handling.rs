@@ -257,7 +257,7 @@ impl Workspace {
                 }
             };
             let line = line.min(doc.buffer.len_lines() - 1);
-            let mut cell_x = (pos.x - bounds.left() - px_f(GUTTER_WIDTH + TEXT_PAD)) / self.char_width + start_cell as f32;
+            let mut cell_x = (pos.x - bounds.left() - px_f(GUTTER_WIDTH + TEXT_PAD) + px_f(view.scroll_x)) / self.char_width + start_cell as f32;
             if let Some(end) = end_cell {
                 cell_x = cell_x.min(end as f32 - 0.51);
             }

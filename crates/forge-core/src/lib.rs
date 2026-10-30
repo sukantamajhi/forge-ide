@@ -32,6 +32,7 @@ pub mod icon_theme;
 pub mod askpass;
 pub mod patch;
 pub mod conflict;
+pub mod csv;
 pub mod gpg_wrap;
 pub mod graph;
 pub mod product_icons;

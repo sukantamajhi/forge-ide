@@ -4,6 +4,13 @@
 
 use gpui::{div, prelude::*, px, rems, rgb, Div, ElementId, Stateful};
 
+/// Make a scrolling element move only along the axis the wheel turns. Without this a list that scrolls vertically also
+/// treats a sideways swipe as a vertical one and drifts down the page while the text moves sideways.
+pub fn restrict_to_axis<T: gpui::Styled>(mut element: T) -> T {
+    element.style().restrict_scroll_to_axis = Some(true);
+    element
+}
+
 /// A vertically scrolling page holding one centred content column. The caller gives it its size. The
 /// column keeps its natural height, so the page scrolls when the column is taller than the page.
 pub fn scroll_page(id: impl Into<ElementId>) -> Stateful<Div> {

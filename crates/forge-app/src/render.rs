@@ -43,6 +43,8 @@ struct LineCtx {
     depths: Option<std::rc::Rc<Vec<i32>>>,
     line_comment: Option<&'static str>,
     lifetimes: bool,
+    /// Pixels the text is scrolled sideways.
+    scroll_x: f32,
 }
 
 /// Give the bytes `range` of a line the colour `color`, splitting any highlight run it cuts across.
@@ -126,6 +128,18 @@ impl Workspace {
         let t = &self.theme;
         let group = &self.groups[g];
         let focused_group = g == self.focused_group;
+        let strip = {
+            let mut scrolls = self.tab_scrolls.borrow_mut();
+            while scrolls.len() <= g {
+                scrolls.push((gpui::ScrollHandle::new(), (usize::MAX, 0)));
+            }
+            let seen = (group.active, group.views.len());
+            if scrolls[g].1 != seen {
+                scrolls[g].1 = seen;
+                scrolls[g].0.scroll_to_item(group.active);
+            }
+            scrolls[g].0.clone()
+        };
         let tabs = group.views.iter().enumerate().map(|(vi, view)| {
             let doc = &self.docs[view.doc];
             let active = group.active == vi;
@@ -134,6 +148,8 @@ impl Workspace {
                 .id(("tab", g * 1000 + vi))
                 .group("tab")
                 .relative()
+                .flex_none()
+                .whitespace_nowrap()
                 .flex()
                 .items_center()
                 .gap_2()
@@ -220,6 +236,8 @@ impl Workspace {
         let has_views = !group.views.is_empty();
         let markdown = has_views && self.is_markdown(g);
         let preview_on = self.preview_open && g == self.focused_group;
+        let full_preview = self.full_preview_shown(g);
+        let csv = has_views && self.is_csv(g);
         let actions = div()
             .flex()
             .flex_row()
@@ -227,7 +245,9 @@ impl Workspace {
             .items_center()
             .gap_1()
             .px_2()
-            .children((has_views && markdown).then(|| button("tab-preview", crate::icons::glyph(crate::codicons::OPEN_PREVIEW, 1.125, if preview_on { t.text } else { t.dim }), "Open Preview to the Side", Some(Command::MarkdownPreview), preview_on, cx, Box::new(|w, _, _| w.toggle_markdown_preview()))))
+            .children((has_views && (markdown || csv) && full_preview).then(|| button("tab-source", crate::icons::glyph(crate::codicons::GO_TO_FILE, 1.125, t.text), "Show Source", Some(Command::MarkdownPreviewFull), true, cx, Box::new(|w, _, _| w.toggle_full_preview()))))
+            .children((has_views && (markdown || csv) && !full_preview).then(|| button("tab-preview-full", crate::icons::glyph(crate::codicons::PREVIEW, 1.125, t.dim), "Open Preview", Some(Command::MarkdownPreviewFull), false, cx, Box::new(|w, _, _| w.toggle_full_preview()))))
+            .children((has_views && markdown && !full_preview).then(|| button("tab-preview", crate::icons::glyph(crate::codicons::OPEN_PREVIEW, 1.125, if preview_on { t.text } else { t.dim }), "Open Preview to the Side", Some(Command::MarkdownPreview), preview_on, cx, Box::new(|w, _, _| w.toggle_markdown_preview()))))
             .children(has_views.then(|| button("tab-split", crate::icons::glyph(crate::codicons::SPLIT_HORIZONTAL, 1.125, t.dim), "Split Editor", Some(Command::SplitEditor), false, cx, Box::new(|w, _, cx| w.run_command(Command::SplitEditor, false, cx)))))
             .children(has_views.then(|| button("tab-more", crate::icons::glyph(crate::codicons::ELLIPSIS, 1.125, t.dim), "More Actions...", None, false, cx, Box::new(move |w, ev, cx| w.open_tab_menu(g, ev.position, cx)))));
         div()
@@ -238,7 +258,19 @@ impl Workspace {
             .h(px(TAB_BAR_HEIGHT))
             .font_family(self.ui_font.clone())
             .bg(rgb(t.sidebar))
-            .child(div().flex().flex_row().flex_1().min_w_0().h_full().overflow_hidden().children(tabs))
+            .child(
+                div()
+                    .id(("tab-strip", g))
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    // The wheel scrolls the strip sideways when there are more tabs than fit.
+                    .overflow_x_scroll()
+                    .track_scroll(&strip)
+                    .children(tabs),
+            )
             .child(actions)
     }
 
@@ -260,7 +292,13 @@ impl Workspace {
         let has_views = !self.groups[g].views.is_empty();
         let ext_page = self.groups[g].views.get(self.groups[g].active).map(|v| v.doc).filter(|&d| self.docs[d].ext_page.is_some());
         let diff = if self.settings.diff_side_by_side && has_views { self.diff_target_in(g) } else { None };
+        if self.full_preview_shown(g) {
+            self.ensure_markdown(g);
+            self.ensure_csv(g);
+        }
         let body: AnyElement = if let Some(page) = ext_page.and_then(|d| self.render_ext_page(d, cx)) {
+            page
+        } else if let Some(page) = self.full_preview_shown(g).then(|| if self.is_csv(g) { self.render_csv_full(g, cx) } else { self.render_markdown_full(g, cx) }).flatten() {
             page
         } else if let Some((doc_ix, target)) = diff {
             self.render_diff_view(doc_ix, &target, cx)
@@ -340,13 +378,16 @@ impl Workspace {
                 .min_w_0()
                 .h_full()
                 .relative()
+                .on_scroll_wheel(cx.listener(move |this, ev: &gpui::ScrollWheelEvent, _, cx| this.editor_hscroll(g, ev, cx)))
                 .child(
-                    uniform_list(
-                        ("editor", g),
-                        count,
-                        cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
+                    crate::scroll::restrict_to_axis(
+                        uniform_list(
+                            ("editor", g),
+                            count,
+                            cx.processor(move |this, range: Range<usize>, _window, _cx| this.render_lines(g, range)),
+                        )
+                        .track_scroll(scroll),
                     )
-                    .track_scroll(scroll)
                     .size_full()
                     .when(!focused, |d| d.opacity(0.92)),
                 )
@@ -354,6 +395,37 @@ impl Workspace {
         )
         .children(preview)
         .children(minimap)
+    }
+
+    /// Sideways scrolling of the text: a horizontal wheel or trackpad swipe, or Shift with the wheel.
+    fn editor_hscroll(&mut self, g: usize, ev: &gpui::ScrollWheelEvent, cx: &mut Context<Self>) {
+        let line_h = px(self.line_height());
+        let delta = ev.delta.pixel_delta(line_h);
+        let mut dx = f32::from(delta.x);
+        let Some(vi) = self.groups.get(g).map(|gr| gr.active) else { return };
+        if self.groups[g].views.get(vi).is_none_or(|v| v.wrap.is_some()) {
+            return;
+        }
+        let handle = self.groups[g].views[vi].scroll.0.borrow().base_handle.clone();
+        if ev.modifiers.shift && dx == 0.0 {
+            // Shift+wheel is a sideways scroll: the list has already moved down or up by this much, so undo that.
+            dx = f32::from(delta.y);
+            let mut offset = handle.offset();
+            offset.y -= delta.y;
+            handle.set_offset(offset);
+        }
+        if dx == 0.0 {
+            return;
+        }
+        let view = &mut self.groups[g].views[vi];
+        let viewport = f32::from(view.scroll.0.borrow().base_handle.bounds().size.width) - GUTTER_WIDTH;
+        let widest = self.docs[view.doc].widest_line_cells() as f32 * f32::from(self.char_width) + TEXT_PAD * 2.0;
+        let max = (widest - viewport).max(0.0);
+        let before = view.scroll_x;
+        view.scroll_x = (view.scroll_x - dx).clamp(0.0, max);
+        if view.scroll_x != before {
+            cx.notify();
+        }
     }
 
     /// Sticky scroll: the lines that open the scopes the first visible line is inside, pinned over the top of the editor.
@@ -462,7 +534,7 @@ impl Workspace {
         let depths = (self.settings.bracket_colors && !doc.diff && !doc.readonly_text_only()).then(|| doc.bracket_depths()).flatten();
         let line_comment = doc.language.and_then(|l| l.line_comment());
         let lifetimes = doc.language == Some(forge_syntax::Language::Rust);
-        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused, breakpoints, debug_line, depths, line_comment, lifetimes };
+        let ctx = LineCtx { char_w: self.char_width, line_h: self.line_height(), spans, first_line: first, bracket, matches, current_match, focused, breakpoints, debug_line, depths, line_comment, lifetimes, scroll_x: view.scroll_x };
         rows.into_iter().map(|row| self.render_line(view, row.line, &ctx, row)).collect()
     }
 
@@ -476,7 +548,7 @@ impl Workspace {
         let char_w = ctx.char_w;
         let line_h = px(ctx.line_h);
         // A wrapped row shows the whole line shifted left by its start cell; the text area clips it.
-        let x_of = |col: usize| char_w * (display_width(&text, col) as f32 - row.start as f32) + px(TEXT_PAD);
+        let x_of = |col: usize| char_w * (display_width(&text, col) as f32 - row.start as f32) + px(TEXT_PAD) - px(ctx.scroll_x);
 
         let runs: Vec<(Range<usize>, HighlightStyle)> = ctx
             .spans
@@ -564,7 +636,7 @@ impl Workspace {
         if !text.trim().is_empty() && row.k == 0 {
             for k in 1..(lead_cells / TAB_WIDTH.max(1)).max(1) {
                 if k * TAB_WIDTH < lead_cells {
-                    layers.push(div().absolute().top_0().left(char_w * (k * TAB_WIDTH) as f32 + px(TEXT_PAD)).w(px(1.0)).h(line_h).bg(rgb(t.border)));
+                    layers.push(div().absolute().top_0().left(char_w * (k * TAB_WIDTH) as f32 + px(TEXT_PAD) - px(ctx.scroll_x)).w(px(1.0)).h(line_h).bg(rgb(t.border)));
                 }
             }
         }
@@ -646,7 +718,7 @@ impl Workspace {
                             .when(row.end.is_none(), |d| d.w_full())
                             .overflow_hidden()
                             .children(layers)
-                            .child(div().absolute().top_0().left(px(TEXT_PAD) - char_w * row.start as f32).whitespace_nowrap().child(StyledText::new(shown).with_highlights(runs))),
+                            .child(div().absolute().top_0().left(px(TEXT_PAD) - px(ctx.scroll_x) - char_w * row.start as f32).whitespace_nowrap().child(StyledText::new(shown).with_highlights(runs))),
                     ),
             )
     }
@@ -2134,7 +2206,7 @@ impl Workspace {
         let cell = display_width(&text, col);
         let wrapped = view.wrap.as_ref().and_then(|w| w.row_of(line, cell).and_then(|r| w.row(r).map(|info| (r, info.start))));
         let (row, start_cell) = wrapped.unwrap_or_else(|| (view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line), 0));
-        let x = bounds.left() + px_f(GUTTER_WIDTH + TEXT_PAD) + self.char_width * (cell - start_cell) as f32;
+        let x = bounds.left() + px_f(GUTTER_WIDTH + TEXT_PAD) + self.char_width * (cell - start_cell) as f32 - px(view.scroll_x);
         let y = bounds.top() + offset.y + px_f(self.line_height()) * (row + 1) as f32;
         (y > bounds.top() - px(1.0) && y < bounds.bottom() + px_f(self.line_height())).then_some((x, y))
     }

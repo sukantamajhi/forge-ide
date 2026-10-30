@@ -100,6 +100,7 @@ impl Workspace {
                 c("Toggle Primary Side Bar", ToggleSidebar),
                 sep(),
                 c("Split Editor", SplitEditor),
+                c("Markdown Preview", MarkdownPreviewFull),
                 c("Word Wrap", ToggleWordWrap),
                 c("Minimap", ToggleMinimap),
                 c("Zen Mode", ZenMode),

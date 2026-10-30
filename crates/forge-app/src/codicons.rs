@@ -2,6 +2,8 @@
 //! Each constant is the glyph for that icon; draw it with the `codicon` font family.
 //! Generated from the font's own stylesheet.
 
+pub const PREVIEW: char = '\u{eb2f}';
+pub const GO_TO_FILE: char = '\u{ea94}';
 pub const NEW_FILE: char = '\u{ea7f}';
 pub const NEW_FOLDER: char = '\u{ea80}';
 pub const COLLAPSE_ALL: char = '\u{eac5}';

@@ -85,6 +85,8 @@ pub(crate) struct Doc {
     pub gutter_key: (u64, u64),
     /// Bracket nesting depth at the start of each line, and the `revision` it was worked out for.
     pub bracket_depths: std::cell::RefCell<(u64, std::rc::Rc<Vec<i32>>)>,
+    /// Width in cells of the longest line, and the `revision` it was measured for (the sideways scroll range).
+    pub widest: std::cell::Cell<(u64, usize)>,
     /// The file began with a UTF-8 byte-order mark. It is kept out of the text (language
     /// servers choke on it) and written back on save.
     pub bom: bool,
@@ -132,11 +134,32 @@ impl Doc {
             gutter: Vec::new(),
             gutter_key: (u64::MAX, 0),
             bracket_depths: std::cell::RefCell::new((u64::MAX, std::rc::Rc::new(Vec::new()))),
+            widest: std::cell::Cell::new((u64::MAX, 0)),
             bom: false,
             ext_lang: None,
             tm: None,
             ext_page: None,
         }
+    }
+
+    /// Display width in cells of the longest line (tabs expanded), kept until the text changes.
+    pub fn widest_line_cells(&self) -> usize {
+        let (rev, cells) = self.widest.get();
+        if rev == self.revision {
+            return cells;
+        }
+        let rope = self.buffer.rope();
+        let widest = rope
+            .lines()
+            .map(|line| {
+                let text = line.to_string();
+                let text = text.trim_end_matches(['\n', '\r']);
+                forge_text::columns::display_width(text, text.chars().count())
+            })
+            .max()
+            .unwrap_or(0);
+        self.widest.set((self.revision, widest));
+        widest
     }
 
     /// Not worth colouring: a page, not text.
@@ -237,6 +260,8 @@ pub(crate) struct View {
     pub wrap: Option<crate::wrap::WrapMap>,
     /// The minimap's per-line bars, with the document revision they were built for.
     pub minimap: Option<(u64, crate::minimap::LineStats)>,
+    /// How far the text is scrolled sideways, in pixels (always 0 with word wrap on).
+    pub scroll_x: f32,
 }
 
 impl View {
@@ -254,6 +279,7 @@ impl View {
             folds_lines: 0,
             wrap: None,
             minimap: None,
+            scroll_x: 0.0,
         }
     }
 }
@@ -603,6 +629,9 @@ pub(crate) struct Workspace {
     pub panel_visible: bool,
     pub panel_view: PanelView,
     pub explorer_scroll: UniformListScrollHandle,
+    /// The tab strip of each editor group scrolls sideways; with the `(active tab, tab count)` it was last
+    /// scrolled for, so the active tab is brought into view when it changes and the strip is left alone otherwise.
+    pub tab_scrolls: std::cell::RefCell<Vec<(gpui::ScrollHandle, (usize, usize))>>,
     pub explorer_selected: Option<usize>,
 
     pub lsp: LspManager,
@@ -682,6 +711,12 @@ pub(crate) struct Workspace {
     pub session_saved: Option<forge_core::session::Session>,
     pub session_checked: Instant,
     pub preview_open: bool,
+    /// The Markdown file shown as a full page instead of its source (Markdown: Open Preview).
+    pub preview_full: Option<PathBuf>,
+    /// The parsed table of the CSV file in the full-page preview, its list scroll and its sideways scroll.
+    pub csv_cache: Option<crate::csv_view::CsvCache>,
+    pub csv_scroll: UniformListScrollHandle,
+    pub csv_scroll_x: f32,
     pub md_cache: Option<(usize, u64, Vec<forge_core::markdown::Block>)>,
     /// The preview's scroll state, and where the editor and preview were (as fractions of their height) at the last sync.
     pub preview_scroll: gpui::ScrollHandle,
@@ -884,6 +919,10 @@ impl Workspace {
             session_saved: None,
             session_checked: Instant::now(),
             preview_open: false,
+            preview_full: None,
+            csv_cache: None,
+            csv_scroll: UniformListScrollHandle::new(),
+            csv_scroll_x: 0.0,
             md_cache: None,
             preview_scroll: gpui::ScrollHandle::new(),
             sync_last: (0.0, 0.0),
@@ -912,6 +951,7 @@ impl Workspace {
             graph_rows: Vec::new(),
             graph_pending: false,
             graph_scroll: UniformListScrollHandle::new(),
+            tab_scrolls: std::cell::RefCell::new(Vec::new()),
             timeline: None,
             timeline_pending: false,
             timeline_scroll: UniformListScrollHandle::new(),
@@ -1213,6 +1253,21 @@ impl Workspace {
         }
         let wrapped = view.wrap.as_ref().and_then(|w| w.row_of(line, forge_text::columns::display_width(&doc.buffer.line(line), col)));
         let index = wrapped.unwrap_or_else(|| view.folds.visible_lines(doc.buffer.len_lines()).and_then(|v| v.iter().position(|l| *l == line)).unwrap_or(line));
+        // Sideways: scroll just enough that the caret column is inside the text area, with a little room.
+        if view.wrap.is_none() {
+            let viewport = f32::from(view.scroll.0.borrow().base_handle.bounds().size.width) - GUTTER_WIDTH - TEXT_PAD;
+            if viewport > 0.0 {
+                let text = doc.buffer.line(line);
+                let col = doc.buffer.offset_to_point(view.selections.primary().head).1;
+                let x = forge_text::columns::display_width(&text, col) as f32 * f32::from(self.char_width);
+                let margin = f32::from(self.char_width) * 4.0;
+                if x < view.scroll_x {
+                    view.scroll_x = (x - margin).max(0.0);
+                } else if x + margin > view.scroll_x + viewport {
+                    view.scroll_x = x + margin - viewport;
+                }
+            }
+        }
         // Non-strict scrolling only moves when the line is off screen; `center` forces it.
         if center {
             view.scroll.scroll_to_item_strict(index, gpui::ScrollStrategy::Center);
@@ -1341,6 +1396,10 @@ impl Workspace {
         let Some((g, vi)) = self.active_ix() else { return };
         if self.docs[self.groups[g].views[vi].doc].readonly {
             self.set_status("This document is read-only");
+            return;
+        }
+        if self.full_preview_shown(g) {
+            self.set_status("The preview is showing: press Ctrl+Shift+V to go back to the source and edit");
             return;
         }
         let view = &mut self.groups[g].views[vi];

@@ -26,6 +26,7 @@ mod ext_view;
 mod diff_view;
 mod explorer_dnd;
 mod conflict_view;
+mod csv_view;
 mod rebase_view;
 mod git_panels;
 mod file_icons;

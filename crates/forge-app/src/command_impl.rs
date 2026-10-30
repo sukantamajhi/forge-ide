@@ -210,6 +210,7 @@ impl Workspace {
             ToggleBreakpoint => self.toggle_breakpoint_at_caret(),
             ClearBreakpoints => self.clear_all_breakpoints(),
             MarkdownPreview => self.toggle_markdown_preview(),
+            MarkdownPreviewFull => self.toggle_full_preview(),
             ToggleMinimap => {
                 self.settings.minimap = !self.settings.minimap;
                 self.set_status(if self.settings.minimap { "Minimap on" } else { "Minimap off" });
@@ -219,6 +220,7 @@ impl Workspace {
                 self.set_status(if self.settings.word_wrap { "Word wrap on" } else { "Word wrap off" });
                 if let Some((g, vi)) = self.active_ix() {
                     self.groups[g].views[vi].wrap = None;
+                    self.groups[g].views[vi].scroll_x = 0.0;
                     self.ensure_wrap(g, vi);
                     self.reveal_caret(g, vi, false);
                 }

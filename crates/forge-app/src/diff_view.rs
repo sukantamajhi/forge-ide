@@ -35,6 +35,8 @@ pub(crate) struct DiffCache {
     pub patch: Option<Patch>,
     pub rows: Vec<SideRow>,
     pub items: Vec<DiffItem>,
+    /// How far both columns are scrolled sideways, in pixels. They move together.
+    pub scroll_x: std::cell::Cell<f32>,
 }
 
 /// `git:diff:Staged:src/main.rs` and its siblings, the names diff tabs are opened under.
@@ -84,7 +86,7 @@ impl Workspace {
             }
             items.push(DiffItem::Row(i));
         }
-        *cache = Some(DiffCache { path: doc.path.clone(), revision: doc.revision, patch, rows, items });
+        *cache = Some(DiffCache { path: doc.path.clone(), revision: doc.revision, patch, rows, items, scroll_x: std::cell::Cell::new(0.0) });
     }
 
     pub fn toggle_diff_layout(&mut self) {
@@ -269,18 +271,62 @@ impl Workspace {
         } else {
             let line_h = self.line_height();
             let state = target.state;
-            uniform_list(
-                "diff-rows",
-                count,
-                cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                    range.map(|ix| this.diff_item(ix, state, stageable, line_h, cx)).collect()
-                }),
+            crate::scroll::restrict_to_axis(
+                uniform_list(
+                    "diff-rows",
+                    count,
+                    cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
+                        range.map(|ix| this.diff_item(ix, state, stageable, line_h, cx)).collect()
+                    }),
+                )
+                .track_scroll(self.diff_scroll.clone()),
             )
-            .track_scroll(self.diff_scroll.clone())
             .size_full()
             .into_any_element()
         };
-        div().size_full().flex().flex_col().child(toolbar).child(div().flex_1().min_h_0().child(body)).into_any_element()
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(toolbar)
+            .child(div().flex_1().min_h_0().on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _, cx| this.diff_hscroll(ev, cx))).child(body))
+            .into_any_element()
+    }
+
+    /// Sideways scrolling of the diff: a horizontal wheel or swipe, or Shift with the wheel. Both columns move together.
+    fn diff_hscroll(&mut self, ev: &gpui::ScrollWheelEvent, cx: &mut Context<Self>) {
+        let line_h = px(self.line_height());
+        let delta = ev.delta.pixel_delta(line_h);
+        let mut dx = f32::from(delta.x);
+        let handle = self.diff_scroll.0.borrow().base_handle.clone();
+        if ev.modifiers.shift && dx == 0.0 {
+            dx = f32::from(delta.y);
+            let mut offset = handle.offset();
+            offset.y -= delta.y;
+            handle.set_offset(offset);
+        }
+        if dx == 0.0 {
+            return;
+        }
+        let cache = self.diff_cache.borrow();
+        let Some(cache) = cache.as_ref() else { return };
+        // The longest line on either side, against the width of one column (less its line-number gutter).
+        let cells = cache
+            .rows
+            .iter()
+            .flat_map(|row| [&row.left, &row.right])
+            .filter_map(|c| c.as_ref())
+            .map(|c| c.text.chars().map(|ch| if ch == '\t' { 4 } else { 1 }).sum::<usize>())
+            .max()
+            .unwrap_or(0);
+        let column = f32::from(self.diff_scroll.0.borrow().base_handle.bounds().size.width) / 2.0 - 3.25 * 16.0;
+        let max = (cells as f32 * f32::from(self.char_width) - column + 24.0).max(0.0);
+        let before = cache.scroll_x.get();
+        let after = (before - dx).clamp(0.0, max);
+        cache.scroll_x.set(after);
+        if after != before {
+            cx.notify();
+        }
     }
 
     fn diff_item(&self, ix: usize, state: DiffState, stageable: bool, line_h: f32, cx: &mut Context<Self>) -> AnyElement {
@@ -288,6 +334,7 @@ impl Workspace {
         let cache = self.diff_cache.borrow();
         let Some(cache) = cache.as_ref() else { return div().into_any_element() };
         let row_box = || div().w_full().h(px(line_h)).flex().flex_row().items_center();
+        let scroll_x = cache.scroll_x.get();
         match cache.items.get(ix).copied() {
             Some(DiffItem::Hunk(h)) => {
                 let header = cache.patch.as_ref().and_then(|p| p.hunks.get(h)).map(|hunk| hunk.header.clone()).unwrap_or_default();
@@ -363,7 +410,9 @@ impl Workspace {
                             }))
                         })
                         .child(div().flex_none().w(rems(3.25)).pr_2().flex().justify_end().text_xs().text_color(rgb(t.dim)).child(c.number.to_string()))
-                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(c.text.replace('\t', "    ").replace('\r', "")))
+                        .child(
+                            div().flex_1().min_w_0().h_full().overflow_hidden().child(div().relative().left(px(-scroll_x)).flex_none().whitespace_nowrap().child(c.text.replace('\t', "    ").replace('\r', ""))),
+                        )
                 };
                 row_box().child(cell(0, &row.left, cx)).child(div().flex_none().w(px(1.0)).h_full().bg(rgb(t.border))).child(cell(1, &row.right, cx)).into_any_element()
             }
