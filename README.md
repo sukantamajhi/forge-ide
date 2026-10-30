@@ -43,18 +43,47 @@ cargo build --release -p forge-app            # LTO; slow first build
     lines paired). The **Inline** button, `Diff: Toggle Side by Side`, or `diffEditor.renderSideBySide` switch to the one-column view.
   - **Stage hunks or lines.** In a diff, **Stage Hunk** stages one block, or click lines to pick them and press **Stage
     Selected**. In a staged diff the same buttons say **Unstage**. Forge builds a small patch and runs `git apply --cached`
-    (reversed for unstaging), so the rest of the file is untouched. The diff updates after every change.
+    (reversed for unstaging), so the rest of the file is untouched. The diff updates after every change. Files with Windows
+    line endings work: the patch keeps each line's `\r`. **Discard Hunk** and **Discard Selected** (working-tree diffs only)
+    throw changes away after a confirmation, with `git apply --reverse`.
+  - **New files.** The diff of an untracked file lets you click lines and **Stage Selected**, or **Stage All**: only those
+    lines go into the index (a blob is written and the index entry added), the file on disk is untouched, and the tab then
+    shows what is left as a normal working-tree diff.
   - **Merge conflicts.** A conflicted file (marked `!`) opens a page listing each conflict with the current and incoming
-    sides next to each other and **Accept Current / Incoming / Both** (or all at once). When no markers are left,
-    **Stage File** marks it resolved. `Git: Resolve Merge Conflicts in File` does the same for the file in the editor.
+    sides next to each other and **Accept Current / Incoming / Both** (or all at once). A middle **Base (common ancestor)**
+    column shows what both sides started from (read from the index and merged in memory, so the file is not touched).
+    When no markers are left, **Stage File** marks it resolved. `Git: Resolve Merge Conflicts in File` does the same for
+    the file in the editor.
   - **Rebase and merge.** `Git: Rebase Branch...` and `Git: Merge Branch...` pick a branch. When git stops (usually for
-    conflicts) the Source Control view shows a banner ("Rebase in progress (2/5)") with **Continue**, **Skip** and **Abort**
-    (`Git: Continue Rebase`, `Git: Skip This Commit in the Rebase`, `Git: Abort Rebase`, `Git: Commit the Merge`,
-    `Git: Abort Merge`). Interactive rebase (editing the todo list) is not supported.
+    conflicts) the Source Control view shows a banner ("Rebase in progress (2/5)", "Merge in progress", "Cherry-pick in
+    progress", "Revert in progress") with **Continue**, **Skip** and **Abort** (`Git: Continue Rebase`, `Git: Skip This Commit
+    in the Rebase`, `Git: Abort Rebase`, `Git: Commit the Merge`, `Git: Abort Merge`, and the same for cherry-pick and revert).
+  - **Interactive rebase.** `Git: Interactive Rebase...` asks for the commit to rebase after, then opens a page listing the
+    commits above it, oldest first. Each can be **pick**ed, **reword**ed (type the new message in its row), **squash**ed or
+    **fixup**ed into the commit above, or **drop**ped, and moved with the arrows. **Start Rebase** gives git the list through
+    its sequence editor (no editor window opens). Limits: merge commits are flattened (git's default), the `edit` and
+    `break` steps are not offered, and if the rebase stops for conflicts, rewords still waiting keep their original messages.
+  - **Cherry-pick and revert.** `Git: Cherry-pick Commit...` lists commits from every branch; `Git: Revert Commit...` lists
+    the current branch's. Conflicts stop them in the banner above like a rebase.
+  - **Commit graph and timeline.** The bottom panel's **GRAPH** tab draws every branch's history with lanes, dots and merge
+    lines, with branch and tag labels (`Git: Show Commit Graph`); click a commit to see it. **TIMELINE** lists the commits of the
+    file in the editor and follows it as you switch tabs (`Git: Show File Timeline`); click one to see what it changed in the
+    file. The graph shows the latest 400 commits and 12 lanes.
+  - **Submodules and worktrees.** `Git: Submodules...` lists them with their state (up to date, not initialised, at another
+    commit than recorded, conflicts) and opens one in a new Forge window; `Git: Update Submodules` runs `git submodule update
+    --init --recursive`. `Git: Worktrees...` lists the repository's worktrees and opens one in a new window; `Git: Add Worktree
+    for Branch...` makes one for a local branch in a folder next to this one, and `Git: Remove Worktree...` removes one (git
+    refuses when it has uncommitted changes).
   - **Logins.** A pull, push or fetch that needs a username, password, passphrase or a yes/no answer (host keys) asks in the
     editor instead of failing. Forge starts git with itself as the `GIT_ASKPASS` / `SSH_ASKPASS` helper, which asks the
     running editor over a local socket (127.0.0.1 only, with a random token), the way VS Code's git extension does.
     Passwords are shown as dots, go only to git, and Escape cancels the command. Credential helpers you already use still run first.
+  - **GPG signing.** With `commit.gpgsign` (or a signing key) set, commits, merges, rebases, cherry-picks and reverts that
+    need your key's passphrase ask for it in the editor. Forge tells git to use itself as `gpg.program`; it runs your real gpg
+    first with prompts off (so a passphrase gpg-agent already holds works silently), and only if gpg says it needs one asks
+    in the editor and runs gpg again with the answer in a short-lived file that is deleted right away. SSH signing
+    (`gpg.format = ssh`) asks through the same SSH askpass as other ssh prompts. Hardware tokens that ask for a PIN on the
+    device are not covered.
   - **Cancel.** While git runs, a **Cancel** button (Source Control view and status bar, or `Git: Cancel Running
     Operation`) stops the command and anything it started.
 - **Markdown preview** (Ctrl+K V, or `Markdown: Open Preview to the Side`): a live preview beside the editor with headings,
@@ -73,6 +102,24 @@ cargo build --release -p forge-app            # LTO; slow first build
   shows a pin instead of a close button (click the pin to unpin), and is not pinned again after a restart. Each item is also a
   command with VS Code's shortcut where it has one (Close Saved Ctrl+K U, Close All Ctrl+K Ctrl+W, Pin Ctrl+K Shift+Enter,
   Copy Path Shift+Alt+C, Copy Relative Path Ctrl+K Ctrl+Shift+C, Reveal in File Explorer Shift+Alt+R, Reveal in Explorer View Ctrl+K R).
+- **Editor navigation and files:**
+  - **Go Back / Go Forward** (Alt+Left / Alt+Right) return to where you were before a jump: opening another file, go to definition,
+    a symbol or a line. **Reopen Closed Editor** (Ctrl+Shift+T) brings back the last closed tab with its caret (30 are kept this session).
+  - **Open Recent** (Ctrl+R) lists folders opened before, newest first, and opens the chosen one in this window.
+  - **Zen Mode** (Ctrl+K Z) hides the side bar and panel; the same shortcut brings them back.
+  - **Auto Save:** `"files.autoSave": "afterDelay"` saves the open file once it has been left alone for `"files.autoSaveDelay"`
+    milliseconds (200 or more; 1000 by default). `"onFocusChange"` saves every modified file when you switch tabs or open another file.
+    `Toggle Auto Save` in the Command Palette flips between off and afterDelay. Format on save is not run by auto save.
+  - **Compare Active File With...** picks a second file and shows the difference as a coloured diff tab (it compares what is
+    in the editor, including unsaved changes, using `git diff --no-index`, so git must be installed; no repository is needed).
+  - **Per-language settings:** `"[rust]": { "editor.tabSize": 2 }` blocks, as in VS Code, for `editor.tabSize`, `editor.insertSpaces`
+    and `editor.formatOnSave`. One block can name several languages (`"[javascript][typescript]"`). Ids are VS Code's (`rust`, `python`,
+    `javascript`, `typescriptreact`, `shellscript`, `csharp`...). The status bar, Tab key, indentation and the server's formatter use them.
+  - **Format Selection** (Ctrl+K Ctrl+F) and **Organize Imports** (Shift+Alt+O) ask the language server for `rangeFormatting` and
+    for its `source.organizeImports` action; they do nothing useful when the server does not offer them (the status bar says so).
+    **Focus on Outline View** opens the symbols picker for the file (the same list as Go to Symbol in Editor), not a permanent tree.
+  - **Images and binary files:** PNG, JPEG, GIF, BMP, WebP and ICO files open in a viewer over the editor (Escape or Close to leave).
+    Any other file that is not UTF-8 opens as a read-only hex dump of its first 256 KiB.
 - **Resizable panels:** drag the edge of the sidebar, the top edge of the bottom panel, the left edge of the Markdown
   preview, the divider between split editors, or the dividers between the Debug panel's columns. The sidebar, bottom
   panel, preview and Debug columns are remembered in `%APPDATA%\Forge\ui-state.json`; split editors reset to equal shares.
@@ -112,7 +159,9 @@ The release build is a GUI program, so no console window opens.
 // settings.json
 { "editor.fontSize": 14, "editor.tabSize": 4, "editor.insertSpaces": true,
   "editor.autoClosingBrackets": "always", "workbench.colorTheme": "Forge Dark",
-  "files.trimTrailingWhitespace": false, "editor.formatOnSave": false }
+  "files.trimTrailingWhitespace": false, "editor.formatOnSave": false,
+  "files.autoSave": "afterDelay", "files.autoSaveDelay": 1000,
+  "[python]": { "editor.tabSize": 4 }, "[javascript][typescript]": { "editor.tabSize": 2 } }
 // keybindings.json: add or remove (prefix the command with -) bindings
 [ { "key": "ctrl+shift+d", "command": "editor.action.copyLinesDownAction" },
   { "key": "ctrl+d", "command": "-editor.action.addSelectionToNextFindMatch" } ]
@@ -231,19 +280,28 @@ run yet**: that is the next step and needs you to choose which ones.
 **Built** (details in the sections above): multi-cursor editing, find/replace and Replace in Files, Quick Open and the
 Command Palette, language-server features (with a go-to-definition picker and servers started automatically), a
 VS Code-style Source Control view (stage, commit, push, publish, pull, sync, fetch, stash, branches, history, blame, AI
-commit messages (OpenAI or Gemini), visible progress and results, side-by-side diffs, hunk and line staging, merge-conflict resolution,
-rebase and merge with continue / skip / abort, login prompts, cancel), Markdown preview with scroll sync, minimap, word wrap, a Settings page,
+commit messages (OpenAI or Gemini), visible progress and results, side-by-side diffs, hunk and line staging (also for new files, with
+discard), merge-conflict resolution with a base column, rebase (including interactive), merge, cherry-pick and revert with continue /
+skip / abort, login and GPG-passphrase prompts, cancel, a commit graph, a file timeline, submodules and worktrees), Markdown preview with scroll sync, minimap, word wrap, a Settings page,
 right-click menus, resizable and remembered panels, editor tab-bar buttons and menu, Codicons icons with hover tooltips,
 session restore, debugging for Python / Node / Rust, VS Code extensions from Open VSX (themes, languages, grammars,
-snippets, and a partial `vscode` API for running code), and syntax highlighting for 29 languages.
+snippets, and a partial `vscode` API for running code), and syntax highlighting for 29 languages. Editor navigation (Go Back /
+Forward, Reopen Closed Editor, Open Recent, Zen mode), auto save, per-language settings, comparing two files and an image / hex
+viewer are described under "Editor navigation and files".
 
 **Not built yet:**
 
-- Source control: interactive rebase, cherry-pick and revert, a three-way (base) view of conflicts, staging or discarding
-  single hunks of a new (untracked) file or discarding a single hunk, GPG-signing prompts, submodules, worktrees.
+- Source control: interactive rebase steps `edit` and `break` and `--rebase-merges`; accepting the base side or editing a merged
+  result in the conflict view (it shows the base but only keeps current, incoming or both); actions on a commit inside the graph
+  (checkout, cherry-pick, branch from it); submodule-specific commits and a Source Control view per submodule; adding a worktree for
+  a new or remote branch; stash management beyond push and pop; hardware-token PIN prompts for signing.
 - Workbench: multi-root workspaces, drag-and-drop of tabs or text, sticky scroll, inlay hints, semantic highlighting,
-  per-language settings, restoring unsaved edits or a second editor group's tabs, mouse-driven checks of the new
+  restoring unsaved edits or a second editor group's tabs, mouse-driven checks of the new
   hover tooltips (verified by keyboard replay only).
+- Editor features: Peek Definition / References, Call Hierarchy, Type Hierarchy, Code Lens, Linked Editing, workspace symbol
+  search (Ctrl+T), a permanent Outline view, bookmarks, a Search Editor, Emmet, spell checking, auto save of a file that is not
+  in front, per-language settings other than tab size, spaces and format on save, and Format Selection / Organize Imports have
+  only been checked to build, not against a running language server.
 - Debugging: only Python, JavaScript/Node and Rust; no conditional breakpoints or watch expressions.
 - Extensions: webviews, tree views, terminals, notebooks, debugging and tasks APIs, language-feature providers, and
   VS Code's own extensions as language servers. No third-party extension has been run yet. Plan: `docs/EXTENSIONS_PLAN.md`.

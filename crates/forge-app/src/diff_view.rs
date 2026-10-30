@@ -104,6 +104,10 @@ impl Workspace {
         let Some((_, target)) = self.active_diff_target() else { return };
         let patch = self.diff_cache.borrow().as_ref().and_then(|c| c.patch.clone());
         let Some(patch) = patch else { return };
+        if target.state == DiffState::New {
+            self.stage_new_file_lines(&target.rel, &patch, only_selected);
+            return;
+        }
         let staged = target.state == DiffState::Staged;
         let text = if only_selected {
             let lines: BTreeSet<usize> = self.diff_selected.iter().filter(|(h, _)| *h == hunk).map(|(_, l)| *l).collect();
@@ -124,8 +128,57 @@ impl Workspace {
         self.git_job("hunk", move |root| git::apply_patch(root, &text, true, staged).map(|_| what.to_owned()));
     }
 
+    /// Stage some (or all) lines of an untracked file: only they go into the index; the file is untouched.
+    fn stage_new_file_lines(&mut self, rel: &str, patch: &Patch, only_selected: bool) {
+        let lines: BTreeSet<usize> = if only_selected {
+            self.diff_selected.iter().filter(|(h, _)| *h == 0).map(|(_, l)| *l).collect()
+        } else {
+            patch.hunks.first().map(|h| h.change_lines()).unwrap_or_default()
+        };
+        let crlf = self.git.as_ref().and_then(|g| std::fs::read(g.root.join(rel)).ok()).is_some_and(|b| b.windows(2).any(|w| w == b"\r\n"));
+        let Some(content) = patch.new_file_text(&lines, crlf) else {
+            self.set_status("Click some lines first");
+            return;
+        };
+        let (rel, what) = (rel.to_owned(), if only_selected { "Staged the selected lines" } else { "Staged the file" });
+        self.git_job("hunk", move |root| git::stage_new_file(root, &rel, &content).map(|_| what.to_owned()));
+    }
+
+    /// Ask before throwing away hunk `hunk`, or the lines chosen in it, from the working file.
+    pub fn diff_discard(&mut self, hunk: usize, only_selected: bool) {
+        let Some((_, target)) = self.active_diff_target() else { return };
+        if target.state != DiffState::WorkingTree {
+            return;
+        }
+        let patch = self.diff_cache.borrow().as_ref().and_then(|c| c.patch.clone());
+        let Some(patch) = patch else { return };
+        let text = if only_selected {
+            let lines: BTreeSet<usize> = self.diff_selected.iter().filter(|(h, _)| *h == hunk).map(|(_, l)| *l).collect();
+            patch.lines_patch(hunk, &lines, true)
+        } else {
+            patch.hunk_patch(hunk)
+        };
+        let Some(patch_text) = text else {
+            self.set_status("Click some changed lines first");
+            return;
+        };
+        let what = if only_selected { "the selected lines" } else { "this hunk" }.to_owned();
+        self.open_overlay(crate::workspace::OverlayKind::ConfirmDiscardHunk { rel: target.rel, patch: patch_text, what }, "");
+    }
+
+    /// Close every tab showing `path` (a generated document, so nothing is lost).
+    fn close_tabs_of(&mut self, path: &Path, cx: &mut Context<Self>) {
+        for _ in 0..8 {
+            let found = self.groups.iter().enumerate().find_map(|(g, gr)| gr.views.iter().position(|v| self.docs[v.doc].path == path).map(|vi| (g, vi)));
+            match found {
+                Some((g, vi)) => self.close_view(g, vi, cx),
+                None => break,
+            }
+        }
+    }
+
     /// After staging or unstaging, bring every open diff up to date.
-    pub fn refresh_open_diffs(&mut self) {
+    pub fn refresh_open_diffs(&mut self, cx: &mut Context<Self>) {
         let open: Vec<(String, String, DiffTarget)> = self
             .docs
             .iter()
@@ -133,6 +186,16 @@ impl Workspace {
             .filter_map(|d| Some((d.path.to_string_lossy().trim_start_matches("git:").to_owned(), d.name(), parse_target(&d.path)?)))
             .collect();
         for (key, title, target) in open {
+            // A new file that has just had lines staged is tracked now: show what is left as an ordinary change.
+            if target.state == DiffState::New {
+                if let Some(root) = self.git.as_ref().map(|g| g.root.clone()) {
+                    if git::is_tracked(&root, &target.rel) {
+                        self.close_tabs_of(&PathBuf::from(format!("git:{key}")), cx);
+                        self.git_open_diff(target.rel.clone(), false, false);
+                        continue;
+                    }
+                }
+            }
             let (staged, untracked) = (target.state == DiffState::Staged, target.state == DiffState::New);
             let rel = target.rel;
             self.git_background(move |root| git::diff_text(root, &rel, staged, untracked), move |result| GitMsg::DiffRefresh { key, title, result });
@@ -151,7 +214,7 @@ impl Workspace {
     pub(crate) fn render_diff_view(&self, doc_ix: usize, target: &DiffTarget, cx: &mut Context<Self>) -> AnyElement {
         self.ensure_diff_cache(doc_ix);
         let t = self.theme.clone();
-        let stageable = target.state != DiffState::New;
+        let stageable = true;
         let (count, has_patch) = {
             let cache = self.diff_cache.borrow();
             let cache = cache.as_ref();
@@ -165,7 +228,7 @@ impl Workspace {
         let hint = match target.state {
             DiffState::Staged => "Click lines to pick them, then Unstage Selected. Unstage Hunk takes the whole block.",
             DiffState::WorkingTree => "Click lines to pick them, then Stage Selected. Stage Hunk takes the whole block.",
-            DiffState::New => "A new file is staged as a whole from the Changes list.",
+            DiffState::New => "Click lines to pick them, then Stage Selected, or Stage All for the whole file.",
         };
         let toolbar = div()
             .flex_none()
@@ -230,7 +293,7 @@ impl Workspace {
                 let header = cache.patch.as_ref().and_then(|p| p.hunks.get(h)).map(|hunk| hunk.header.clone()).unwrap_or_default();
                 let selected = self.diff_selected.iter().filter(|(sh, _)| *sh == h).count();
                 let staged = state == DiffState::Staged;
-                let chip = |id: SharedString, label: String, primary: bool, only: bool, cx: &mut Context<Self>| {
+                let chip = |id: SharedString, label: String, primary: bool, only: bool, discard: bool, cx: &mut Context<Self>| {
                     div()
                         .id(id)
                         .flex_none()
@@ -245,7 +308,11 @@ impl Workspace {
                         .text_color(rgb(if primary { t.button_text } else { t.text }))
                         .hover(|s| s.opacity(0.85))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.diff_apply(h, only);
+                            if discard {
+                                this.diff_discard(h, only);
+                            } else {
+                                this.diff_apply(h, only);
+                            }
                             cx.notify();
                         }))
                         .child(label)
@@ -255,16 +322,23 @@ impl Workspace {
                     .px_2()
                     .gap_2()
                     .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_xs().text_color(rgb(t.dim)).child(header))
+                    // Throwing changes away: only from the working tree, and always asked about first.
+                    .when(state == DiffState::WorkingTree && selected > 0, |d| d.child(chip(format!("diff-discard-lines-{h}").into(), format!("Discard Selected ({selected})"), false, true, true, cx)))
+                    .when(state == DiffState::WorkingTree, |d| d.child(chip(format!("diff-discard-{h}").into(), "Discard Hunk".to_owned(), false, false, true, cx)))
                     .when(stageable && selected > 0, |d| {
                         d.child(chip(
                             format!("diff-lines-{h}").into(),
                             format!("{} Selected ({selected})", if staged { "Unstage" } else { "Stage" }),
                             true,
                             true,
+                            false,
                             cx,
                         ))
                     })
-                    .when(stageable, |d| d.child(chip(format!("diff-hunk-{h}").into(), format!("{} Hunk", if staged { "Unstage" } else { "Stage" }), selected == 0, false, cx)))
+                    .when(stageable, |d| {
+                        let label = if state == DiffState::New { "Stage All".to_owned() } else { format!("{} Hunk", if staged { "Unstage" } else { "Stage" }) };
+                        d.child(chip(format!("diff-hunk-{h}").into(), label, selected == 0, false, false, cx))
+                    })
                     .into_any_element()
             }
             Some(DiffItem::Row(r)) => {
@@ -289,7 +363,7 @@ impl Workspace {
                             }))
                         })
                         .child(div().flex_none().w(rems(3.25)).pr_2().flex().justify_end().text_xs().text_color(rgb(t.dim)).child(c.number.to_string()))
-                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(c.text.replace('\t', "    ")))
+                        .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(c.text.replace('\t', "    ").replace('\r', "")))
                 };
                 row_box().child(cell(0, &row.left, cx)).child(div().flex_none().w(px(1.0)).h_full().bg(rgb(t.border))).child(cell(1, &row.right, cx)).into_any_element()
             }

@@ -4,6 +4,45 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
+/// `files.autoSave`: when edited files are saved without asking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutoSave {
+    #[default]
+    Off,
+    /// A file is saved once it has not changed for `files.autoSaveDelay` milliseconds.
+    AfterDelay,
+    /// A file is saved when you switch to another tab or leave the editor.
+    OnFocusChange,
+}
+
+impl AutoSave {
+    pub fn id(self) -> &'static str {
+        match self {
+            AutoSave::Off => "off",
+            AutoSave::AfterDelay => "afterDelay",
+            AutoSave::OnFocusChange => "onFocusChange",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<AutoSave> {
+        Some(match id {
+            "off" => AutoSave::Off,
+            "afterDelay" => AutoSave::AfterDelay,
+            // VS Code's "onWindowChange" is the same for a one-window editor.
+            "onFocusChange" | "onWindowChange" => AutoSave::OnFocusChange,
+            _ => return None,
+        })
+    }
+}
+
+/// Settings written for one language, as in `"[rust]": { "editor.tabSize": 2 }`. Unset fields use the global value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LangOverrides {
+    pub tab_size: Option<usize>,
+    pub insert_spaces: Option<bool>,
+    pub format_on_save: Option<bool>,
+}
+
 /// The coloured letter badges Forge draws itself.
 pub const BUILTIN_ICON_THEME: &str = "Forge Badges";
 
@@ -33,6 +72,11 @@ pub struct Settings {
     pub word_wrap: bool,
     /// `lsp.autoStart` in settings.json: start the servers for the languages found in the opened folder at launch.
     pub lsp_autostart: bool,
+    /// `files.autoSave` and `files.autoSaveDelay` (milliseconds).
+    pub auto_save: AutoSave,
+    pub auto_save_delay_ms: u64,
+    /// `"[language]": { ... }` blocks, keyed by VS Code language id (`rust`, `python`, ...).
+    pub languages: std::collections::BTreeMap<String, LangOverrides>,
     /// `ai.model` in settings.json: the OpenAI model that writes commit messages.
     pub ai_model: String,
     /// `ai.provider`: who writes them, OpenAI or Gemini (through its OpenAI-compatible endpoint).
@@ -58,6 +102,9 @@ impl Default for Settings {
             minimap: true,
             word_wrap: false,
             lsp_autostart: true,
+            auto_save: AutoSave::Off,
+            auto_save_delay_ms: 1000,
+            languages: Default::default(),
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
             ai_provider: crate::ai::Provider::default(),
             ai_gemini_model: crate::ai::DEFAULT_GEMINI_MODEL.to_owned(),
@@ -116,6 +163,19 @@ pub fn strip_json_comments(text: &str) -> String {
 }
 
 impl Settings {
+    /// Tab size for files of language `id` (a VS Code language id): the language's own setting, else the global one.
+    pub fn tab_size_for(&self, id: Option<&str>) -> usize {
+        id.and_then(|id| self.languages.get(id)).and_then(|l| l.tab_size).unwrap_or(self.tab_size)
+    }
+
+    pub fn insert_spaces_for(&self, id: Option<&str>) -> bool {
+        id.and_then(|id| self.languages.get(id)).and_then(|l| l.insert_spaces).unwrap_or(self.insert_spaces)
+    }
+
+    pub fn format_on_save_for(&self, id: Option<&str>) -> bool {
+        id.and_then(|id| self.languages.get(id)).and_then(|l| l.format_on_save).unwrap_or(self.format_on_save)
+    }
+
     /// The model the chosen provider is asked for.
     pub fn active_ai_model(&self) -> &str {
         match self.ai_provider {
@@ -162,6 +222,25 @@ impl Settings {
         }
         if let Some(v) = map.get("workbench.productIconTheme").and_then(Value::as_str) {
             s.product_icon_theme = v.to_owned();
+        }
+        if let Some(v) = map.get("files.autoSave").and_then(Value::as_str).and_then(AutoSave::from_id) {
+            s.auto_save = v;
+        }
+        if let Some(v) = map.get("files.autoSaveDelay").and_then(Value::as_u64) {
+            s.auto_save_delay_ms = v.clamp(200, 600_000);
+        }
+        for (key, value) in &map {
+            // "[python]" or "[javascript][typescript]": one block for each language named.
+            let Some(inner) = key.strip_prefix('[').and_then(|k| k.strip_suffix(']')) else { continue };
+            let Some(block) = value.as_object() else { continue };
+            let overrides = LangOverrides {
+                tab_size: block.get("editor.tabSize").and_then(Value::as_u64).map(|n| (n as usize).clamp(1, 16)),
+                insert_spaces: block.get("editor.insertSpaces").and_then(Value::as_bool),
+                format_on_save: block.get("editor.formatOnSave").and_then(Value::as_bool),
+            };
+            for id in inner.split("][").map(str::trim).filter(|id| !id.is_empty()) {
+                s.languages.insert(id.to_owned(), overrides.clone());
+            }
         }
         if let Some(v) = map.get("diffEditor.renderSideBySide").and_then(Value::as_bool) {
             s.diff_side_by_side = v;
@@ -296,6 +375,28 @@ pub fn config_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_save_and_per_language_blocks_are_read() {
+        let s = Settings::parse(
+            r#"{
+            "editor.tabSize": 4, "editor.insertSpaces": true, "editor.formatOnSave": false,
+            "files.autoSave": "afterDelay", "files.autoSaveDelay": 50,
+            "[rust]": { "editor.tabSize": 2, "editor.formatOnSave": true },
+            "[javascript][typescript]": { "editor.insertSpaces": false, "editor.tabSize": 99 },
+            "[bad]": 7
+        }"#,
+        );
+        assert_eq!((s.auto_save, s.auto_save_delay_ms), (AutoSave::AfterDelay, 200));
+        assert_eq!(s.tab_size_for(Some("rust")), 2);
+        assert!(s.format_on_save_for(Some("rust")) && !s.format_on_save_for(Some("python")));
+        assert!(s.insert_spaces_for(Some("rust")));
+        assert!(!s.insert_spaces_for(Some("typescript")) && !s.insert_spaces_for(Some("javascript")));
+        assert_eq!(s.tab_size_for(Some("typescript")), 16);
+        assert_eq!(s.tab_size_for(None), 4);
+        assert_eq!(Settings::parse(r#"{ "files.autoSave": "onWindowChange" }"#).auto_save, AutoSave::OnFocusChange);
+        assert_eq!(Settings::parse(r#"{ "files.autoSave": "nonsense" }"#).auto_save, AutoSave::Off);
+    }
 
     #[test]
     fn parses_known_keys_with_comments_and_clamps() {

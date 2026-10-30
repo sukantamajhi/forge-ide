@@ -112,6 +112,7 @@ impl Workspace {
                 .bg(rgb(if active { t.bg } else { t.sidebar }))
                 .text_color(rgb(if problems > 0 { t.error } else if active { t.text } else { t.dim }))
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    this.auto_save_on_focus_change();
                     this.focused_group = g;
                     this.groups[g].active = vi;
                     this.focus = Focus::Editor;
@@ -1540,6 +1541,8 @@ impl Workspace {
         let conflicts = git.status.changes.iter().filter(|c| c.conflicted).count();
         let (continue_cmd, skip_cmd, abort_cmd) = match git.status.state {
             RepoState::Rebase { .. } => (Command::GitRebaseContinue, Some(Command::GitRebaseSkip), Command::GitRebaseAbort),
+            RepoState::CherryPick => (Command::GitCherryPickContinue, Some(Command::GitCherryPickSkip), Command::GitCherryPickAbort),
+            RepoState::Revert => (Command::GitRevertContinue, Some(Command::GitRevertSkip), Command::GitRevertAbort),
             _ => (Command::GitMergeContinue, None, Command::GitMergeAbort),
         };
         let busy = git.job.is_some();
@@ -1612,6 +1615,11 @@ impl Workspace {
                 .border_color(rgb(if active { t.info } else { t.sidebar }))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.panel_view = view;
+                    match view {
+                        PanelView::Graph => this.request_graph(),
+                        PanelView::Timeline => this.request_timeline(),
+                        _ => {}
+                    }
                     if view == PanelView::Terminal {
                         if this.terminals.is_empty() {
                             this.new_terminal();
@@ -1627,6 +1635,8 @@ impl Workspace {
             PanelView::Problems => self.render_problems(cx).into_any_element(),
             PanelView::References => self.render_references(cx).into_any_element(),
             PanelView::Debug => self.render_debug_panel(cx),
+            PanelView::Graph => self.render_graph(cx),
+            PanelView::Timeline => self.render_timeline(cx),
         };
         div()
             .flex()
@@ -1648,6 +1658,8 @@ impl Workspace {
                     .child(tab("TERMINAL".to_owned(), PanelView::Terminal, cx))
                     .child(tab(format!("REFERENCES {}", self.references.len()), PanelView::References, cx))
                     .child(tab("DEBUG".to_owned(), PanelView::Debug, cx))
+                    .child(tab("GRAPH".to_owned(), PanelView::Graph, cx))
+                    .child(tab("TIMELINE".to_owned(), PanelView::Timeline, cx))
                     .child(div().flex_1())
                     .children(self.render_terminal_tabs(cx))
                     .child(
@@ -2010,7 +2022,7 @@ impl Workspace {
     fn render_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
         let t = &self.theme;
         let overlay = self.overlay.as_ref()?;
-        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmReplace { .. });
+        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. });
         let start = overlay.selected.saturating_sub(11);
         let end = (start + 12).min(overlay.items.len());
         let rows = (start..end).map(|ix| {
@@ -2140,7 +2152,9 @@ impl Workspace {
                 pos.push_str(&format!(" [{cursors} cursors]"));
             }
             parts.push(pos);
-            parts.push(if self.settings.insert_spaces { format!("Spaces: {}", self.settings.tab_size) } else { "Tab Size: ".to_owned() + &self.settings.tab_size.to_string() });
+            let lang_id = doc.language.map(|l| l.vscode_id());
+            let (tabs, spaces) = (self.settings.tab_size_for(lang_id), self.settings.insert_spaces_for(lang_id));
+            parts.push(if spaces { format!("Spaces: {tabs}") } else { format!("Tab Size: {tabs}") });
             parts.push("UTF-8".to_owned());
             parts.push(if doc.buffer.eol() == "\r\n" { "CRLF" } else { "LF" }.to_owned());
             parts.push(doc.syntax.as_ref().map(|s| s.language().name().to_owned()).or_else(|| doc.ext_lang.as_ref().map(|l| l.name.clone())).unwrap_or_else(|| "Plain Text".to_owned()));
@@ -2313,7 +2327,9 @@ impl Render for Workspace {
             .children(self.render_hover())
             .children(signature.as_ref().and_then(|s| self.render_signature(s)))
             .children(self.render_settings(cx))
+            .children(self.render_image_page(cx))
             .children(self.render_conflict_page(cx))
+            .children(self.render_rebase_page(cx))
             .children(self.render_debug_toolbar(f32::from(window.viewport_size().width), cx))
             .children(self.render_overlay(cx))
             .children(self.render_context_menu(window.viewport_size(), cx))

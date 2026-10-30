@@ -85,11 +85,13 @@ pub fn parse(diff: &str) -> Option<Patch> {
                     if let Some(last) = hunk.lines.last_mut() {
                         last.no_newline = true;
                     }
-                } else if let Some(text) = line.strip_prefix('+') {
+                // A file with Windows line endings has a `\r` at the end of each content line in the diff. It stays
+                // in `text`, so the patches written back out still match the file.
+                } else if let Some(text) = raw.strip_prefix('+') {
                     hunk.lines.push(DiffLine { kind: LineKind::Add, text: text.to_owned(), no_newline: false });
-                } else if let Some(text) = line.strip_prefix('-') {
+                } else if let Some(text) = raw.strip_prefix('-') {
                     hunk.lines.push(DiffLine { kind: LineKind::Del, text: text.to_owned(), no_newline: false });
-                } else if let Some(text) = line.strip_prefix(' ') {
+                } else if let Some(text) = raw.strip_prefix(' ') {
                     hunk.lines.push(DiffLine { kind: LineKind::Context, text: text.to_owned(), no_newline: false });
                 } else if line.is_empty() && raw.len() == line.len() {
                     // A trailing empty record after the final newline; a context line is never blank (it has its space).
@@ -186,6 +188,24 @@ impl Patch {
         Some(out)
     }
 
+    /// For the diff of a new file (one hunk, all additions): the file's text made of just the `selected` lines.
+    /// `crlf` gives the lines Windows endings. The last line has no newline when the diff says so.
+    pub fn new_file_text(&self, selected: &BTreeSet<usize>, crlf: bool) -> Option<String> {
+        let hunk = self.hunks.first()?;
+        let eol = if crlf { "\r\n" } else { "\n" };
+        let mut text = String::new();
+        for (i, line) in hunk.lines.iter().enumerate() {
+            if line.kind != LineKind::Add || !selected.contains(&i) {
+                continue;
+            }
+            text.push_str(line.text.trim_end_matches('\r'));
+            if !line.no_newline {
+                text.push_str(eol);
+            }
+        }
+        (!text.is_empty()).then_some(text)
+    }
+
     /// Rows for a two-column view: removed and added runs are laid side by side, context on both.
     pub fn side_by_side(&self) -> Vec<SideRow> {
         let mut rows = Vec::new();
@@ -273,6 +293,28 @@ mod tests {
         let text = p.lines_patch(0, &only_del, true).unwrap();
         assert!(text.contains("\n TWO\n") && text.contains("\n-two\n"), "{text}");
         assert!(p.lines_patch(0, &BTreeSet::from([0]), false).is_none(), "a context line is not a change");
+    }
+
+    #[test]
+    fn the_text_of_chosen_new_file_lines_keeps_the_files_line_endings_and_missing_final_newline() {
+        let diff = "diff --git a/n b/n\nnew file mode 100644\n--- /dev/null\n+++ b/n\n@@ -0,0 +1,3 @@\n+a\n+b\n+c\n\\ No newline at end of file\n";
+        let p = parse(diff).unwrap();
+        let all = p.hunks[0].change_lines();
+        assert_eq!(p.new_file_text(&all, false).unwrap(), "a\nb\nc");
+        assert_eq!(p.new_file_text(&all, true).unwrap(), "a\r\nb\r\nc");
+        let first_two = BTreeSet::from([0usize, 1]);
+        assert_eq!(p.new_file_text(&first_two, true).unwrap(), "a\r\nb\r\n");
+        assert!(p.new_file_text(&BTreeSet::new(), false).is_none());
+    }
+
+    #[test]
+    fn windows_line_endings_survive_a_round_trip_through_the_parser() {
+        let diff = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n one\r\n-two\r\n+TWO\r\n three\r\n";
+        let p = parse(diff).unwrap();
+        assert_eq!(p.hunks[0].lines[1].text, "two\r", "the carriage return stays with the line");
+        let patch = p.hunk_patch(0).unwrap();
+        assert!(patch.contains("\n-two\r\n+TWO\r\n"), "{patch:?}");
+        assert_eq!(p.side_by_side()[1].left.as_ref().unwrap().text, "two\r");
     }
 
     #[test]

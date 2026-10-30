@@ -16,12 +16,15 @@ mod scroll;
 mod host_support;
 mod codicons;
 mod icons;
+mod image_view;
 mod product_icons;
 mod snippet_support;
 mod ext_support;
 mod ext_view;
 mod diff_view;
 mod conflict_view;
+mod rebase_view;
+mod git_panels;
 mod file_icons;
 mod server_support;
 mod session_support;
@@ -43,6 +46,10 @@ fn main() {
     // Git runs this program to ask for a password or passphrase (see `forge_core::askpass`).
     let args: Vec<String> = std::env::args().collect();
     if let Some(code) = forge_core::askpass::run_as_helper(&args) {
+        std::process::exit(code);
+    }
+    // Git runs this program in place of gpg when it signs a commit.
+    if let Some(code) = forge_core::gpg_wrap::run_as_gpg(&args) {
         std::process::exit(code);
     }
     let target = std::env::args()

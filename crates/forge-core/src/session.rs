@@ -34,6 +34,8 @@ pub struct SessionStore {
     pub last_folder: Option<PathBuf>,
     /// Most recently used first.
     folders: Vec<(String, Session)>,
+    /// Each folder's own spelling (the key above is lower-cased on Windows), for showing in "Open Recent".
+    spelled: Vec<(String, PathBuf)>,
 }
 
 /// A folder as a comparison key: slashes unified, no trailing slash, case folded on Windows.
@@ -69,7 +71,11 @@ impl SessionStore {
                 })
                 .collect();
             let active = entry.get("active").and_then(Value::as_u64).unwrap_or(0) as usize;
-            store.folders.push((key(Path::new(folder)), Session { active: active.min(files.len().saturating_sub(1)), files }));
+            let k = key(Path::new(folder));
+            if let Some(path) = entry.get("path").and_then(Value::as_str) {
+                store.spelled.push((k.clone(), PathBuf::from(path)));
+            }
+            store.folders.push((k, Session { active: active.min(files.len().saturating_sub(1)), files }));
             // Keep the folder's own spelling for display and for `last_folder` lookups.
         }
         store
@@ -82,6 +88,7 @@ impl SessionStore {
             .map(|(folder, session)| {
                 json!({
                     "folder": folder,
+                    "path": self.spelled.iter().find(|(k, _)| k == folder).map(|(_, p)| p),
                     "active": session.active,
                     "files": session.files.iter().map(|f| json!({ "path": f.path, "line": f.line, "col": f.col })).collect::<Vec<_>>(),
                 })
@@ -106,9 +113,22 @@ impl SessionStore {
         session.active = session.active.min(session.files.len().saturating_sub(1));
         let wanted = key(folder);
         self.folders.retain(|(k, _)| *k != wanted);
+        self.spelled.retain(|(k, _)| *k != wanted);
+        self.spelled.insert(0, (wanted.clone(), folder.to_path_buf()));
         self.folders.insert(0, (wanted, session));
         self.folders.truncate(MAX_FOLDERS);
+        self.spelled.truncate(MAX_FOLDERS);
         self.last_folder = Some(folder.to_path_buf());
+    }
+
+    /// Folders that were open before, most recent first, spelled as they were opened. Only ones that still exist.
+    pub fn recent_folders(&self, limit: usize) -> Vec<PathBuf> {
+        self.folders
+            .iter()
+            .map(|(k, _)| self.spelled.iter().find(|(s, _)| s == k).map_or_else(|| PathBuf::from(k), |(_, p)| p.clone()))
+            .filter(|p| p.is_dir())
+            .take(limit)
+            .collect()
     }
 
     pub fn load() -> Self {

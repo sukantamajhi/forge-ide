@@ -32,6 +32,10 @@ pub enum RequestTag {
     /// Format the document; save afterwards when set (format on save).
     Format { then_save: bool },
     Symbols,
+    /// Format only the selected range.
+    FormatRange,
+    /// `source.organizeImports`: apply the server's edit directly.
+    OrganizeImports,
 }
 
 pub enum Event {

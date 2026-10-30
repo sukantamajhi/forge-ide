@@ -182,8 +182,9 @@ pub fn initialize_params(root_uri: Option<&str>) -> Value {
                 "signatureHelp": { "signatureInformation": { "parameterInformation": { "labelOffsetSupport": true } } },
                 "rename": { "prepareSupport": false },
                 "formatting": {},
+                "rangeFormatting": {},
                 "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
-                "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source"] } } }
+                "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source", "source.organizeImports"] } } }
             },
             "window": { "workDoneProgress": true },
             "workspace": { "workspaceFolders": true, "configuration": true }

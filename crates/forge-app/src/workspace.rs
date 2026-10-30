@@ -267,6 +267,8 @@ pub(crate) enum PanelView {
     Problems,
     References,
     Debug,
+    Graph,
+    Timeline,
 }
 
 // ---- overlays (palette, quick open, prompts) ----
@@ -277,6 +279,10 @@ pub(crate) enum OverlayKind {
     QuickOpen,
     GoToLine,
     Symbols,
+    /// Folders opened before.
+    OpenRecent,
+    /// The second file of "Compare Active File With...".
+    CompareWith,
     Theme,
     IconTheme,
     ProductIconTheme,
@@ -292,6 +298,16 @@ pub(crate) enum OverlayKind {
     GitCheckout,
     GitRebase,
     GitMerge,
+    /// Pick the commit an interactive rebase starts after.
+    GitRebaseFrom,
+    GitCherryPick,
+    GitRevert,
+    GitSubmodules,
+    GitWorktrees,
+    GitWorktreeAdd,
+    GitWorktreeRemove,
+    /// Press Enter to throw away a hunk or some lines of the working file: the patch that undoes them.
+    ConfirmDiscardHunk { rel: String, patch: String, what: String },
     /// A question from git (a username, password or passphrase), to be answered for the running command.
     GitCredential(String),
     GitCreateBranch,
@@ -322,6 +338,16 @@ pub(crate) enum ItemAction {
     GitBranch(usize),
     GitRebaseOnto(usize),
     GitMergeBranch(usize),
+    GitRebaseFrom(usize),
+    GitCherryPickCommit(usize),
+    GitRevertCommit(usize),
+    /// Open this folder (a submodule or worktree) in a new Forge window.
+    OpenFolder(std::path::PathBuf),
+    /// Open this folder in this window (Open Recent).
+    OpenRecent(std::path::PathBuf),
+    CompareWith(std::path::PathBuf),
+    WorktreeAddBranch(usize),
+    WorktreeRemove(usize),
     GitCommit(usize),
     Server(usize),
     ServersInstallAll,
@@ -469,6 +495,15 @@ pub(crate) enum GitMsg {
     Diff { key: String, title: String, result: Result<String, String> },
     /// New text for a diff tab that is already open (after staging).
     DiffRefresh { key: String, title: String, result: Result<String, String> },
+    PickCommits(Result<Vec<Commit>, String>),
+    Submodules(Result<Vec<forge_core::git::Submodule>, String>),
+    Worktrees(Result<Vec<forge_core::git::Worktree>, String>),
+    /// The commits an interactive rebase from `base` would replay.
+    RebasePlan { base: String, label: String, result: Result<Vec<forge_core::git::TodoItem>, String> },
+    /// The common-ancestor text of each conflict in `rel`.
+    ConflictBases { rel: String, result: Result<Vec<Option<Vec<String>>>, String> },
+    Graph(Result<Vec<forge_core::git::GraphCommit>, String>),
+    Timeline { rel: String, result: Result<Vec<Commit>, String> },
     Branches(Result<Vec<Branch>, String>),
     History(Result<Vec<Commit>, String>),
     Blame(Result<Blame, String>),
@@ -566,6 +601,21 @@ pub(crate) struct Workspace {
     pub file_index: Option<Vec<PathBuf>>,
     pub file_index_rx: Option<Receiver<Vec<PathBuf>>>,
     pub recent_files: Vec<PathBuf>,
+    /// Tabs closed this session (newest last) with their caret, for Reopen Closed Editor.
+    pub closed_tabs: Vec<(PathBuf, usize)>,
+    /// Where the caret was before each jump (Go Back / Go Forward), as `(file, offset)`.
+    pub nav_back: Vec<(PathBuf, usize)>,
+    pub nav_forward: Vec<(PathBuf, usize)>,
+    /// Set while Go Back / Forward move, so they do not record themselves.
+    pub navigating: bool,
+    /// Sidebar and panel visibility from before Zen mode; `Some` while it is on.
+    pub zen_saved: Option<(bool, bool)>,
+    /// `(document, revision, since)` of the unsaved edit waiting for `files.autoSave: afterDelay`.
+    pub auto_save_since: Option<(usize, u64, Instant)>,
+    /// The file picked by "Compare Active File With...".
+    pub compare_base: Option<PathBuf>,
+    /// Folders opened before, for Open Recent.
+    pub recent_folders: Vec<PathBuf>,
     pub recent_commands: Vec<Command>,
 
     pub terminals: Vec<Terminal>,
@@ -616,6 +666,8 @@ pub(crate) struct Workspace {
     pub ai_key: Option<String>,
     /// The Settings page is showing, and the model field's text and focus.
     pub settings_open: bool,
+    /// The image shown in the viewer over the editor.
+    pub image_page: Option<PathBuf>,
     pub settings_model: LineInput,
     pub settings_model_focus: bool,
     /// A language-server request made while the server was still starting: run it once it is ready.
@@ -625,6 +677,20 @@ pub(crate) struct Workspace {
     pub scm_scroll: UniformListScrollHandle,
     pub branches: Vec<Branch>,
     pub history: Vec<Commit>,
+    /// Commits of every branch, for cherry-pick.
+    pub pick_commits: Vec<Commit>,
+    pub submodules: Vec<forge_core::git::Submodule>,
+    pub worktrees: Vec<forge_core::git::Worktree>,
+    /// The interactive rebase page, when open.
+    pub rebase_page: Option<crate::rebase_view::RebasePage>,
+    /// The commit graph and its lanes, and the active file's history, for the bottom panel.
+    pub graph: Vec<forge_core::git::GraphCommit>,
+    pub graph_rows: Vec<forge_core::graph::GraphRow>,
+    pub graph_pending: bool,
+    pub graph_scroll: UniformListScrollHandle,
+    pub timeline: Option<(String, Vec<Commit>)>,
+    pub timeline_pending: bool,
+    pub timeline_scroll: UniformListScrollHandle,
     pub history_path: Option<String>,
     /// Result of a language-server install running in the background.
     pub install_rx: Option<Receiver<Result<String, String>>>,
@@ -748,6 +814,14 @@ impl Workspace {
             file_index: None,
             file_index_rx: None,
             recent_files: Vec::new(),
+            closed_tabs: Vec::new(),
+            nav_back: Vec::new(),
+            nav_forward: Vec::new(),
+            navigating: false,
+            zen_saved: None,
+            auto_save_since: None,
+            compare_base: None,
+            recent_folders: Vec::new(),
             recent_commands: Vec::new(),
             terminals: Vec::new(),
             active_terminal: 0,
@@ -781,6 +855,7 @@ impl Workspace {
             ai_pending: false,
             ai_key: None,
             settings_open: false,
+            image_page: None,
             settings_model: LineInput::default(),
             settings_model_focus: false,
             lsp_retry: None,
@@ -788,6 +863,17 @@ impl Workspace {
             scm_scroll: UniformListScrollHandle::new(),
             branches: Vec::new(),
             history: Vec::new(),
+            pick_commits: Vec::new(),
+            submodules: Vec::new(),
+            worktrees: Vec::new(),
+            rebase_page: None,
+            graph: Vec::new(),
+            graph_rows: Vec::new(),
+            graph_pending: false,
+            graph_scroll: UniformListScrollHandle::new(),
+            timeline: None,
+            timeline_pending: false,
+            timeline_scroll: UniformListScrollHandle::new(),
             history_path: None,
             install_rx: None,
             extensions,
@@ -898,7 +984,15 @@ impl Workspace {
     }
 
     pub fn indent_style(&self) -> IndentStyle {
-        IndentStyle { tab_size: self.settings.tab_size, use_spaces: self.settings.insert_spaces }
+        let id = self.active_lang_id();
+        IndentStyle { tab_size: self.settings.tab_size_for(id), use_spaces: self.settings.insert_spaces_for(id) }
+    }
+
+    /// VS Code's id for the language of the focused editor, which keys `"[language]"` settings.
+    pub fn active_lang_id(&self) -> Option<&'static str> {
+        let (g, v) = self.active_ix()?;
+        let doc_ix = self.groups.get(g)?.views.get(v)?.doc;
+        self.docs.get(doc_ix)?.language.map(|l| l.vscode_id())
     }
 
     /// `(group, view)` of the focused editor tab.
@@ -943,6 +1037,18 @@ impl Workspace {
 
     /// Open `path` in the focused group (or switch to it). `at` is a `(line, UTF-16 column)`.
     pub fn open_file(&mut self, path: &Path, at: Option<(usize, usize)>, cx: &mut Context<Self>) {
+        if crate::image_view::is_image(path) {
+            self.open_image(path, cx);
+            return;
+        }
+        self.image_page = None;
+        let switching = self.active_doc().is_none_or(|d| !same_path(&d.path, path));
+        if switching {
+            self.auto_save_on_focus_change();
+        }
+        if switching || at.is_some() {
+            self.mark_jump();
+        }
         let group = self.focused_group;
         if let Some(vi) = self.groups[group].views.iter().position(|v| same_path(&self.docs[v.doc].path, path)) {
             self.groups[group].active = vi;
@@ -965,6 +1071,16 @@ impl Workspace {
                     self.attach_lsp(doc);
                 }
                 Err(err) => {
+                    // A file that is not text opens as a read-only hex dump (the start of it).
+                    if err.ends_with("not valid UTF-8") {
+                        if let Ok(bytes) = std::fs::read(path) {
+                            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                            let dump = forge_core::hexdump::hex_dump(&bytes, 256 * 1024);
+                            self.open_virtual(&format!("hex:{}", path.display()), &format!("{name} (hex)"), &dump, false, cx);
+                            self.set_status(format!("{} is not text: showing a hex dump", path.display()));
+                            return;
+                        }
+                    }
                     self.set_status(format!("Cannot open: {err}"));
                     cx.notify();
                     return;
@@ -983,6 +1099,40 @@ impl Workspace {
             self.place_caret_utf16(line, col);
         }
         self.set_status(format!("Opened {}", path.display()));
+        cx.notify();
+    }
+
+    /// Remember the caret as a place to return to with Go Back (Alt+Left).
+    pub fn mark_jump(&mut self) {
+        if self.navigating {
+            return;
+        }
+        let Some((path, offset)) = self.active_doc().zip(self.active_view()).filter(|(d, _)| !d.readonly).map(|(d, v)| (d.path.clone(), v.selections.primary().head)) else { return };
+        if self.nav_back.last().is_some_and(|(p, o)| same_path(p, &path) && *o == offset) {
+            return;
+        }
+        self.nav_back.push((path, offset));
+        if self.nav_back.len() > 100 {
+            self.nav_back.remove(0);
+        }
+        self.nav_forward.clear();
+    }
+
+    /// Alt+Left (`forward` false) or Alt+Right: move through the places recorded by [`Self::mark_jump`].
+    pub fn navigate(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let here = self.active_doc().zip(self.active_view()).filter(|(d, _)| !d.readonly).map(|(d, v)| (d.path.clone(), v.selections.primary().head));
+        let target = if forward { self.nav_forward.pop() } else { self.nav_back.pop() };
+        let Some((path, offset)) = target else {
+            self.set_status(if forward { "Nothing to go forward to" } else { "Nothing to go back to" });
+            return;
+        };
+        if let Some(here) = here {
+            if forward { &mut self.nav_back } else { &mut self.nav_forward }.push(here);
+        }
+        self.navigating = true;
+        self.open_file(&path, None, cx);
+        self.place_caret_offset(offset);
+        self.navigating = false;
         cx.notify();
     }
 
@@ -1108,6 +1258,15 @@ impl Workspace {
         self.close_armed = None;
         self.completion = None;
         self.hover = None;
+        if !self.docs[doc_ix].readonly && self.docs[doc_ix].path.is_file() {
+            let caret = self.groups[g].views[vi].selections.primary().head;
+            let path = self.docs[doc_ix].path.clone();
+            self.closed_tabs.retain(|(p, _)| !same_path(p, &path));
+            self.closed_tabs.push((path, caret));
+            if self.closed_tabs.len() > 30 {
+                self.closed_tabs.remove(0);
+            }
+        }
         let group = &mut self.groups[g];
         group.views.remove(vi);
         group.active = group.active.min(group.views.len().saturating_sub(1));
@@ -1336,8 +1495,50 @@ impl Workspace {
         changed |= self.poll_host(cx);
         changed |= self.check_hover_dwell();
         changed |= self.git_tick(cx);
+        changed |= self.auto_save_tick();
         if changed {
             cx.notify();
+        }
+    }
+
+    /// `files.autoSave: afterDelay` saves the focused file once it has been left alone for the delay.
+    fn auto_save_tick(&mut self) -> bool {
+        if self.settings.auto_save != forge_core::settings::AutoSave::AfterDelay {
+            self.auto_save_since = None;
+            return false;
+        }
+        let Some(view) = self.active_view() else { return false };
+        let ix = view.doc;
+        let doc = &self.docs[ix];
+        if !doc.dirty || doc.readonly {
+            self.auto_save_since = None;
+            return false;
+        }
+        let key = (ix, doc.revision);
+        match self.auto_save_since {
+            Some((i, r, at)) if (i, r) == key => {
+                if at.elapsed() < Duration::from_millis(self.settings.auto_save_delay_ms) {
+                    return false;
+                }
+                self.auto_save_since = None;
+                self.write_doc(ix);
+                true
+            }
+            _ => {
+                self.auto_save_since = Some((key.0, key.1, Instant::now()));
+                false
+            }
+        }
+    }
+
+    /// `files.autoSave: onFocusChange`: save every modified file when focus leaves the editor or its tab.
+    pub fn auto_save_on_focus_change(&mut self) {
+        if self.settings.auto_save != forge_core::settings::AutoSave::OnFocusChange {
+            return;
+        }
+        let dirty: Vec<usize> = (0..self.docs.len()).filter(|&i| self.docs[i].dirty && !self.docs[i].readonly).collect();
+        for ix in dirty {
+            self.write_doc(ix);
         }
     }
 
@@ -1445,6 +1646,20 @@ impl Workspace {
             RequestTag::Symbols => {
                 self.symbols = parse_document_symbols(&result);
                 self.refresh_overlay();
+            }
+            RequestTag::FormatRange => {
+                let edits = parse_text_edits(&result);
+                match self.active_ix().map(|(g, vi)| self.groups[g].views[vi].doc) {
+                    Some(doc_ix) if !edits.is_empty() => self.apply_text_edits(doc_ix, &edits, cx),
+                    _ => self.set_status("No formatting changes (this server may not format selections)"),
+                }
+            }
+            RequestTag::OrganizeImports => {
+                let actions = parse_code_actions(&result);
+                match actions.into_iter().find(|a| !a.edit.is_empty()) {
+                    Some(action) => self.apply_workspace_edit(action.edit, cx),
+                    None => self.set_status("Imports are already organized, or this server cannot organize them"),
+                }
             }
         }
     }

@@ -87,8 +87,17 @@ impl Workspace {
             cx.notify();
             return;
         }
+        if self.rebase_page.is_some() && self.overlay.is_none() && self.rebase_key(k) {
+            cx.notify();
+            return;
+        }
         if self.conflict_page.is_some() && self.overlay.is_none() && k.key == "escape" {
             self.conflict_page = None;
+            cx.notify();
+            return;
+        }
+        if self.image_page.is_some() && self.overlay.is_none() && k.key == "escape" {
+            self.image_page = None;
             cx.notify();
             return;
         }
@@ -447,6 +456,8 @@ impl Workspace {
             OverlayKind::QuickOpen => "Search files by name (append : to go to line, > for commands, @ for symbols)",
             OverlayKind::GoToLine => "Type a line number, or line:column",
             OverlayKind::Symbols => "Go to symbol in editor",
+            OverlayKind::OpenRecent => "Select a folder to open",
+            OverlayKind::CompareWith => "Select the file to compare the active file with",
             OverlayKind::Theme => "Select a color theme",
             OverlayKind::IconTheme => "Select a file icon theme",
             OverlayKind::ProductIconTheme => "Select a product icon theme",
@@ -460,10 +471,17 @@ impl Workspace {
             OverlayKind::NewEntry { folder: false, .. } => "File name (a/b/c.txt creates folders)",
             OverlayKind::NewEntry { folder: true, .. } => "Folder name",
             OverlayKind::RenameEntry(_) => "New name",
-            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmReplace { .. } => "",
+            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. } => "",
             OverlayKind::GitCheckout => "Select a branch to switch to",
             OverlayKind::GitRebase => "Select the branch to rebase the current branch onto",
             OverlayKind::GitMerge => "Select a branch to merge into the current branch",
+            OverlayKind::GitRebaseFrom => "Select the commit to rebase after (the ones above it can be edited)",
+            OverlayKind::GitCherryPick => "Select a commit from any branch to apply here",
+            OverlayKind::GitRevert => "Select a commit to undo with a new commit",
+            OverlayKind::GitSubmodules => "Submodules (Enter opens one in a new window)",
+            OverlayKind::GitWorktrees => "Worktrees (Enter opens one in a new window)",
+            OverlayKind::GitWorktreeAdd => "Select a branch to check out in a new worktree",
+            OverlayKind::GitWorktreeRemove => "Select a worktree to remove",
             OverlayKind::GitCredential(prompt) => prompt.trim(),
             OverlayKind::GitCreateBranch => "New branch name",
             OverlayKind::GitHistory => "Select a commit to view its changes",
@@ -570,6 +588,31 @@ impl Workspace {
                 }
                 self.symbol_items(&text)
             }
+            OverlayKind::OpenRecent => {
+                let folders = &self.recent_folders;
+                if folders.is_empty() {
+                    overlay.note = Some("No folders opened before".to_owned());
+                }
+                let labels: Vec<String> = folders.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                rank(&text, &labels, 30)
+                    .into_iter()
+                    .map(|(i, m)| {
+                        let name = folders[i].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| labels[i].clone());
+                        let skip = labels[i].chars().count().saturating_sub(name.chars().count());
+                        Item { label: name, detail: labels[i].clone(), positions: m.positions.into_iter().filter_map(|p| p.checked_sub(skip)).collect(), action: ItemAction::OpenRecent(folders[i].clone()) }
+                    })
+                    .collect()
+            }
+            OverlayKind::CompareWith => match &self.file_index {
+                Some(files) => file_entries(files, self.root(), &text, &self.recent_files, 60)
+                    .into_iter()
+                    .map(|e| Item { label: e.label.clone(), detail: String::new(), positions: e.positions, action: ItemAction::CompareWith(e.path) })
+                    .collect(),
+                None => {
+                    overlay.note = Some("Indexing files...".to_owned());
+                    Vec::new()
+                }
+            },
             OverlayKind::Theme => self.theme_items(&text),
             OverlayKind::IconTheme => self.icon_theme_items(&text),
             OverlayKind::ProductIconTheme => self.product_icon_theme_items(&text),
@@ -645,9 +688,95 @@ impl Workspace {
                 });
                 Vec::new()
             }
+            OverlayKind::ConfirmDiscardHunk { rel, what, .. } => {
+                overlay.note = Some(format!("Press Enter to discard {what} in '{rel}'. This cannot be undone. Escape to cancel"));
+                Vec::new()
+            }
             OverlayKind::GitCreateBranch => {
                 overlay.note = Some("Creates the branch from HEAD and switches to it".to_owned());
                 Vec::new()
+            }
+            OverlayKind::GitCherryPick | OverlayKind::GitRevert | OverlayKind::GitRebaseFrom => {
+                let kind = overlay.kind.clone();
+                let commits = if kind == OverlayKind::GitCherryPick { &self.pick_commits } else { &self.history };
+                overlay.note = Some(
+                    if commits.is_empty() {
+                        "Loading commits (or there are none yet)..."
+                    } else if kind == OverlayKind::GitRebaseFrom {
+                        "The commits above the one you pick can be reordered, reworded, squashed or dropped"
+                    } else if kind == OverlayKind::GitRevert {
+                        "Adds a commit that undoes the one you pick"
+                    } else {
+                        "Applies the commit you pick on top of the current branch"
+                    }
+                    .to_owned(),
+                );
+                let subjects: Vec<&str> = commits.iter().map(|c| c.subject.as_str()).collect();
+                rank(&text, &subjects, 80)
+                    .into_iter()
+                    .map(|(i, m)| {
+                        let c = &commits[i];
+                        let short: String = c.hash.chars().take(8).collect();
+                        let action = match kind {
+                            OverlayKind::GitCherryPick => ItemAction::GitCherryPickCommit(i),
+                            OverlayKind::GitRevert => ItemAction::GitRevertCommit(i),
+                            _ => ItemAction::GitRebaseFrom(i),
+                        };
+                        Item { label: format!("{short}  {}", c.subject), detail: format!("{} • {}", c.author, c.when), positions: m.positions.into_iter().map(|p| p + 10).collect(), action }
+                    })
+                    .collect()
+            }
+            OverlayKind::GitSubmodules => {
+                if self.submodules.is_empty() {
+                    overlay.note = Some("Loading submodules (there are none if this repository has no .gitmodules)...".to_owned());
+                }
+                let root = self.git.as_ref().map(|g| g.root.clone()).unwrap_or_default();
+                let paths: Vec<&str> = self.submodules.iter().map(|s| s.path.as_str()).collect();
+                rank(&text, &paths, 60)
+                    .into_iter()
+                    .map(|(i, m)| {
+                        let s = &self.submodules[i];
+                        Item { label: s.path.clone(), detail: format!("{}  {}", s.state_label(), s.hash.chars().take(8).collect::<String>()), positions: m.positions, action: ItemAction::OpenFolder(root.join(&s.path)) }
+                    })
+                    .collect()
+            }
+            OverlayKind::GitWorktrees | OverlayKind::GitWorktreeRemove => {
+                let removing = overlay.kind == OverlayKind::GitWorktreeRemove;
+                if self.worktrees.is_empty() {
+                    overlay.note = Some("Loading worktrees...".to_owned());
+                } else if removing {
+                    overlay.note = Some("Git refuses to remove a worktree with uncommitted changes".to_owned());
+                }
+                let paths: Vec<&str> = self.worktrees.iter().map(|w| w.path.as_str()).collect();
+                rank(&text, &paths, 60)
+                    .into_iter()
+                    // The first entry is the main working tree, which cannot be removed.
+                    .filter(|(i, _)| !removing || *i > 0)
+                    .map(|(i, m)| {
+                        let w = &self.worktrees[i];
+                        let branch = w.branch.clone().unwrap_or_else(|| if w.bare { "bare".to_owned() } else { format!("detached at {}", w.head) });
+                        let name = std::path::Path::new(&w.path).file_name().map_or_else(|| w.path.clone(), |n| n.to_string_lossy().into_owned());
+                        let detail = format!("{branch}{}{}", if i == 0 { "  (main)" } else { "" }, if w.locked { "  locked" } else { "" });
+                        let action = if removing { ItemAction::WorktreeRemove(i) } else { ItemAction::OpenFolder(std::path::PathBuf::from(&w.path)) };
+                        // The folder's name is what tells worktrees apart; the full path is in the tooltip-less detail's tail.
+                        let positions = m.positions.into_iter().filter_map(|p| p.checked_sub(w.path.chars().count() - name.chars().count())).collect();
+                        Item { label: name, detail, positions, action }
+                    })
+                    .collect()
+            }
+            OverlayKind::GitWorktreeAdd => {
+                if self.branches.is_empty() {
+                    overlay.note = Some("Loading branches...".to_owned());
+                } else {
+                    overlay.note = Some("The worktree is created in a folder next to this one".to_owned());
+                }
+                let names: Vec<&str> = self.branches.iter().map(|b| b.name.as_str()).collect();
+                rank(&text, &names, 60)
+                    .into_iter()
+                    // A branch can be checked out in one worktree at a time: skip the current one and remote ones.
+                    .filter(|(i, _)| !self.branches[*i].current && !self.branches[*i].remote)
+                    .map(|(i, m)| Item { label: self.branches[i].name.clone(), detail: String::new(), positions: m.positions, action: ItemAction::WorktreeAddBranch(i) })
+                    .collect()
             }
             OverlayKind::LanguageServers => {
                 overlay.note = Some("Servers install into Forge's own folder; nothing global is changed. Add your own under \"languageServers\" in settings.json.".to_owned());
@@ -784,7 +913,7 @@ impl Workspace {
                 }
             }
             _ => {
-                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmReplace { .. }) {
+                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. }) {
                     return true;
                 }
                 match overlay.input.apply(&k.key, ctrl, k.key_char.as_deref()) {
@@ -873,6 +1002,9 @@ impl Workspace {
             OverlayKind::RenameEntry(path) => self.finish_rename_entry(&path, &text),
             OverlayKind::ConfirmDelete(path) => self.finish_delete_entry(&path, cx),
             OverlayKind::ConfirmDiscard { rel, untracked } => self.finish_discard(&rel, untracked),
+            OverlayKind::ConfirmDiscardHunk { patch, what, .. } => {
+                self.git_job("hunk", move |root| git::apply_patch(root, &patch, false, true).map(|_| format!("Discarded {what}")));
+            }
             OverlayKind::ConfirmReplace { .. } => self.finish_replace_all(),
             OverlayKind::ExtSearch => {
                 if !text.is_empty() {
@@ -941,6 +1073,46 @@ impl Workspace {
             ItemAction::GitMergeBranch(i) => {
                 if let Some(name) = self.branches.get(i).map(|b| b.name.clone()) {
                     self.git_job("merge", move |r| git::merge(r, &name));
+                }
+            }
+            ItemAction::GitRebaseFrom(i) => {
+                if let Some(commit) = self.history.get(i).cloned() {
+                    let (hash, label) = (commit.hash.clone(), commit.subject.clone());
+                    let (base, shown) = (hash.clone(), label.clone());
+                    self.git_background(move |root| git::rebase_commits(root, &hash), move |result| crate::workspace::GitMsg::RebasePlan { base, label: shown, result });
+                    let _ = label;
+                }
+            }
+            ItemAction::GitCherryPickCommit(i) => {
+                if let Some(hash) = self.pick_commits.get(i).map(|c| c.hash.clone()) {
+                    self.git_job("cherry-pick", move |r| git::cherry_pick(r, &hash));
+                }
+            }
+            ItemAction::GitRevertCommit(i) => {
+                if let Some(hash) = self.history.get(i).map(|c| c.hash.clone()) {
+                    self.git_job("revert", move |r| git::revert(r, &hash));
+                }
+            }
+            ItemAction::OpenFolder(path) => self.open_in_new_window(&path),
+            ItemAction::OpenRecent(path) => {
+                if self.docs.iter().any(|d| d.dirty) {
+                    self.set_status("Save or close modified files before opening another folder");
+                } else {
+                    self.open_folder(path, cx);
+                }
+            }
+            ItemAction::CompareWith(path) => self.compare_with(&path, cx),
+            ItemAction::WorktreeAddBranch(i) => {
+                if let (Some(name), Some(root)) = (self.branches.get(i).map(|b| b.name.clone()), self.git.as_ref().map(|g| g.root.clone())) {
+                    let folder = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".to_owned());
+                    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).collect();
+                    let path = root.parent().unwrap_or(&root).join(format!("{folder}-{safe}")).to_string_lossy().replace('\\', "/");
+                    self.git_job("worktree", move |r| git::worktree_add(r, &path, &name, false));
+                }
+            }
+            ItemAction::WorktreeRemove(i) => {
+                if let Some(path) = self.worktrees.get(i).map(|w| w.path.clone()) {
+                    self.git_job("worktree", move |r| git::worktree_remove(r, &path));
                 }
             }
             ItemAction::GitCommit(i) => self.git_show_commit(i),

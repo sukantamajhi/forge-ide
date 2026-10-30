@@ -30,6 +30,8 @@ struct Config {
     exe: PathBuf,
     port: u16,
     token: String,
+    /// The gpg program git would run by itself, which the signing wrapper runs in turn.
+    gpg: String,
 }
 
 static CONFIG: RwLock<Option<Config>> = RwLock::new(None);
@@ -66,8 +68,9 @@ pub fn start(exe: &Path) -> Option<Receiver<Request>> {
             std::thread::spawn(move || handle(stream, &expected, tx));
         }
     });
+    let gpg = configured_gpg_program();
     if let Ok(mut config) = CONFIG.write() {
-        *config = Some(Config { exe: exe.to_path_buf(), port, token });
+        *config = Some(Config { exe: exe.to_path_buf(), port, token, gpg });
     }
     Some(rx)
 }
@@ -96,6 +99,29 @@ fn handle(stream: TcpStream, token: &str, requests: Sender<Request>) {
     let _ = out.write_all(line.as_bytes());
 }
 
+/// `gpg.program` from git's global and system configuration, else plain `gpg`.
+fn configured_gpg_program() -> String {
+    let mut command = std::process::Command::new("git");
+    command.args(["config", "--get", "gpg.program"]).stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    command
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "gpg".to_owned())
+}
+
+/// What to pass git as `gpg.program` so that signing asks through the editor (Forge's own executable).
+pub fn gpg_program() -> Option<String> {
+    CONFIG.read().ok()?.as_ref().map(|c| c.exe.to_string_lossy().into_owned())
+}
+
 /// Environment for a git process so that it asks through the editor. Empty until [`start`] ran.
 pub fn env_vars() -> Vec<(&'static str, String)> {
     let Ok(guard) = CONFIG.read() else { return Vec::new() };
@@ -109,30 +135,45 @@ pub fn env_vars() -> Vec<(&'static str, String)> {
         ("DISPLAY", "forge:0".to_owned()),
         (PORT_VAR, config.port.to_string()),
         (TOKEN_VAR, config.token.clone()),
+        ("FORGE_GPG_REAL", config.gpg.clone()),
     ]
 }
 
 /// If this process was started by git as the askpass helper (`forge.exe "Password for ...:"`),
 /// ask the editor, print the answer and return the exit code. `None` for a normal start.
 pub fn run_as_helper(args: &[String]) -> Option<i32> {
+    // The signing wrapper has the same environment; it is not an askpass call.
+    if std::env::var("FORGE_GPG_REAL").is_ok() {
+        return None;
+    }
+    std::env::var(TOKEN_VAR).ok()?;
+    let prompt = args.get(1).cloned().unwrap_or_default();
+    match ask_editor(&prompt) {
+        Some(secret) => {
+            println!("{secret}");
+            Some(0)
+        }
+        None => Some(1),
+    }
+}
+
+/// Ask the running editor a question over the local socket (set up by [`start`]) and return the answer.
+/// `None` when it was cancelled or this process was not started by the editor.
+pub fn ask_editor(prompt: &str) -> Option<String> {
     let token = std::env::var(TOKEN_VAR).ok()?;
     let port: u16 = std::env::var(PORT_VAR).ok()?.parse().ok()?;
-    let prompt = args.get(1).cloned().unwrap_or_default().replace(['\r', '\n'], " ");
-    let code = (|| {
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-        stream.write_all(format!("{token}\n{prompt}\n").as_bytes()).ok()?;
-        let mut reader = BufReader::new(stream);
-        let mut status = String::new();
-        reader.read_line(&mut status).ok()?;
-        if status.trim_end() != "OK" {
-            return None;
-        }
-        let mut secret = String::new();
-        reader.read_line(&mut secret).ok()?;
-        println!("{}", secret.trim_end_matches(['\r', '\n']));
-        Some(0)
-    })();
-    Some(code.unwrap_or(1))
+    let prompt = prompt.replace(['\r', '\n'], " ");
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    stream.write_all(format!("{token}\n{prompt}\n").as_bytes()).ok()?;
+    let mut reader = BufReader::new(stream);
+    let mut status = String::new();
+    reader.read_line(&mut status).ok()?;
+    if status.trim_end() != "OK" {
+        return None;
+    }
+    let mut secret = String::new();
+    reader.read_line(&mut secret).ok()?;
+    Some(secret.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 #[cfg(test)]

@@ -3,13 +3,15 @@
 
 use forge_core::conflict::{self, Choice, Conflict};
 use forge_core::git;
-use gpui::{div, prelude::*, px, rems, rgb, rgba, AnyElement, Context, FontWeight, SharedString};
+use gpui::{div, prelude::*, rems, rgb, rgba, AnyElement, Context, FontWeight, SharedString};
 
 use crate::workspace::Workspace;
 
 pub(crate) struct ConflictPage {
     pub rel: String,
     pub text: String,
+    /// The common ancestor of each conflict as git's own merge sees them, once read (or why it cannot be).
+    pub bases: Option<Result<Vec<Option<Vec<String>>>, String>>,
 }
 
 /// Lines of a side shown before it is cut off, so one huge conflict does not fill the page.
@@ -19,8 +21,19 @@ impl Workspace {
     pub fn open_conflict_page(&mut self, rel: String) {
         let Some(root) = self.git.as_ref().map(|g| g.root.clone()) else { return };
         match std::fs::read_to_string(root.join(&rel)) {
-            Ok(text) => self.conflict_page = Some(ConflictPage { rel, text }),
+            Ok(text) => {
+                self.conflict_page = Some(ConflictPage { rel: rel.clone(), text, bases: None });
+                // The ancestor comes from the index, in the background: it costs three `git show`s and a merge.
+                let wanted = rel.clone();
+                self.git_background(move |root| git::conflict_bases(root, &rel), move |result| crate::workspace::GitMsg::ConflictBases { rel: wanted, result });
+            }
             Err(error) => self.set_status(format!("Cannot read {rel}: {error}")),
+        }
+    }
+
+    pub(crate) fn set_conflict_bases(&mut self, rel: &str, result: Result<Vec<Option<Vec<String>>>, String>) {
+        if let Some(page) = self.conflict_page.as_mut().filter(|p| p.rel == rel) {
+            page.bases = Some(result);
         }
     }
 
@@ -129,6 +142,15 @@ impl Workspace {
                 cx.notify();
             })));
 
+        // Ancestors read from the index line up with the file's conflicts only when git found as many.
+        let bases = page.bases.as_ref().and_then(|b| b.as_ref().ok()).filter(|b| b.len() == conflicts.len());
+        let base_of = |i: usize| bases.and_then(|b| b.get(i).cloned().flatten());
+        let base_note = match page.bases.as_ref() {
+            None => Some("Reading the common ancestor...".to_owned()),
+            Some(Err(e)) => Some(format!("No base column: {e}")),
+            Some(Ok(b)) if b.len() != conflicts.len() => Some("No base column: git's own merge found different conflicts than the file has".to_owned()),
+            _ => None,
+        };
         let cards: Vec<AnyElement> = conflicts.iter().enumerate().map(|(i, c)| {
             div()
                 .flex()
@@ -155,6 +177,8 @@ impl Workspace {
                         .flex_row()
                         .gap_2()
                         .child(self.conflict_side(format!("Current Change  ({})", c.current_label), &c.current, t.git_added))
+                        // The middle column: what both sides started from, when it is known.
+                        .children(c.base.clone().or_else(|| base_of(i)).map(|lines| self.conflict_side("Base  (common ancestor)".to_owned(), &lines, t.warning)))
                         .child(self.conflict_side(format!("Incoming Change  ({})", c.incoming_label), &c.incoming, t.info)),
                 )
                 .into_any_element()
@@ -171,20 +195,8 @@ impl Workspace {
         });
 
         Some(
-            div()
-                .id("conflict-page")
-                .absolute()
-                .top_0()
-                .left(px(left))
-                .right_0()
-                .bottom(rems(1.5))
-                .bg(rgb(t.bg))
-                .text_color(rgb(t.text))
-                .occlude()
-                .overflow_y_scroll()
-                .flex()
-                .justify_center()
-                .child(div().flex().flex_col().w_full().max_w(rems(70.0)).px(rems(2.0)).py(rems(1.5)).gap_3().child(header).children(cards).children(footer)),
+            crate::scroll::overlay_page("conflict-page", left, t.bg, t.text)
+                .child(div().flex().flex_col().w_full().max_w(rems(70.0)).px(rems(2.0)).py(rems(1.5)).gap_3().child(header).children(base_note.filter(|_| !conflicts.is_empty()).map(|n| div().text_xs().text_color(rgb(t.dim)).child(n))).children(cards).children(footer)),
         )
     }
 }

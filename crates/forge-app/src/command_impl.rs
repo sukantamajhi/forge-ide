@@ -11,7 +11,7 @@ use forge_text::{Selection, SelectionSet};
 use gpui::{ClipboardItem, Context, PathPromptOptions};
 
 use crate::lsp::RequestTag;
-use crate::workspace::{Focus, Group, OverlayKind, PanelView, SidebarView, View, Workspace};
+use crate::workspace::{same_path, Focus, Group, OverlayKind, PanelView, SidebarView, View, Workspace};
 
 impl Workspace {
     pub fn run_command(&mut self, command: Command, extend: bool, cx: &mut Context<Self>) {
@@ -232,12 +232,34 @@ impl Workspace {
             FindReferences => self.request_at("textDocument/references", RequestTag::References),
             QuickFix => self.quick_fix(),
             FormatDocument => self.format_document(false),
+            FormatSelection => self.format_selection(),
+            OrganizeImports => self.organize_imports(),
+            ShowOutline => self.open_symbols(),
+            ReopenClosedTab => self.reopen_closed_tab(cx),
+            NavigateBack => self.navigate(false, cx),
+            NavigateForward => self.navigate(true, cx),
+            OpenRecent => {
+                self.recent_folders = forge_core::session::SessionStore::load().recent_folders(15);
+                let here = self.root().to_path_buf();
+                self.recent_folders.retain(|p| !same_path(p, &here));
+                self.open_overlay(OverlayKind::OpenRecent, "");
+            }
+            ZenMode => self.toggle_zen(),
+            ToggleAutoSave => {
+                let on = self.settings.auto_save != forge_core::settings::AutoSave::Off;
+                let next = if on { "off" } else { "afterDelay" };
+                self.set_setting("files.autoSave", &format!("\"{next}\""));
+                self.set_status(if on { "Auto Save off" } else { "Auto Save on: files are saved after a short pause" });
+            }
+            CompareActiveFileWith => self.begin_compare(),
 
             // ---- source control ----
             ShowGit | GitRefresh | GitInit | GitStageAll | GitUnstageAll | GitStageFile | GitUnstageFile | GitDiscardFile | GitOpenChanges
             | GitCommit | GitCommitAll | GitGenerateMessage | GitCheckout | GitCreateBranch | GitPull | GitPush | GitSync | GitFetch | GitStash | GitStashPop
             | GitFileHistory | GitLog | GitBlame | GitRebase | GitRebaseContinue | GitRebaseSkip | GitRebaseAbort | GitMerge | GitMergeContinue | GitMergeAbort
-            | GitResolveConflicts | GitCancel => self.run_git_command(command, cx),
+            | GitResolveConflicts | GitCancel | GitInteractiveRebase | GitCherryPick | GitCherryPickContinue | GitCherryPickSkip | GitCherryPickAbort | GitRevert
+            | GitRevertContinue | GitRevertSkip | GitRevertAbort | GitSubmodules | GitSubmoduleUpdate | GitWorktrees | GitWorktreeAdd | GitWorktreeRemove | ShowGitGraph
+            | ShowGitTimeline => self.run_git_command(command, cx),
             ToggleDiffLayout => self.toggle_diff_layout(),
             CloseOtherTabs | CloseTabsToRight | CloseSavedTabs | CloseAllTabs | PinTab | UnpinTab | CopyFilePath | CopyRelativeFilePath | RevealActiveFile
             | ShowActiveFileInExplorer => self.run_tab_command(command, cx),
@@ -542,7 +564,8 @@ impl Workspace {
         if self.settings.trim_trailing_whitespace {
             self.mutate(cx, |b, s| b.trim_trailing_whitespace(s));
         }
-        if self.settings.format_on_save && self.docs[doc_ix].lsp_open {
+        let lang_id = self.docs[doc_ix].language.map(|l| l.vscode_id());
+        if self.settings.format_on_save_for(lang_id) && self.docs[doc_ix].lsp_open {
             self.format_document(true);
         } else {
             self.write_doc(doc_ix);
@@ -550,6 +573,7 @@ impl Workspace {
     }
 
     fn cycle_tab(&mut self, delta: isize) {
+        self.auto_save_on_focus_change();
         let group = &mut self.groups[self.focused_group];
         let n = group.views.len() as isize;
         if n > 0 {
@@ -714,8 +738,104 @@ impl Workspace {
             return;
         };
         let Some(uri) = forge_lsp::path_to_uri(&doc.path) else { return };
-        let params = formatting_params(&uri, self.settings.tab_size, self.settings.insert_spaces);
+        let params = formatting_params(&uri, self.settings.tab_size_for(doc.language.map(|l| l.vscode_id())), self.settings.insert_spaces_for(doc.language.map(|l| l.vscode_id())));
         self.lsp.request(language, "textDocument/formatting", params, RequestTag::Format { then_save });
+    }
+
+    /// Format only the selected lines (the server may widen the range to whole statements).
+    fn format_selection(&mut self) {
+        let Some(view) = self.active_view() else { return };
+        let doc = &self.docs[view.doc];
+        let (Some(language), true) = (doc.language, doc.lsp_open) else {
+            self.set_status("Formatting needs a running language server");
+            return;
+        };
+        let sel = view.selections.primary();
+        if sel.is_empty() {
+            self.set_status("Select the text to format first, or use Format Document");
+            return;
+        }
+        let Some(uri) = forge_lsp::path_to_uri(&doc.path) else { return };
+        let (sl, sc) = doc.buffer.utf16_point(sel.start());
+        let (el, ec) = doc.buffer.utf16_point(sel.end());
+        let range = LspRange { start: Position { line: sl, character: sc }, end: Position { line: el, character: ec } };
+        let id = doc.language.map(|l| l.vscode_id());
+        let params = forge_lsp::range_formatting_params(&uri, range, self.settings.tab_size_for(id), self.settings.insert_spaces_for(id));
+        self.lsp.request(language, "textDocument/rangeFormatting", params, RequestTag::FormatRange);
+    }
+
+    /// Ask the server for its `source.organizeImports` action and apply it.
+    fn organize_imports(&mut self) {
+        let Some(view) = self.active_view() else { return };
+        let doc = &self.docs[view.doc];
+        let (Some(language), true) = (doc.language, doc.lsp_open) else {
+            self.set_status("Organize Imports needs a running language server");
+            return;
+        };
+        let Some(uri) = forge_lsp::path_to_uri(&doc.path) else { return };
+        let end = doc.buffer.utf16_point(doc.buffer.len_chars());
+        let range = LspRange { start: Position { line: 0, character: 0 }, end: Position { line: end.0, character: end.1 } };
+        self.lsp.request(language, "textDocument/codeAction", forge_lsp::code_action_only_params(&uri, range, "source.organizeImports"), RequestTag::OrganizeImports);
+    }
+
+    fn reopen_closed_tab(&mut self, cx: &mut Context<Self>) {
+        while let Some((path, caret)) = self.closed_tabs.pop() {
+            if path.is_file() {
+                self.open_file(&path, None, cx);
+                self.place_caret_offset(caret);
+                return;
+            }
+        }
+        self.set_status("No closed editor to reopen");
+    }
+
+    /// Zen mode hides the side bar and panel; the second press brings them back.
+    fn toggle_zen(&mut self) {
+        match self.zen_saved.take() {
+            Some((sidebar, panel)) => {
+                self.sidebar_visible = sidebar;
+                self.panel_visible = panel;
+                self.set_status("Zen mode off");
+            }
+            None => {
+                self.zen_saved = Some((self.sidebar_visible, self.panel_visible));
+                self.sidebar_visible = false;
+                self.panel_visible = false;
+                self.set_status("Zen mode on: Ctrl+K Z to leave");
+            }
+        }
+    }
+
+    fn begin_compare(&mut self) {
+        let Some(doc) = self.active_doc().filter(|d| !d.readonly) else {
+            self.set_status("Open a file first");
+            return;
+        };
+        self.compare_base = Some(doc.path.clone());
+        self.open_overlay(OverlayKind::CompareWith, "");
+    }
+
+    /// Show the difference between the file picked in [`Self::begin_compare`] and `other` as a diff tab.
+    pub fn compare_with(&mut self, other: &std::path::Path, cx: &mut Context<Self>) {
+        let Some(base) = self.compare_base.take() else { return };
+        // Unsaved edits are compared too: write both sides to the diff from what is in the editor, else from disk.
+        let side = |ws: &Self, path: &std::path::Path| -> Option<String> {
+            match ws.doc_index(path) {
+                Some(ix) => Some(ws.docs[ix].buffer.text()),
+                None => std::fs::read(path).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+            }
+        };
+        let (Some(a), Some(b)) = (side(self, &base), side(self, other)) else {
+            self.set_status("Could not read one of the files");
+            return;
+        };
+        let name = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let text = forge_core::git::diff_texts(&a, &b, &name(&base), &name(other));
+        if text.is_empty() {
+            self.set_status("The files are identical");
+            return;
+        }
+        self.open_virtual(&format!("compare:{}:{}", base.display(), other.display()), &format!("{} \u{2194} {}", name(&base), name(other)), &text, true, cx);
     }
 
     fn open_symbols(&mut self) {

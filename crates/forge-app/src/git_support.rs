@@ -33,6 +33,10 @@ fn job_title(label: &str) -> &'static str {
         "rebase-abort" | "merge-abort" => "Aborting…",
         "merge" => "Merging…",
         "hunk" | "stage" | "unstage" => "Updating the index…",
+        "cherry-pick" => "Cherry-picking…",
+        "revert" => "Reverting…",
+        "submodules" => "Updating submodules…",
+        "worktree" => "Updating worktrees…",
         "init" => "Initializing…",
         _ => "Working…",
     }
@@ -127,6 +131,7 @@ impl Workspace {
             changed = true;
         }
         changed |= self.poll_askpass();
+        self.follow_git_panels();
         let due = self.git.as_ref().is_some_and(|g| !g.refreshing && (g.refresh_wanted || g.last_refresh.elapsed() > AUTO_REFRESH));
         if due {
             self.start_status();
@@ -152,6 +157,19 @@ impl Workspace {
             }
         }
         changed
+    }
+
+    /// Open `path` (a submodule or worktree) in a new Forge window: this program, started on that folder.
+    pub fn open_in_new_window(&mut self, path: &Path) {
+        if !path.is_dir() {
+            self.set_status(format!("{} does not exist yet (initialise the submodule first)", path.display()));
+            return;
+        }
+        let started = std::env::current_exe().and_then(|exe| std::process::Command::new(exe).arg(path).spawn());
+        match started {
+            Ok(_) => self.set_status(format!("Opened {} in a new window", path.display())),
+            Err(e) => self.set_status(format!("Could not open a new window: {e}")),
+        }
     }
 
     /// Stop the running git operation (a pull waiting on the network, a stuck rebase).
@@ -209,7 +227,8 @@ impl Workspace {
                     Err(error) => self.set_result(format!("Git {}failed: {error}", if label.is_empty() { String::new() } else { format!("{label} ") }), false),
                 }
                 // Staging a hunk changes what every open diff shows.
-                self.refresh_open_diffs();
+                self.refresh_open_diffs(cx);
+                self.refresh_git_panels();
                 // Checkout, pull, stash and discard rewrite files under the open tabs.
                 self.reload_clean_docs();
                 self.tree.refresh();
@@ -224,6 +243,30 @@ impl Workspace {
                     self.replace_virtual(&key, &title, &text);
                 }
             }
+            GitMsg::PickCommits(Ok(list)) => {
+                self.pick_commits = list;
+                self.refresh_overlay();
+            }
+            GitMsg::Submodules(Ok(list)) => {
+                self.submodules = list;
+                self.refresh_overlay();
+            }
+            GitMsg::Worktrees(Ok(list)) => {
+                self.worktrees = list;
+                self.refresh_overlay();
+            }
+            GitMsg::PickCommits(Err(e)) | GitMsg::Submodules(Err(e)) | GitMsg::Worktrees(Err(e)) => {
+                self.overlay = None;
+                self.set_status(format!("Git: {e}"));
+            }
+            GitMsg::RebasePlan { base, label, result } => match result {
+                Ok(items) if items.is_empty() => self.set_status("There are no commits above that one to rebase"),
+                Ok(items) => self.open_rebase_page(base, label, items),
+                Err(e) => self.set_status(format!("Git: {e}")),
+            },
+            GitMsg::ConflictBases { rel, result } => self.set_conflict_bases(&rel, result),
+            GitMsg::Graph(result) => self.set_graph(result),
+            GitMsg::Timeline { rel, result } => self.set_timeline(rel, result),
             GitMsg::AiMessage(result) => {
                 self.ai_pending = false;
                 match result {
@@ -625,6 +668,52 @@ impl Workspace {
                 self.open_overlay(OverlayKind::GitMerge, "");
                 self.git_request_branches();
             }
+            GitInteractiveRebase => {
+                self.history.clear();
+                self.history_path = None;
+                self.open_overlay(OverlayKind::GitRebaseFrom, "");
+                self.git_request_history(None);
+            }
+            GitCherryPick => {
+                self.pick_commits.clear();
+                self.open_overlay(OverlayKind::GitCherryPick, "");
+                self.git_background(|root| git::log_all(root, 300), GitMsg::PickCommits);
+            }
+            GitRevert => {
+                self.history.clear();
+                self.history_path = None;
+                self.open_overlay(OverlayKind::GitRevert, "");
+                self.git_request_history(None);
+            }
+            GitCherryPickContinue => self.git_job("cherry-pick", git::cherry_pick_continue),
+            GitCherryPickSkip => self.git_job("cherry-pick", git::cherry_pick_skip),
+            GitCherryPickAbort => self.git_job("cherry-pick", git::cherry_pick_abort),
+            GitRevertContinue => self.git_job("revert", git::revert_continue),
+            GitRevertSkip => self.git_job("revert", git::revert_skip),
+            GitRevertAbort => self.git_job("revert", git::revert_abort),
+            GitSubmodules => {
+                self.submodules.clear();
+                self.open_overlay(OverlayKind::GitSubmodules, "");
+                self.git_background(git::submodules, GitMsg::Submodules);
+            }
+            GitSubmoduleUpdate => self.git_job("submodules", git::submodule_update),
+            GitWorktrees => {
+                self.worktrees.clear();
+                self.open_overlay(OverlayKind::GitWorktrees, "");
+                self.git_background(git::worktrees, GitMsg::Worktrees);
+            }
+            GitWorktreeAdd => {
+                self.branches.clear();
+                self.open_overlay(OverlayKind::GitWorktreeAdd, "");
+                self.git_request_branches();
+            }
+            GitWorktreeRemove => {
+                self.worktrees.clear();
+                self.open_overlay(OverlayKind::GitWorktreeRemove, "");
+                self.git_background(git::worktrees, GitMsg::Worktrees);
+            }
+            ShowGitGraph => self.open_graph_panel(),
+            ShowGitTimeline => self.open_timeline_panel(),
             GitRebaseContinue => self.git_job("rebase", git::rebase_continue),
             GitRebaseSkip => self.git_job("rebase", git::rebase_skip),
             GitRebaseAbort => self.git_job("rebase-abort", git::rebase_abort),

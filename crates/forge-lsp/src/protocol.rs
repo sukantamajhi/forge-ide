@@ -413,6 +413,15 @@ pub fn formatting_params(uri: &str, tab_size: usize, insert_spaces: bool) -> Val
     json!({ "textDocument": { "uri": uri }, "options": { "tabSize": tab_size, "insertSpaces": insert_spaces } })
 }
 
+pub fn range_formatting_params(uri: &str, range: Range, tab_size: usize, insert_spaces: bool) -> Value {
+    json!({ "textDocument": { "uri": uri }, "range": range_json(range), "options": { "tabSize": tab_size, "insertSpaces": insert_spaces } })
+}
+
+/// A code-action request limited to one kind, such as `source.organizeImports`.
+pub fn code_action_only_params(uri: &str, at: Range, kind: &str) -> Value {
+    json!({ "textDocument": { "uri": uri }, "range": range_json(at), "context": { "diagnostics": [], "only": [kind] } })
+}
+
 pub fn document_symbol_params(uri: &str) -> Value {
     json!({ "textDocument": { "uri": uri } })
 }

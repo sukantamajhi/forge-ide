@@ -270,11 +270,43 @@ pub fn parse_status(output: &str) -> Status {
 
 // ---- running git ----
 
+/// A unified diff of two texts (empty when they are equal), made by `git diff --no-index` on temporary copies.
+/// `a_name` and `b_name` appear in the headers. Works outside any repository.
+pub fn diff_texts(a: &str, b: &str, a_name: &str, b_name: &str) -> String {
+    if a == b {
+        return String::new();
+    }
+    let dir = std::env::temp_dir().join(format!("forge-compare-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return String::new();
+    }
+    let (left, right) = (dir.join("a"), dir.join("b"));
+    let text = if std::fs::write(&left, a).is_ok() && std::fs::write(&right, b).is_ok() {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(&dir).args(["-c", "core.quotepath=off", "diff", "--no-index", "--no-color", "--no-ext-diff", "--", "a", "b"]).stdin(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        // Exit code 1 means "they differ", which is the normal case here.
+        cmd.output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let _ = std::fs::remove_dir_all(&dir);
+    text.replace("a/a", &format!("a/{a_name}")).replace("b/b", &format!("b/{b_name}")).replace("diff --git a/a b/b", &format!("diff --git a/{a_name} b/{b_name}"))
+}
+
 fn command(root: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(root).args(["-c", "core.quotepath=off"]);
     cmd.env("GIT_TERMINAL_PROMPT", "0").env("GIT_EDITOR", "true").env("LC_ALL", "C");
     cmd.envs(crate::askpass::env_vars());
+    // Signing commits asks for the passphrase in the editor (see `gpg_wrap`).
+    if let Some(program) = crate::askpass::gpg_program() {
+        cmd.arg("-c").arg(format!("gpg.program={program}"));
+    }
     cmd.stdin(Stdio::null());
     #[cfg(windows)]
     {
@@ -291,6 +323,48 @@ fn run(root: &Path, args: &[&str]) -> Result<String, String> {
 
 /// Run a prepared git command, optionally feeding `input` to it. The process is registered with the
 /// current thread's [`JobControl`] so it can be cancelled.
+/// How long to keep reading a finished process's output when something else still holds its pipe open.
+const PIPE_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Wait for `child` to exit and return what it printed. Unlike `wait_with_output` this does not wait for
+/// the output pipes to close: a program git starts (gpg-agent, a credential cache, an ssh master) can
+/// keep running with the pipes inherited, and would make every such command hang after it had finished.
+/// Output is read on threads, so a large output cannot fill a pipe and stall the process.
+pub(crate) fn wait_and_collect(mut child: std::process::Child) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    use std::sync::Mutex;
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>) {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let done = Arc::new(AtomicBool::new(false));
+        let (b, d) = (Arc::clone(&buffer), Arc::clone(&done));
+        std::thread::spawn(move || {
+            if let Some(mut pipe) = pipe {
+                let mut chunk = [0u8; 8192];
+                while let Ok(n) = pipe.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    if let Ok(mut buf) = b.lock() {
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
+                }
+            }
+            d.store(true, Ordering::SeqCst);
+        });
+        (buffer, done)
+    }
+    let (stdout, stdout_done) = drain(child.stdout.take());
+    let (stderr, stderr_done) = drain(child.stderr.take());
+    let status = child.wait()?;
+    // The pipes normally close with the process; give leftovers a moment, then take what has arrived.
+    let deadline = std::time::Instant::now() + PIPE_GRACE;
+    while !(stdout_done.load(Ordering::SeqCst) && stderr_done.load(Ordering::SeqCst)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let take = |buffer: &Arc<Mutex<Vec<u8>>>| buffer.lock().map(|b| b.clone()).unwrap_or_default();
+    Ok(std::process::Output { status, stdout: take(&stdout), stderr: take(&stderr) })
+}
+
 fn run_with_input(cmd: &mut Command, input: Option<&str>) -> Result<String, String> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     if input.is_some() {
@@ -308,7 +382,7 @@ fn run_with_input(cmd: &mut Command, input: Option<&str>) -> Result<String, Stri
     if let (Some(text), Some(mut stdin)) = (input, child.stdin.take()) {
         let _ = stdin.write_all(text.as_bytes());
     }
-    let output = child.wait_with_output();
+    let output = wait_and_collect(child);
     if let Some(job) = &job {
         job.pid.store(0, Ordering::SeqCst);
         if job.is_cancelled() {
@@ -664,6 +738,344 @@ pub fn relative_path(root: &Path, abs: &Path) -> Option<String> {
     (matches && a.as_bytes()[r.len()] == b'/').then(|| a[r.len() + 1..].to_owned())
 }
 
+/// Whether git tracks `rel` (it has an index entry).
+pub fn is_tracked(root: &Path, rel: &str) -> bool {
+    run(root, &["ls-files", "--error-unmatch", "--", rel]).is_ok()
+}
+
+// ---- cherry-pick and revert ----
+
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(8).collect()
+}
+
+pub fn cherry_pick(root: &Path, hash: &str) -> Result<String, String> {
+    let result = run(root, &["cherry-pick", hash]);
+    stopped(root, result, format!("Cherry-picked {}", short_hash(hash)))
+}
+
+pub fn cherry_pick_continue(root: &Path) -> Result<String, String> {
+    let result = run(root, &["cherry-pick", "--continue"]);
+    stopped(root, result, "Cherry-pick finished".to_owned())
+}
+
+pub fn cherry_pick_skip(root: &Path) -> Result<String, String> {
+    let result = run(root, &["cherry-pick", "--skip"]);
+    stopped(root, result, "Cherry-pick finished".to_owned())
+}
+
+pub fn cherry_pick_abort(root: &Path) -> Result<String, String> {
+    run(root, &["cherry-pick", "--abort"]).map(|_| "Cherry-pick aborted".to_owned())
+}
+
+/// Undo a commit by committing its opposite.
+pub fn revert(root: &Path, hash: &str) -> Result<String, String> {
+    let result = run(root, &["revert", "--no-edit", hash]);
+    stopped(root, result, format!("Reverted {}", short_hash(hash)))
+}
+
+pub fn revert_continue(root: &Path) -> Result<String, String> {
+    let result = run(root, &["revert", "--continue"]);
+    stopped(root, result, "Revert finished".to_owned())
+}
+
+pub fn revert_skip(root: &Path) -> Result<String, String> {
+    let result = run(root, &["revert", "--skip"]);
+    stopped(root, result, "Revert finished".to_owned())
+}
+
+pub fn revert_abort(root: &Path) -> Result<String, String> {
+    run(root, &["revert", "--abort"]).map(|_| "Revert aborted".to_owned())
+}
+
+/// Commits from every branch, newest first, to pick one from.
+pub fn log_all(root: &Path, limit: usize) -> Result<Vec<Commit>, String> {
+    let n = format!("-{limit}");
+    let out = run(root, &["log", "--all", "--date-order", &n, "--pretty=format:%H\u{1f}%an\u{1f}%ar\u{1f}%s"]).or_else(|e| if e.contains("does not have any commits") { Ok(String::new()) } else { Err(e) })?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split('\u{1f}');
+            Some(Commit { hash: f.next()?.to_owned(), author: f.next()?.to_owned(), when: f.next()?.to_owned(), subject: f.next()?.to_owned() })
+        })
+        .collect())
+}
+
+// ---- interactive rebase ----
+
+/// What to do with one commit in an interactive rebase.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TodoAction {
+    Pick,
+    /// Keep the changes, use this message.
+    Reword(String),
+    /// Fold into the commit above, joining the messages.
+    Squash,
+    /// Fold into the commit above, dropping this message.
+    Fixup,
+    Drop,
+}
+
+impl TodoAction {
+    pub fn label(&self) -> &'static str {
+        match self {
+            TodoAction::Pick => "pick",
+            TodoAction::Reword(_) => "reword",
+            TodoAction::Squash => "squash",
+            TodoAction::Fixup => "fixup",
+            TodoAction::Drop => "drop",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TodoItem {
+    pub hash: String,
+    pub subject: String,
+    pub action: TodoAction,
+}
+
+/// The commits an interactive rebase onto `base` would replay, oldest first, all set to pick.
+pub fn rebase_commits(root: &Path, base: &str) -> Result<Vec<TodoItem>, String> {
+    let range = format!("{base}..HEAD");
+    let out = run(root, &["log", "--reverse", "--no-merges", "--pretty=format:%H\u{1f}%s", &range])?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let (hash, subject) = line.split_once('\u{1f}')?;
+            Some(TodoItem { hash: hash.to_owned(), subject: subject.to_owned(), action: TodoAction::Pick })
+        })
+        .collect())
+}
+
+/// The todo list git is given, or why the choices cannot be done (a squash with nothing above it).
+pub fn rebase_todo(items: &[TodoItem]) -> Result<String, String> {
+    let mut text = String::new();
+    let mut have_commit = false;
+    for item in items {
+        match item.action {
+            TodoAction::Drop => {}
+            TodoAction::Squash | TodoAction::Fixup if !have_commit => {
+                return Err(format!("\"{}\" cannot be {}ed into a commit above it: it is the first one kept", item.subject, item.action.label()));
+            }
+            _ => have_commit = true,
+        }
+        text.push_str(&format!("{} {} {}\n", item.action.label(), item.hash, item.subject.replace('\n', " ")));
+    }
+    if !have_commit {
+        return Err("every commit is dropped, so there is nothing to rebase".to_owned());
+    }
+    Ok(text)
+}
+
+/// Rebase the current branch onto `base`, applying `items` (their order and actions). No editor opens:
+/// git's sequence editor copies our todo list in, and its commit-message editor hands out the new
+/// messages in the order git asks for them.
+pub fn interactive_rebase(root: &Path, base: &str, items: &[TodoItem]) -> Result<String, String> {
+    let todo = rebase_todo(items)?;
+    let dir = std::env::temp_dir().join(format!(
+        "forge-rebase-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos())
+    ));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not prepare the rebase: {e}"))?;
+    let result = (|| {
+        std::fs::write(dir.join("todo.txt"), &todo).map_err(|e| e.to_string())?;
+        // One file per time git opens the message editor: a reword gets its text, a squash keeps the joined message.
+        let mut queue = 0;
+        for item in items {
+            let contents = match &item.action {
+                TodoAction::Reword(message) => message.trim_end().to_owned() + "\n",
+                TodoAction::Squash => "@keep".to_owned(),
+                _ => continue,
+            };
+            queue += 1;
+            std::fs::write(dir.join(format!("msg-{queue:03}")), contents).map_err(|e| e.to_string())?;
+        }
+        let script = "#!/bin/sh\ndir=\"$(dirname \"$0\")\"\nnext=$(ls \"$dir\"/msg-* 2>/dev/null | head -n 1)\nif [ -n \"$next\" ]; then\n  if [ \"$(head -c 5 \"$next\")\" != \"@keep\" ]; then cat \"$next\" > \"$1\"; fi\n  rm -f \"$next\"\nfi\n";
+        std::fs::write(dir.join("edit.sh"), script).map_err(|e| e.to_string())?;
+        let slash = |p: std::path::PathBuf| p.to_string_lossy().replace('\\', "/");
+        let mut cmd = command(root);
+        cmd.env("GIT_SEQUENCE_EDITOR", format!("cp \"{}\"", slash(dir.join("todo.txt"))));
+        cmd.env("GIT_EDITOR", format!("sh \"{}\"", slash(dir.join("edit.sh"))));
+        cmd.args(["rebase", "-i", base]);
+        run_with_input(&mut cmd, None)
+    })();
+    let outcome = stopped(root, result, format!("Rebased {} commit{}", items.iter().filter(|i| i.action != TodoAction::Drop).count(), if items.len() == 1 { "" } else { "s" }));
+    // Leave the files while the rebase waits for conflicts: later steps may still run the editor.
+    if repo_state(root) == RepoState::Clean {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    outcome
+}
+
+// ---- merge conflicts: the common ancestor ----
+
+/// For each conflict of `rel` as git's own three-way merge reports them, the lines of the common ancestor.
+/// Read from the index (stages 1, 2 and 3) and merged in memory with `git merge-file --diff3`, so the
+/// working file is not touched. An error when there is no common ancestor (both sides added the file).
+pub fn conflict_bases(root: &Path, rel: &str) -> Result<Vec<Option<Vec<String>>>, String> {
+    let stage = |n: u8| run(root, &["show", &format!(":{n}:{rel}")]);
+    let (base, ours, theirs) = (stage(1).map_err(|_| "there is no common ancestor (both sides added this file)".to_owned())?, stage(2)?, stage(3)?);
+    let dir = std::env::temp_dir().join(format!("forge-base-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let result = (|| {
+        for (name, text) in [("base", &base), ("ours", &ours), ("theirs", &theirs)] {
+            std::fs::write(dir.join(name), text).map_err(|e| e.to_string())?;
+        }
+        // The exit status is the number of conflicts, so only the output matters.
+        let output = command(root)
+            .args(["merge-file", "-p", "--diff3", "-L", "ours", "-L", "base", "-L", "theirs"])
+            .arg(dir.join("ours"))
+            .arg(dir.join("base"))
+            .arg(dir.join("theirs"))
+            .output()
+            .map_err(|e| format!("could not run git: {e}"))?;
+        Ok(crate::conflict::find(&String::from_utf8_lossy(&output.stdout)).into_iter().map(|c| c.base).collect())
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
+
+// ---- staging lines of a new file ----
+
+/// Put `content` in the index as the file `rel`, without touching the working file. This is how some
+/// lines of an untracked file are staged: only they go in, and the rest stays as a working change.
+pub fn stage_new_file(root: &Path, rel: &str, content: &str) -> Result<String, String> {
+    let mut hash = command(root);
+    hash.args(["hash-object", "-w", "--stdin"]);
+    let blob = run_with_input(&mut hash, Some(content))?.trim().to_owned();
+    run(root, &["update-index", "--add", "--cacheinfo", &format!("100644,{blob},{rel}")])
+}
+
+// ---- submodules ----
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Submodule {
+    pub path: String,
+    pub hash: String,
+    /// `' '` up to date, `'-'` not initialised, `'+'` at a different commit than the repository records, `'U'` conflicts.
+    pub state: char,
+    pub describe: String,
+}
+
+impl Submodule {
+    pub fn state_label(&self) -> &'static str {
+        match self.state {
+            '-' => "not initialised",
+            '+' => "at another commit than recorded",
+            'U' => "merge conflicts",
+            _ => "up to date",
+        }
+    }
+}
+
+pub fn parse_submodules(output: &str) -> Vec<Submodule> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let state = line.chars().next()?;
+            let rest = line.get(1..)?;
+            let (hash, tail) = rest.split_once(' ')?;
+            let (path, describe) = match tail.split_once(" (") {
+                Some((path, d)) => (path, d.trim_end_matches(')')),
+                None => (tail, ""),
+            };
+            Some(Submodule { path: path.to_owned(), hash: hash.to_owned(), state, describe: describe.to_owned() })
+        })
+        .collect()
+}
+
+pub fn submodules(root: &Path) -> Result<Vec<Submodule>, String> {
+    Ok(parse_submodules(&run(root, &["submodule", "status", "--recursive"])?))
+}
+
+/// Fetch and check out every submodule at the commit this repository records, initialising new ones.
+pub fn submodule_update(root: &Path) -> Result<String, String> {
+    run(root, &["submodule", "update", "--init", "--recursive"]).map(|_| "Submodules are up to date".to_owned())
+}
+
+// ---- worktrees ----
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Worktree {
+    pub path: String,
+    pub head: String,
+    /// `None` when detached or bare.
+    pub branch: Option<String>,
+    pub bare: bool,
+    pub locked: bool,
+    /// The folder is gone; `git worktree prune` forgets it.
+    pub prunable: bool,
+}
+
+pub fn parse_worktrees(output: &str) -> Vec<Worktree> {
+    let mut list = Vec::new();
+    for block in output.split("\n\n") {
+        let mut tree = Worktree::default();
+        for line in block.lines() {
+            let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+            match key {
+                "worktree" => tree.path = value.to_owned(),
+                "HEAD" => tree.head = value.chars().take(8).collect(),
+                "branch" => tree.branch = Some(value.trim_start_matches("refs/heads/").to_owned()),
+                "bare" => tree.bare = true,
+                "locked" => tree.locked = true,
+                "prunable" => tree.prunable = true,
+                _ => {}
+            }
+        }
+        if !tree.path.is_empty() {
+            list.push(tree);
+        }
+    }
+    list
+}
+
+pub fn worktrees(root: &Path) -> Result<Vec<Worktree>, String> {
+    Ok(parse_worktrees(&run(root, &["worktree", "list", "--porcelain"])?))
+}
+
+/// Check `branch` out in a new folder `path`. `create` makes the branch (from HEAD) first.
+pub fn worktree_add(root: &Path, path: &str, branch: &str, create: bool) -> Result<String, String> {
+    let result = if create { run(root, &["worktree", "add", "-b", branch, path]) } else { run(root, &["worktree", "add", path, branch]) };
+    result.map(|_| format!("Added a worktree for {branch} in {path}"))
+}
+
+pub fn worktree_remove(root: &Path, path: &str) -> Result<String, String> {
+    run(root, &["worktree", "remove", path]).map(|_| format!("Removed the worktree {path}"))
+}
+
+// ---- the commit graph ----
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphCommit {
+    pub hash: String,
+    pub parents: Vec<String>,
+    pub author: String,
+    pub when: String,
+    /// Branches and tags pointing here (`HEAD -> main`, `origin/main`, `tag: v1`).
+    pub refs: Vec<String>,
+    pub subject: String,
+}
+
+/// Every branch's history, newest first, with the parents the graph needs.
+pub fn graph_log(root: &Path, limit: usize) -> Result<Vec<GraphCommit>, String> {
+    let n = format!("-{limit}");
+    let out = run(root, &["log", "--all", "--date-order", &n, "--pretty=format:%H\u{1f}%P\u{1f}%an\u{1f}%ar\u{1f}%D\u{1f}%s"]).or_else(|e| if e.contains("does not have any commits") { Ok(String::new()) } else { Err(e) })?;
+    Ok(out
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split('\u{1f}');
+            let hash = f.next()?.to_owned();
+            let parents = f.next()?.split_whitespace().map(str::to_owned).collect();
+            let (author, when) = (f.next()?.to_owned(), f.next()?.to_owned());
+            let refs = f.next()?.split(", ").filter(|r| !r.is_empty()).map(str::to_owned).collect();
+            Some(GraphCommit { hash, parents, author, when, refs, subject: f.next()?.to_owned() })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -993,6 +1405,25 @@ hint: something
     }
 
     #[test]
+    fn hunks_of_a_file_with_windows_line_endings_stage_and_discard() {
+        let Some(dir) = repo("crlf") else { return };
+        let crlf = |text: String| text.replace('\n', "\r\n");
+        write(&dir, "f.txt", &crlf(numbered(14)));
+        commit_all(&dir, "base");
+        write(&dir, "f.txt", &crlf(numbered(14).replace("line 2\n", "LINE 2\n").replace("line 13\n", "LINE 13\n")));
+        let patch = crate::patch::parse(&diff_text(&dir, "f.txt", false, false).unwrap()).unwrap();
+        assert_eq!(patch.hunks.len(), 2);
+        apply_patch(&dir, &patch.hunk_patch(0).unwrap(), true, false).unwrap();
+        let staged = run(&dir, &["show", ":f.txt"]).unwrap();
+        assert!(staged.contains("LINE 2\r\n") && staged.contains("line 13\r\n"), "the index keeps the file's line endings: {staged:?}");
+        // The second hunk is thrown away from the working file.
+        apply_patch(&dir, &patch.hunk_patch(1).unwrap(), false, true).unwrap();
+        let file = std::fs::read_to_string(dir.join("f.txt")).unwrap();
+        assert!(file.contains("line 13\r\n") && file.contains("LINE 2\r\n"), "{file:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn chosen_lines_are_staged_and_unstaged_leaving_the_rest_alone() {
         let Some(dir) = repo("lines") else { return };
         write(&dir, "f.txt", &numbered(10));
@@ -1063,6 +1494,17 @@ hint: something
     }
 
     #[test]
+    fn a_leftover_daemon_holding_the_output_pipe_does_not_hang_a_finished_command() {
+        let Some(dir) = repo("pipe") else { return };
+        // The alias starts a background process that keeps git's output pipe open for a while, then git exits.
+        let started = std::time::Instant::now();
+        let result = run(&dir, &["-c", "alias.leave=!sleep 20 & echo started", "leave"]);
+        assert_eq!(result.unwrap().trim(), "started");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "returned after {:?}, not after the 20 s the background process lives", started.elapsed());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_running_operation_can_be_cancelled() {
         let Some(dir) = repo("cancel") else { return };
         let job = JobControl::new();
@@ -1073,6 +1515,194 @@ hint: something
         job.cancel();
         assert_eq!(worker.join().unwrap(), Err("cancelled".to_owned()));
         assert!(started.elapsed() < std::time::Duration::from_secs(30), "the process was stopped, not waited for");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn subjects(dir: &Path) -> Vec<String> {
+        log(dir, None, 50).unwrap().into_iter().map(|c| c.subject).collect()
+    }
+
+    #[test]
+    fn a_commit_from_another_branch_is_cherry_picked_and_then_reverted() {
+        let Some(dir) = repo("pick") else { return };
+        write(&dir, "a.txt", "base\n");
+        commit_all(&dir, "base");
+        git_ok(&dir, &["switch", "-q", "-c", "feature"]);
+        write(&dir, "b.txt", "feature file\n");
+        commit_all(&dir, "add b");
+        git_ok(&dir, &["switch", "-q", "main"]);
+        let wanted = log_all(&dir, 10).unwrap().into_iter().find(|c| c.subject == "add b").expect("the commit is listed from the other branch");
+        assert_eq!(cherry_pick(&dir, &wanted.hash).unwrap(), format!("Cherry-picked {}", short_hash(&wanted.hash)));
+        assert!(dir.join("b.txt").is_file());
+        assert_eq!(subjects(&dir)[0], "add b");
+        // Reverting the new commit takes the file away again.
+        let tip = log(&dir, None, 1).unwrap().remove(0);
+        revert(&dir, &tip.hash).unwrap();
+        assert!(!dir.join("b.txt").exists());
+        assert!(subjects(&dir)[0].starts_with("Revert \"add b\""));
+        // A cherry-pick that conflicts stops and can be aborted.
+        git_ok(&dir, &["switch", "-q", "feature"]);
+        write(&dir, "a.txt", "feature edit\n");
+        commit_all(&dir, "edit a on feature");
+        git_ok(&dir, &["switch", "-q", "main"]);
+        write(&dir, "a.txt", "main edit\n");
+        commit_all(&dir, "edit a on main");
+        let conflicting = log_all(&dir, 10).unwrap().into_iter().find(|c| c.subject == "edit a on feature").unwrap();
+        let error = cherry_pick(&dir, &conflicting.hash).unwrap_err();
+        assert!(error.contains("conflicts"), "{error}");
+        assert_eq!(repo_state(&dir), RepoState::CherryPick);
+        assert_eq!(cherry_pick_abort(&dir).unwrap(), "Cherry-pick aborted");
+        assert_eq!(repo_state(&dir), RepoState::Clean);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_interactive_rebase_reorders_rewords_squashes_and_drops() {
+        let Some(dir) = repo("rebase-i") else { return };
+        write(&dir, "base.txt", "base\n");
+        commit_all(&dir, "base");
+        for (file, subject) in [("one.txt", "add one"), ("two.txt", "add two"), ("three.txt", "add three"), ("four.txt", "add four"), ("temp.txt", "temporary")] {
+            write(&dir, file, &format!("{file}\n"));
+            commit_all(&dir, subject);
+        }
+        let base = log(&dir, None, 10).unwrap().last().unwrap().hash.clone();
+        let mut items = rebase_commits(&dir, &base).unwrap();
+        assert_eq!(items.iter().map(|i| i.subject.as_str()).collect::<Vec<_>>(), ["add one", "add two", "add three", "add four", "temporary"], "oldest first");
+        // one, three, two (reworded), four folded into two, temporary dropped.
+        let pick = |i: usize| items[i].clone();
+        let (one, two, three, four, temp) = (pick(0), pick(1), pick(2), pick(3), pick(4));
+        items = vec![
+            one,
+            three,
+            TodoItem { action: TodoAction::Reword("add two, renamed".into()), ..two },
+            TodoItem { action: TodoAction::Fixup, ..four },
+            TodoItem { action: TodoAction::Drop, ..temp },
+        ];
+        assert_eq!(interactive_rebase(&dir, &base, &items).unwrap(), "Rebased 4 commits");
+        assert_eq!(subjects(&dir), ["add two, renamed", "add three", "add one", "base"]);
+        for kept in ["one.txt", "two.txt", "three.txt", "four.txt"] {
+            assert!(dir.join(kept).is_file(), "{kept} is still in the tree (four was folded into two)");
+        }
+        assert!(!dir.join("temp.txt").exists(), "the dropped commit's file is gone");
+        assert_eq!(repo_state(&dir), RepoState::Clean);
+
+        // A squash keeps both messages in the joined one; the order of messages does not get mixed up with a reword.
+        let base = log(&dir, None, 10).unwrap().last().unwrap().hash.clone();
+        let mut items = rebase_commits(&dir, &base).unwrap();
+        items[1].action = TodoAction::Squash; // "add three" into "add one"
+        items[2].action = TodoAction::Reword("final subject".into());
+        interactive_rebase(&dir, &base, &items).unwrap();
+        assert_eq!(subjects(&dir), ["final subject", "add one", "base"]);
+        let squashed = run(&dir, &["log", "-1", "--format=%B", "HEAD~1"]).unwrap();
+        assert!(squashed.contains("add one") && squashed.contains("add three"), "{squashed}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rebase_todo_refuses_choices_git_could_not_do() {
+        let item = |action: TodoAction| TodoItem { hash: "abc".into(), subject: "s".into(), action };
+        assert!(rebase_todo(&[item(TodoAction::Squash)]).unwrap_err().contains("first one kept"));
+        assert!(rebase_todo(&[item(TodoAction::Drop), item(TodoAction::Fixup)]).is_err(), "a fixup after only a drop has nothing above it");
+        assert!(rebase_todo(&[item(TodoAction::Drop)]).unwrap_err().contains("nothing to rebase"));
+        let todo = rebase_todo(&[item(TodoAction::Pick), item(TodoAction::Reword("m".into())), item(TodoAction::Squash), item(TodoAction::Drop)]).unwrap();
+        assert_eq!(todo, "pick abc s\nreword abc s\nsquash abc s\ndrop abc s\n");
+    }
+
+    #[test]
+    fn the_common_ancestor_of_a_conflict_is_read_without_touching_the_file() {
+        let Some(dir) = repo("bases") else { return };
+        write(&dir, "a.txt", "one\ntwo\nthree\n");
+        commit_all(&dir, "base");
+        git_ok(&dir, &["switch", "-q", "-c", "feature"]);
+        write(&dir, "a.txt", "one\ntwo FEATURE\nthree\n");
+        commit_all(&dir, "feature");
+        git_ok(&dir, &["switch", "-q", "main"]);
+        write(&dir, "a.txt", "one\ntwo MAIN\nthree\n");
+        commit_all(&dir, "main");
+        assert!(merge(&dir, "feature").unwrap_err().contains("conflicts"));
+        let before = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        let bases = conflict_bases(&dir, "a.txt").unwrap();
+        assert_eq!(bases, vec![Some(vec!["two\n".to_owned()])], "the line as it was before either side changed it");
+        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), before);
+        assert_eq!(crate::conflict::find(&before).len(), bases.len(), "the file's conflicts line up with the ancestors");
+        assert_eq!(merge_abort(&dir).unwrap(), "Merge aborted");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn some_lines_of_a_new_file_are_staged_and_the_rest_stays_a_working_change() {
+        let Some(dir) = repo("newfile") else { return };
+        write(&dir, "seed.txt", "x\n");
+        commit_all(&dir, "seed");
+        write(&dir, "new.txt", "one\ntwo\nthree\nfour\n");
+        let patch = crate::patch::parse(&diff_text(&dir, "new.txt", false, true).unwrap()).unwrap();
+        let chosen = std::collections::BTreeSet::from([0usize, 2]);
+        let content = patch.new_file_text(&chosen, false).unwrap();
+        assert_eq!(content, "one\nthree\n");
+        stage_new_file(&dir, "new.txt", &content).unwrap();
+        assert_eq!(run(&dir, &["show", ":new.txt"]).unwrap(), "one\nthree\n", "only the chosen lines are in the index");
+        assert_eq!(std::fs::read_to_string(dir.join("new.txt")).unwrap(), "one\ntwo\nthree\nfour\n", "the file itself is untouched");
+        let s = status(&dir).unwrap();
+        let c = s.changes.iter().find(|c| c.path == "new.txt").unwrap();
+        assert!(c.index == Some(Kind::Added) && c.worktree == Some(Kind::Modified), "{c:?}");
+        let rest = crate::patch::parse(&diff_text(&dir, "new.txt", false, false).unwrap()).unwrap();
+        assert_eq!(rest.hunks[0].lines.iter().filter(|l| l.kind == crate::patch::LineKind::Add).map(|l| l.text.as_str()).collect::<Vec<_>>(), ["two", "four"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn submodule_and_worktree_listings_parse() {
+        let subs = parse_submodules(" 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b libs/one (v1.2-3-gabc)\n-ffffffffffffffffffffffffffffffffffffffff libs/two\n+0123456789012345678901234567890123456789 libs/three (heads/main)\n");
+        assert_eq!(subs.len(), 3);
+        assert_eq!((subs[0].path.as_str(), subs[0].state, subs[0].describe.as_str()), ("libs/one", ' ', "v1.2-3-gabc"));
+        assert_eq!((subs[1].path.as_str(), subs[1].state_label()), ("libs/two", "not initialised"));
+        assert_eq!(subs[2].state_label(), "at another commit than recorded");
+        let trees = parse_worktrees("worktree C:/repo\nHEAD 0123456789abcdef\nbranch refs/heads/main\n\nworktree C:/repo-feature\nHEAD fedcba9876543210\nbranch refs/heads/feature\nlocked busy\n\nworktree C:/repo-detached\nHEAD 1111111111111111\ndetached\nprunable gitdir file points to non-existent location\n");
+        assert_eq!(trees.len(), 3);
+        assert_eq!((trees[0].branch.as_deref(), trees[0].head.as_str()), (Some("main"), "01234567"));
+        assert!(trees[1].locked && trees[1].branch.as_deref() == Some("feature"));
+        assert!(trees[2].branch.is_none() && trees[2].prunable);
+    }
+
+    #[test]
+    fn a_worktree_is_added_listed_and_removed() {
+        let Some(dir) = repo("worktree") else { return };
+        write(&dir, "a.txt", "a\n");
+        commit_all(&dir, "base");
+        let other = std::env::temp_dir().join(format!("forge-git-worktree-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        let other_text = other.to_string_lossy().replace('\\', "/");
+        worktree_add(&dir, &other_text, "side", true).unwrap();
+        let trees = worktrees(&dir).unwrap();
+        assert_eq!(trees.len(), 2, "{trees:?}");
+        assert!(trees.iter().any(|t| t.branch.as_deref() == Some("side") && t.path.replace('\\', "/").ends_with(other_text.rsplit('/').next().unwrap())));
+        assert!(other.join("a.txt").is_file());
+        worktree_remove(&dir, &other_text).unwrap();
+        assert_eq!(worktrees(&dir).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_graph_log_lists_parents_and_refs() {
+        let Some(dir) = repo("graphlog") else { return };
+        write(&dir, "a.txt", "a\n");
+        commit_all(&dir, "base");
+        git_ok(&dir, &["switch", "-q", "-c", "feature"]);
+        write(&dir, "b.txt", "b\n");
+        commit_all(&dir, "on feature");
+        git_ok(&dir, &["switch", "-q", "main"]);
+        write(&dir, "c.txt", "c\n");
+        commit_all(&dir, "on main");
+        git_ok(&dir, &["merge", "-q", "--no-ff", "-m", "merge feature", "feature"]);
+        let commits = graph_log(&dir, 20).unwrap();
+        assert_eq!(commits.len(), 4);
+        let merge = &commits[0];
+        assert_eq!(merge.subject, "merge feature");
+        assert_eq!(merge.parents.len(), 2);
+        assert!(merge.refs.iter().any(|r| r.contains("main")), "{:?}", merge.refs);
+        let rows = crate::graph::layout(&commits);
+        assert_eq!(rows[0].diverge.len(), 1, "the merge opens a lane for its second parent");
+        assert!(rows.iter().map(|r| r.width()).max().unwrap() >= 2);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

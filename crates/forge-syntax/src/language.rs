@@ -247,6 +247,41 @@ impl Language {
         }
     }
 
+    /// The id VS Code gives this language, used in settings such as `"[rust]": { ... }`.
+    pub fn vscode_id(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Json => "json",
+            Self::JavaScript => "javascript",
+            Self::JavaScriptReact => "javascriptreact",
+            Self::TypeScript => "typescript",
+            Self::TypeScriptReact => "typescriptreact",
+            Self::Python => "python",
+            Self::Toml => "toml",
+            Self::Html => "html",
+            Self::Css => "css",
+            Self::Xml => "xml",
+            Self::Yaml => "yaml",
+            Self::Markdown => "markdown",
+            Self::Shell => "shellscript",
+            Self::Go => "go",
+            Self::C => "c",
+            Self::Cpp => "cpp",
+            Self::Java => "java",
+            Self::CSharp => "csharp",
+            Self::Php => "php",
+            Self::Ruby => "ruby",
+            Self::Lua => "lua",
+            Self::Sql => "sql",
+            Self::Diff => "diff",
+            Self::Env => "dotenv",
+            Self::Ini => "properties",
+            Self::Dockerfile => "dockerfile",
+            Self::Makefile => "makefile",
+            Self::Ignore => "ignore",
+        }
+    }
+
     /// Token that starts a line comment, for Ctrl+/.
     pub fn line_comment(self) -> Option<&'static str> {
         match self {
