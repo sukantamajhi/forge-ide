@@ -34,6 +34,7 @@ mod file_icons;
 mod server_support;
 mod session_support;
 mod settings_view;
+mod outline_view;
 mod terminal_mouse;
 mod titlebar;
 mod tree;
@@ -85,7 +86,8 @@ fn main() {
         prof::mark("icon font registered");
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // Always start maximized; the size below is what the window restores to.
+            window_bounds: Some(WindowBounds::Maximized(bounds)),
             titlebar: Some(TitlebarOptions { title: Some("Forge".into()), appears_transparent: true, ..Default::default() }),
             ..Default::default()
         };

@@ -249,7 +249,7 @@ impl Workspace {
             FormatDocument => self.format_document(false),
             FormatSelection => self.format_selection(),
             OrganizeImports => self.organize_imports(),
-            ShowOutline => self.open_symbols(),
+            ShowOutline => self.reveal_outline(),
             CollapseExplorer => {
                 self.tree.collapse_all();
                 self.explorer_selected = None;

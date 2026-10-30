@@ -964,6 +964,7 @@ impl Workspace {
                     )
                 }))
         };
+        let outline = (self.sidebar_view == SidebarView::Explorer).then(|| self.render_outline(cx));
         let body: AnyElement = match self.sidebar_view {
             SidebarView::Explorer => self.render_explorer(cx).into_any_element(),
             SidebarView::Search => self.render_search(cx).into_any_element(),
@@ -1015,6 +1016,7 @@ impl Workspace {
                     ),
             )
             .child(body)
+            .children(outline)
     }
 
     fn render_explorer(&self, cx: &mut Context<Self>) -> impl IntoElement {

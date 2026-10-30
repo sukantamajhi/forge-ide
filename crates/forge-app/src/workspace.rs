@@ -794,6 +794,18 @@ pub(crate) struct Workspace {
     /// The font settings the code and UI fonts and the character width were worked out for.
     pub font_key: Option<(String, String, u32)>,
     pub code_link_hover: bool,
+    /// The Outline section of the Explorer: open or folded, what it lists, and what that list was made for.
+    pub outline_open: bool,
+    pub outline_items: Vec<forge_core::outline::OutlineItem>,
+    pub outline_key: Option<(PathBuf, u64)>,
+    /// The file and revision seen last, and when that changed: the outline waits for typing to pause.
+    pub outline_seen: Option<(PathBuf, u64)>,
+    pub outline_changed: Instant,
+    /// The file a symbols request is out for.
+    pub outline_requested: Option<PathBuf>,
+    pub outline_scroll: UniformListScrollHandle,
+    /// The entry the caret was in when the list last scrolled to follow it.
+    pub outline_followed: std::cell::Cell<Option<usize>>,
     /// The theme colours the title bar was last painted with.
     pub titlebar_key: Option<crate::titlebar::Key>,
     /// Where the terminal view was last drawn, to turn mouse positions into cells.
@@ -1017,6 +1029,14 @@ impl Workspace {
             defer_syntax: false,
             font_key: None,
             code_link_hover: false,
+            outline_open: true,
+            outline_items: Vec::new(),
+            outline_key: None,
+            outline_seen: None,
+            outline_changed: Instant::now(),
+            outline_requested: None,
+            outline_scroll: UniformListScrollHandle::new(),
+            outline_followed: std::cell::Cell::new(None),
             titlebar_key: None,
             term_bounds: Default::default(),
             term_sel: None,
@@ -1833,6 +1853,7 @@ impl Workspace {
         changed |= self.poll_background();
         changed |= self.debug_tick(cx);
         self.save_session(false);
+        changed |= self.refresh_outline();
         // The editor scrolls during layout, after render has run, so the preview is kept in step here.
         if self.preview_open {
             if let Some((g, vi)) = self.active_ix().filter(|(g, _)| self.is_markdown(*g)) {
@@ -1993,6 +2014,16 @@ impl Workspace {
             RequestTag::Symbols => {
                 self.symbols = parse_document_symbols(&result);
                 self.refresh_overlay();
+            }
+            RequestTag::Outline => {
+                let symbols = parse_document_symbols(&result);
+                // Only while the file it was asked for is still the one in front.
+                if self.outline_requested.take().is_some_and(|p| self.active_doc().is_some_and(|d| same_path(&d.path, &p))) && !symbols.is_empty() {
+                    self.outline_items = symbols
+                        .iter()
+                        .map(|s| forge_core::outline::OutlineItem { name: s.name.clone(), kind: s.kind_label(), line: s.range.start.line, col: s.range.start.character, depth: s.depth })
+                        .collect();
+                }
             }
             RequestTag::FormatRange => {
                 let edits = parse_text_edits(&result);

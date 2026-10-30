@@ -9,6 +9,7 @@ pub mod ext_lang;
 pub mod emmet;
 pub mod fileops;
 pub mod find;
+pub mod outline;
 pub mod folds;
 pub mod fuzzy;
 pub mod git;

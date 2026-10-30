@@ -32,6 +32,8 @@ pub enum RequestTag {
     /// Format the document; save afterwards when set (format on save).
     Format { then_save: bool },
     Symbols,
+    /// The symbols for the Outline view (no picker is waiting for them).
+    Outline,
     /// Format only the selected range.
     FormatRange,
     /// `source.organizeImports`: apply the server's edit directly.
