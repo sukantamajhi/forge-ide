@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/forge-logo.svg" alt="Forge logo: an anvil shaped like the letter F, with a spark" width="128" height="128">
+  <img src="assets/forge-logo.svg" alt="Forge logo: lines of code with a text caret" width="128" height="128">
 </p>
 
 # Forge
@@ -24,7 +24,8 @@ cargo build --release -p forge-app            # LTO; slow first build
 
 | Command | What it does |
 |---|---|
-| `make release-windows` | Windows build, `targeteleaseorge.exe` (run on Windows) |
+| `make release-windows` | Windows build, `target
+eleaseorge.exe` (run on Windows) |
 | `make release-linux` | Linux build. On Linux it builds in place; on Windows it runs inside WSL2 and writes to `target-linux/` |
 | `make release-all` | both, from Windows with WSL2 |
 | `make package-windows` | `dist/Forge-Setup-<version>.exe` (needs Inno Setup 6) |
@@ -205,6 +206,8 @@ Not done for Linux: the OpenAI / Gemini key cannot be saved yet (it is encrypted
   - **Your own snippets:** **Configure User Snippets** (File menu or the palette) asks for a language (or "New Global Snippets file") and opens
     `snippets\<language id>.json` (or `global.code-snippets`) next to `settings.json`, creating it with an explanation. Saving the file reloads the snippets.
     **Insert Snippet...** lists what applies to the file. Snippets from installed extensions work too.
+- **Activity bar:** the Explorer, Search, Source Control and Extensions icons sit in one row at the top of the sidebar; the open view's icon has a rounded outlined box, Source Control shows its change count on the icon, and a "..." button opens Problems, Terminal, Outline, Git Graph and File Timeline. The menu bar starts with the Forge logo.
+- **Welcome page:** with no file open, the editor area shows the logo, the name, clickable quick actions with their shortcuts (Open Folder, New File, Go to File, Show All Commands, Find in Files, Toggle Terminal) and up to five recent folders (click one to open it).
 - **Fonts and icons:** code, the terminal and diffs use a monospace font (Cascadia Mono, then Cascadia Code, then Consolas); menus,
   tabs, the side bar, the status bar, Settings and dialogs use a sans font (Segoe UI Variable Text, then Segoe UI). Pick others
   with `"editor.fontFamily"` and `"workbench.fontFamily"` (a name Windows has installed; a missing one falls back to the list).
@@ -222,7 +225,7 @@ Not done for Linux: the OpenAI / Gemini key cannot be saved yet (it is encrypted
   F10 / F11 / Shift+F11 step, Shift+F5 stops. The Debug panel shows variables, the call stack and the console.
   Uses `debugpy` from the project's `.venv`, your Python, or the copy bundled with VS Code's Python extension.
 - **Workbench:** right-click menus in the editor and explorer, explorer with new file/folder, rename (F2) and delete to the Recycle Bin, integrated
-  terminal (Ctrl+`; several at once, each with its own tab, New Terminal with Ctrl+Shift+`; 5000 lines of scrollback with the mouse wheel or Shift+PageUp/PageDown), bottom panel, sidebar toggle (Ctrl+B), zoom, three themes, settings and keybindings JSON.
+  terminal (Ctrl+`; several at once, each with its own tab, New Terminal with Ctrl+Shift+`; 5000 lines of scrollback with the mouse wheel or Shift+PageUp/PageDown; drag to select text, double-click a word, triple-click a line, Ctrl+C or Ctrl+Shift+C or a right-click copies the selection (Ctrl+C still interrupts when nothing is selected; a right-click with no selection pastes); web addresses and file paths in the output, with an optional `:line:col`, are underlined on hover and a click opens them in the browser or the editor), bottom panel, sidebar toggle (Ctrl+B), zoom, three themes, settings and keybindings JSON.
 
 Every command has a VS Code id and is listed in the Command Palette with its shortcut. Syntax
 highlighting covers Rust, JSON, JavaScript, Python and TOML.

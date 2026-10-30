@@ -198,6 +198,150 @@ impl Terminal {
     }
 }
 
+/// What a link in terminal output points at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkKind {
+    Url,
+    /// A path, maybe with the `:line` and `:column` compilers print after it.
+    File { line: Option<usize>, col: Option<usize> },
+}
+
+/// A clickable piece of a terminal row: columns `start..end`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Link {
+    pub start: usize,
+    pub end: usize,
+    /// The URL, or the path without its `:line:col` tail.
+    pub text: String,
+    pub kind: LinkKind,
+}
+
+impl Terminal {
+    /// One character per column of a screen row (a blank for an empty cell or the tail of a wide one).
+    pub fn row_chars(&self, row: u16) -> Vec<char> {
+        let screen = self.parser.screen();
+        (0..self.cols)
+            .map(|col| match screen.cell(row, col) {
+                Some(cell) if cell.has_contents() => cell.contents().chars().next().unwrap_or(' '),
+                _ => ' ',
+            })
+            .collect()
+    }
+
+    /// The text from `from` to `to` (both `(row, col)`, inclusive of `to`, in either order). Rows are
+    /// trimmed of trailing blanks and joined by newlines.
+    pub fn text_between(&self, from: (u16, u16), to: (u16, u16)) -> String {
+        let (a, b) = if from <= to { (from, to) } else { (to, from) };
+        let mut out = Vec::new();
+        for row in a.0..=b.0 {
+            let cells = self.row_chars(row);
+            let start = if row == a.0 { a.1 as usize } else { 0 };
+            let end = if row == b.0 { (b.1 as usize + 1).min(cells.len()) } else { cells.len() };
+            let piece: String = cells.get(start..end.max(start)).unwrap_or_default().iter().collect();
+            out.push(piece.trim_end().to_owned());
+        }
+        out.join("\n")
+    }
+}
+
+/// The columns of the word (letters, digits and path characters) at `col`.
+pub fn word_span(cells: &[char], col: usize) -> Option<(usize, usize)> {
+    let is_word = |c: char| c.is_alphanumeric() || "_-./\\:~@%+=#?&".contains(c);
+    if !cells.get(col).is_some_and(|c| is_word(*c)) {
+        return None;
+    }
+    let start = (0..col).rev().take_while(|i| is_word(cells[*i])).last().unwrap_or(col);
+    let end = (col..cells.len()).take_while(|i| is_word(cells[*i])).last().unwrap_or(col);
+    Some((start, end))
+}
+
+/// Links in a row of cells: web addresses, and paths that may carry `:line:col`. Whether a path exists is
+/// for the caller to check.
+pub fn find_links(cells: &[char]) -> Vec<Link> {
+    let mut links = Vec::new();
+    let mut i = 0;
+    while i < cells.len() {
+        if cells[i].is_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < cells.len() && !cells[i].is_whitespace() && !"\"'`<>|".contains(cells[i]) {
+            i += 1;
+        }
+        if i == start {
+            i += 1;
+            continue;
+        }
+        let token: String = cells[start..i].iter().collect();
+        if let Some(link) = link_in_token(&token, start) {
+            links.push(link);
+        }
+    }
+    links
+}
+
+fn link_in_token(token: &str, start: usize) -> Option<Link> {
+    // `(`, `[` and `{` in front belong to the surrounding text, not the link.
+    let lead = token.chars().take_while(|c| "([{,;".contains(*c)).count();
+    let body: String = token.chars().skip(lead).collect();
+    let start = start + lead;
+    if let Some(at) = body.find("http://").or_else(|| body.find("https://")) {
+        let url: String = body[at..].to_owned();
+        let url = trim_url(&url);
+        if url.len() > "https://".len() - 1 {
+            let begin = start + body[..at].chars().count();
+            return Some(Link { start: begin, end: begin + url.chars().count(), text: url.to_owned(), kind: LinkKind::Url });
+        }
+    }
+    // A path: trim closing brackets and punctuation, then split `:line:col`.
+    let body = body.trim_end_matches(|c: char| ")]},;.".contains(c));
+    let (path, line, col) = split_location(body);
+    if !looks_like_path(path) {
+        return None;
+    }
+    let len = body.chars().count();
+    Some(Link { start, end: start + len, text: path.to_owned(), kind: LinkKind::File { line, col } })
+}
+
+fn trim_url(url: &str) -> &str {
+    let mut url = url.trim_end_matches(|c: char| ".,;:!?".contains(c));
+    for (open, close) in [('(', ')'), ('[', ']'), ('{', '}')] {
+        while url.ends_with(close) && url.matches(close).count() > url.matches(open).count() {
+            url = &url[..url.len() - 1];
+        }
+    }
+    url
+}
+
+/// `src/a.rs:12:5` becomes (`src/a.rs`, 12, 5); a Windows drive's colon is left alone.
+fn split_location(body: &str) -> (&str, Option<usize>, Option<usize>) {
+    let mut path = body;
+    let mut nums = Vec::new();
+    while let Some((head, tail)) = path.rsplit_once(':') {
+        match tail.parse::<usize>() {
+            Ok(n) if nums.len() < 2 && !head.is_empty() => {
+                nums.push(n);
+                path = head;
+            }
+            _ => break,
+        }
+    }
+    nums.reverse();
+    (path, nums.first().copied(), nums.get(1).copied())
+}
+
+fn looks_like_path(path: &str) -> bool {
+    if path.is_empty() || path.contains("://") {
+        return false;
+    }
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let has_sep = path.contains('/') || path.contains('\\');
+    let ext = name.rsplit_once('.').map(|(stem, ext)| (!stem.is_empty(), ext));
+    let has_ext = ext.is_some_and(|(stem, ext)| stem && (1..=8).contains(&ext.len()) && ext.chars().all(|c| c.is_ascii_alphanumeric()));
+    (has_sep && !name.is_empty()) || has_ext
+}
+
 fn nz(n: u16) -> NonZeroU16 {
     NonZeroU16::new(n.max(1)).unwrap_or(NonZeroU16::MIN)
 }
@@ -284,6 +428,51 @@ pub fn key_bytes(key: &str, ctrl: bool, alt: bool, shift: bool, key_char: Option
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    fn links(s: &str) -> Vec<Link> {
+        find_links(&s.chars().collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn finds_urls_and_trims_trailing_punctuation() {
+        let found = links("see https://example.com/a?b=1, or (http://x.org/p).");
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].text, "https://example.com/a?b=1");
+        assert_eq!((found[0].start, found[0].end), (4, 29));
+        assert_eq!(found[1].text, "http://x.org/p");
+        assert_eq!(links("https://en.wikipedia.org/wiki/Rust_(language)")[0].text, "https://en.wikipedia.org/wiki/Rust_(language)");
+    }
+
+    #[test]
+    fn finds_paths_with_line_and_column() {
+        let found = links("  --> src/main.rs:12:5");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].text, "src/main.rs");
+        assert_eq!(found[0].kind, LinkKind::File { line: Some(12), col: Some(5) });
+        assert_eq!((found[0].start, found[0].end), (6, 22));
+        let win = links(r"error in C:\work\app\lib.rs:7");
+        assert_eq!(win[0].text, r"C:\work\app\lib.rs");
+        assert_eq!(win[0].kind, LinkKind::File { line: Some(7), col: None });
+        assert!(links("plain words only, 3 items").is_empty());
+        assert_eq!(links("open README.md.")[0].text, "README.md");
+    }
+
+    #[test]
+    fn word_span_covers_the_word_under_the_column() {
+        let cells: Vec<char> = "cd  src/lib.rs ok".chars().collect();
+        assert_eq!(word_span(&cells, 6), Some((4, 13)));
+        assert_eq!(word_span(&cells, 2), None);
+    }
+
+    #[test]
+    fn selection_text_is_trimmed_per_row() {
+        let mut t = Terminal::spawn(&Terminal::default_shell().0, &Terminal::default_shell().1, std::path::Path::new("."), 5, 20).unwrap();
+        t.parser.process(b"hello world\r\nsecond line  \r\nthird");
+        assert_eq!(t.text_between((0, 6), (0, 10)), "world");
+        assert_eq!(t.text_between((1, 5), (0, 0)), "hello world\nsecond");
+        assert_eq!(t.text_between((2, 0), (2, 19)), "third");
+        t.kill();
+    }
 
     #[test]
     fn keys_map_to_the_sequences_shells_expect() {

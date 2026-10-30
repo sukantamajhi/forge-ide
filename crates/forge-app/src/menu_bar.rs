@@ -16,8 +16,29 @@ fn title_width(ix: usize) -> f32 {
     TITLES[ix].len() as f32 * 8.0 + 24.0
 }
 
+/// Room at the left of the bar for the logo.
+const LOGO_SLOT: f32 = 34.0;
+
 fn title_left(ix: usize) -> f32 {
-    4.0 + (0..ix).map(title_width).sum::<f32>()
+    4.0 + LOGO_SLOT + (0..ix).map(title_width).sum::<f32>()
+}
+
+/// The Forge mark (lines of code on a dark tile), `size` pixels square. It matches `assets/build_icons.py`.
+pub fn logo_mark(size: f32) -> gpui::Div {
+    let k = size / 256.0;
+    let bar = |x: f32, y: f32, w: f32, h: f32, color: u32| div().absolute().left(px(x * k)).top(px(y * k)).w(px(w * k)).h(px(h * k)).rounded_full().bg(rgb(color));
+    div()
+        .relative()
+        .flex_none()
+        .w(px(size))
+        .h(px(size))
+        .rounded(px(58.0 * k))
+        .bg(rgb(0x181A21))
+        .child(bar(56.0, 57.0, 84.0, 22.0, 0xF2F2F2))
+        .child(bar(86.0, 97.0, 116.0, 22.0, 0x8A90A0))
+        .child(bar(86.0, 137.0, 62.0, 22.0, 0xFF8A1F))
+        .child(bar(56.0, 177.0, 100.0, 22.0, 0xF2F2F2))
+        .child(bar(162.0, 131.0, 12.0, 34.0, 0xFF8A1F))
 }
 
 impl Workspace {
@@ -161,6 +182,22 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The "..." at the end of the activity icons: the panels and views that have no icon of their own.
+    pub fn open_more_views_menu(&mut self, position: Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        use Command::*;
+        let c = |label: &str, command: Command| self.command_item(label, command, true);
+        let entries = vec![
+            c("Problems", ShowProblems),
+            c("Terminal", ToggleTerminal),
+            c("Outline", ShowOutline),
+            MenuEntry::Separator,
+            c("Git Graph", ShowGitGraph),
+            c("File Timeline", ShowGitTimeline),
+        ];
+        self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
+        cx.notify();
+    }
+
     pub fn render_menu_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let open = self.context_menu.as_ref().and_then(|m| m.bar);
@@ -176,6 +213,7 @@ impl Workspace {
             .border_color(rgb(t.border))
             .text_size(px(13.0))
             .font_family(self.ui_font.clone())
+            .child(div().w(px(LOGO_SLOT)).h_full().flex().flex_none().items_center().justify_center().child(logo_mark(18.0)))
             .children((0..TITLES.len()).map(|ix| {
                 div()
                     .id(("menu-bar", ix))

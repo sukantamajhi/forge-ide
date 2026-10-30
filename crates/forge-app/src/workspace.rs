@@ -780,6 +780,11 @@ pub(crate) struct Workspace {
     /// The font settings the code and UI fonts and the character width were worked out for.
     pub font_key: Option<(String, String, u32)>,
     pub code_link_hover: bool,
+    /// Where the terminal view was last drawn, to turn mouse positions into cells.
+    pub term_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
+    pub term_sel: Option<crate::terminal_mouse::TermSel>,
+    /// The link under the pointer in the terminal.
+    pub term_link: Option<crate::terminal_mouse::TermLink>,
     /// The parsed table of the CSV file in the full-page preview, its list scroll and its sideways scroll.
     pub csv_cache: Option<crate::csv_view::CsvCache>,
     pub csv_scroll: UniformListScrollHandle,
@@ -996,6 +1001,9 @@ impl Workspace {
             defer_syntax: false,
             font_key: None,
             code_link_hover: false,
+            term_bounds: Default::default(),
+            term_sel: None,
+            term_link: None,
             csv_cache: None,
             csv_scroll: UniformListScrollHandle::new(),
             csv_scroll_x: 0.0,

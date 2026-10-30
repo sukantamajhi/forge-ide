@@ -53,6 +53,9 @@ impl Workspace {
     pub fn restore_session(&mut self, also: Option<&Path>, cx: &mut Context<Self>) {
         let store = SessionStore::load();
         let root = self.root().to_path_buf();
+        // The welcome page lists these.
+        self.recent_folders = store.recent_folders(15);
+        self.recent_folders.retain(|p| !crate::workspace::same_path(p, &root));
         if let Some(session) = store.session(&root).cloned() {
             let mut opened = 0;
             let saved_active = session.files.get(session.active).map(|f| f.path.clone());

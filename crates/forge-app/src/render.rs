@@ -322,7 +322,7 @@ impl Workspace {
         } else if has_views {
             self.render_editor(g, cx).into_any_element()
         } else {
-            self.render_welcome().into_any_element()
+            self.render_welcome(cx).into_any_element()
         };
         let mut column = div().relative().flex().flex_col().min_w_0().h_full().bg(rgb(t.bg)).border_color(rgb(t.border));
         // Split groups take their dragged shares of the width; a single group takes all of it.
@@ -340,28 +340,72 @@ impl Workspace {
             .child(div().relative().flex_1().min_h_0().child(body).children((g == self.focused_group && self.find.open && has_views).then(|| self.render_find_widget(cx))))
     }
 
-    fn render_welcome(&self) -> impl IntoElement {
+    /// What the empty editor shows: the mark, the name, quick actions with their shortcuts, and recent folders.
+    fn render_welcome(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use forge_core::commands::Command;
         let t = &self.theme;
-        let rows: Vec<(String, Option<String>)> = [
-            (forge_core::commands::Command::QuickOpen, "Go to File"),
-            (forge_core::commands::Command::CommandPalette, "Show All Commands"),
-            (forge_core::commands::Command::FindInFiles, "Find in Files"),
-            (forge_core::commands::Command::ToggleTerminal, "Toggle Terminal"),
-            (forge_core::commands::Command::OpenFolder, "Open Folder"),
-        ]
-        .into_iter()
-        .map(|(c, label)| (label.to_owned(), self.keymap.shortcut_label(c)))
-        .collect();
+        let actions = [
+            (Command::OpenFolder, "Open Folder...", crate::codicons::FOLDER_OPENED),
+            (Command::NewFile, "New File...", crate::codicons::NEW_FILE),
+            (Command::QuickOpen, "Go to File...", crate::codicons::GO_TO_FILE),
+            (Command::CommandPalette, "Show All Commands", crate::codicons::CHEVRON_RIGHT),
+            (Command::FindInFiles, "Find in Files", crate::codicons::SEARCH),
+            (Command::ToggleTerminal, "Toggle Terminal", crate::codicons::TERMINAL),
+        ];
+        let heading = |text: &str| div().mt_5().mb_1().px_2().text_xs().text_color(rgb(t.dim)).child(text.to_uppercase());
+        let mark = crate::menu_bar::logo_mark(72.0);
+        let row = |id: (&'static str, usize), icon: char, label: String, detail: Option<String>, chip: Option<String>| {
+            div()
+                .id(id)
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .h(rems(2.0))
+                .px_2()
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(t.sidebar)))
+                .child(crate::icons::glyph(icon, 1.0, t.info))
+                .child(div().text_sm().text_color(rgb(t.text)).child(label))
+                .children(detail.map(|d| div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_xs().text_color(rgb(t.dim)).child(d)))
+                .when(chip.is_some(), |r| r.child(div().flex_1()))
+                .children(chip.map(|c| div().px_2().py(px(1.0)).rounded_sm().border_1().border_color(rgb(t.border)).text_xs().text_color(rgb(t.dim)).child(c)))
+        };
+        let mut list = div().flex().flex_col().w(rems(26.0)).child(heading("Start"));
+        for (i, (command, label, icon)) in actions.into_iter().enumerate() {
+            let chip = self.keymap.shortcut_label(command);
+            list = list.child(row(("welcome-action", i), icon, label.to_owned(), None, chip).on_click(cx.listener(move |this, _, _, cx| {
+                this.run_command(command, false, cx);
+                cx.notify();
+            })));
+        }
+        let recent: Vec<std::path::PathBuf> = self.recent_folders.iter().take(5).cloned().collect();
+        if !recent.is_empty() {
+            list = list.child(heading("Recent"));
+            for (i, path) in recent.into_iter().enumerate() {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().into_owned());
+                let parent = path.parent().map(|p| p.to_string_lossy().into_owned());
+                list = list.child(row(("welcome-recent", i), crate::codicons::FOLDER_OPENED, name, parent, None).on_click(cx.listener(move |this, _, _, cx| {
+                    if this.docs.iter().any(|d| d.dirty) {
+                        this.set_status("Save or close modified files before opening another folder");
+                    } else {
+                        this.open_folder(path.clone(), cx);
+                    }
+                    cx.notify();
+                })));
+            }
+        }
         div()
             .size_full()
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
-            .gap_2()
-            .text_color(rgb(t.dim))
-            .child(div().text_2xl().text_color(rgb(t.text)).child("Forge"))
-            .children(rows.into_iter().map(|(label, key)| div().flex().flex_row().gap_4().child(div().w(rems(10.625)).child(label)).child(div().text_color(rgb(t.text)).child(key.unwrap_or_default()))))
+            .child(mark)
+            .child(div().mt_4().text_3xl().text_color(rgb(t.text)).child("Forge"))
+            .child(div().mt_1().text_sm().text_color(rgb(t.dim)).child("A fast, GPU-rendered code editor"))
+            .child(list)
     }
 
     // ---- the editor ----
@@ -879,15 +923,18 @@ impl Workspace {
             let active = self.sidebar_view == view;
             div()
                 .id(("sidebar-tab", view as usize))
-                .px_4()
-                .h(rems(2.5))
+                .relative()
+                .w(rems(2.0))
+                .h(rems(2.0))
                 .flex()
-                .flex_row()
+                .flex_none()
                 .items_center()
-                .gap(rems(0.25))
+                .justify_center()
+                .rounded_md()
                 .cursor_pointer()
-                .border_b_1()
-                .border_color(rgb(if active { t.info } else { t.sidebar }))
+                .border_1()
+                .border_color(rgb(if active { t.dim } else { t.sidebar }))
+                .when(active, |d| d.bg(rgb(t.tab_active)))
                 .hover(|s| s.bg(rgb(t.tab_active)))
                 .tooltip(self.tooltip(name, Some(command)))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -903,8 +950,8 @@ impl Workspace {
                     }
                     cx.notify();
                 }))
-                .child(crate::icons::glyph(icon, 1.375, if active { t.text } else { t.dim }))
-                .children((badge > 0).then(|| div().min_w(rems(1.125)).h(rems(1.125)).px_1().rounded_full().flex().items_center().justify_center().text_xs().bg(rgb(t.button)).text_color(rgb(t.button_text)).child(badge.to_string())))
+                .child(crate::icons::glyph(icon, 1.25, if active { t.text } else { t.dim }))
+                .children((badge > 0).then(|| div().absolute().bottom(px(-2.0)).right(px(-2.0)).min_w(rems(0.9)).h(rems(0.9)).px(px(3.0)).rounded_full().flex().items_center().justify_center().text_size(px(9.0)).bg(rgb(t.button)).text_color(rgb(t.button_text)).child(badge.to_string())))
         };
         let body: AnyElement = match self.sidebar_view {
             SidebarView::Explorer => self.render_explorer(cx).into_any_element(),
@@ -928,10 +975,33 @@ impl Workspace {
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
                     .child(tab(crate::codicons::FILES, "Explorer", Command::FocusExplorer, SidebarView::Explorer, 0, cx))
                     .child(tab(crate::codicons::SEARCH, "Search", Command::FindInFiles, SidebarView::Search, 0, cx))
                     .child(tab(crate::codicons::SOURCE_CONTROL, "Source Control", Command::ShowGit, SidebarView::Git, changes, cx))
-                    .child(tab(crate::codicons::EXTENSIONS, "Extensions", Command::ShowExtensions, SidebarView::Extensions, 0, cx)),
+                    .child(tab(crate::codicons::EXTENSIONS, "Extensions", Command::ShowExtensions, SidebarView::Extensions, 0, cx))
+                    .child(
+                        div()
+                            .id("sidebar-more")
+                            .w(rems(2.0))
+                            .h(rems(2.0))
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(t.tab_active)))
+                            .tooltip(self.tooltip("More Views", None))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_more_views_menu(ev.position, cx);
+                            }))
+                            .child(crate::icons::glyph(crate::codicons::ELLIPSIS, 1.25, t.dim)),
+                    ),
             )
             .child(body)
     }
@@ -2065,6 +2135,8 @@ impl Workspace {
         let cur_visible = cur_visible && scrolled == 0;
         let line_h = px(self.line_height());
         let focused = self.focus == Focus::Terminal;
+        let sel_range = self.term_selection_range();
+        let bounds_cell = self.term_bounds.clone();
         let mut lines: Vec<Div> = Vec::with_capacity(rows as usize);
         for row in 0..rows {
             let runs = terminal.row_runs(row);
@@ -2090,6 +2162,21 @@ impl Workspace {
             if focused && cur_visible && row == cur_row {
                 line = line.child(div().absolute().top_0().left(self.char_width * f32::from(cur_col)).w(self.char_width).h(line_h).bg(rgb(t.caret)).opacity(0.6));
             }
+            // The selection, and an underline under the link the pointer is on.
+            if let Some((from, to)) = sel_range.filter(|(a, b)| (a.0..=b.0).contains(&row)) {
+                let first = if row == from.0 { from.1 } else { 0 };
+                let last = if row == to.0 {
+                    to.1
+                } else {
+                    terminal.row_chars(row).iter().rposition(|c| !c.is_whitespace()).map_or(0, |c| c as u16)
+                };
+                if last >= first {
+                    line = line.child(div().absolute().top_0().left(self.char_width * f32::from(first)).w(self.char_width * f32::from(last - first + 1)).h(line_h).bg(rgb(t.selection)).opacity(0.9));
+                }
+            }
+            if let Some(hit) = self.term_link.as_ref().filter(|h| h.terminal == self.active_terminal && h.row == row) {
+                line = line.child(div().absolute().top(line_h - px(2.0)).left(self.char_width * hit.link.start as f32).w(self.char_width * (hit.link.end - hit.link.start) as f32).h(px(1.0)).bg(rgb(t.info)));
+            }
             lines.push(line);
         }
         // A thin scroll bar on the right while there is history to scroll through.
@@ -2099,19 +2186,23 @@ impl Workspace {
             let top = (history - scrolled) as f32 / history as f32 * (1.0 - thumb);
             div().absolute().top_0().right_0().bottom_0().w(px(6.0)).child(div().absolute().right(px(1.0)).w(px(4.0)).rounded_full().bg(rgb(if scrolled > 0 { t.dim } else { t.border })).top(relative(top)).h(relative(thumb)))
         });
-        div()
-            .id("terminal-view")
-            .relative()
-            .size_full()
-            .cursor_text()
+        let on_link = self.term_link.as_ref().is_some_and(|h| h.terminal == self.active_terminal);
+        let view = div().id("terminal-view").relative().size_full();
+        let view = if on_link { view.cursor_pointer() } else { view.cursor_text() };
+        view
             .px_2()
             .py_1()
             .overflow_hidden()
-            // Clicking the terminal gives it the keyboard, like clicking an editor does.
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                this.focus = Focus::Terminal;
+            // Clicking the terminal gives it the keyboard and starts a selection (or opens a link on release).
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                this.terminal_mouse_down(ev, cx);
                 cx.notify();
             }))
+            .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                this.terminal_mouse_down(ev, cx);
+                cx.notify();
+            }))
+            .child(gpui::canvas(move |bounds, _, _| bounds_cell.set(bounds), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
             .on_scroll_wheel(cx.listener(|this, ev: &gpui::ScrollWheelEvent, _, cx| {
                 let line = px(this.line_height());
                 let lines = f32::from(ev.delta.pixel_delta(line).y) / f32::from(line);

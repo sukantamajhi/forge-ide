@@ -414,6 +414,9 @@ impl Workspace {
         }
         let moved_far = self.mouse.is_none_or(|p| (p.x - ev.position.x).abs() > px_f(2.0) || (p.y - ev.position.y).abs() > px_f(2.0));
         self.mouse = Some(ev.position);
+        if self.terminal_mouse_move(ev) {
+            cx.notify();
+        }
         let over_word = (ev.modifiers.control || ev.modifiers.platform) && self.point_at(ev.position).is_some_and(|(g, line, col)| {
             let doc = self.groups[g].views.get(self.groups[g].active).map(|v| &self.docs[v.doc]);
             doc.is_some_and(|d| d.buffer.line(line).chars().nth(col).is_some_and(|c| c.is_alphanumeric() || c == '_'))
@@ -468,7 +471,8 @@ impl Workspace {
         }
     }
 
-    pub fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Context<Self>) {
+    pub fn on_mouse_up(&mut self, ev: &MouseUpEvent, cx: &mut Context<Self>) {
+        self.terminal_mouse_up(ev, cx);
         self.drag = None;
         self.scm_dragging = false;
         self.minimap_dragging = false;
@@ -1815,6 +1819,7 @@ impl Workspace {
     /// The mouse wheel over the terminal. `lines` is positive for up (older output). A full-screen
     /// program such as a pager gets arrow keys instead, as in other terminals.
     pub fn scroll_terminal(&mut self, lines: f32) {
+        self.term_sel = None;
         let Some(terminal) = self.terminals.get_mut(self.active_terminal) else { return };
         let mut step = lines.round() as isize;
         if step == 0 && lines != 0.0 {
@@ -1840,6 +1845,13 @@ impl Workspace {
             }
         }
         let m = k.modifiers;
+        if matches!(pressed, "ctrl+c" | "ctrl+shift+c") && self.copy_terminal_selection(cx) {
+            self.term_sel = None;
+            return true;
+        }
+        if pressed != "ctrl+shift+c" {
+            self.term_sel = None;
+        }
         let Some(terminal) = self.terminals.get_mut(self.active_terminal) else { return false };
         // Shift+PageUp / PageDown / Home / End move through the history instead of reaching the shell.
         let page = (terminal.size().0.saturating_sub(1) as isize).max(1);

@@ -2,19 +2,14 @@
   <title>Forge</title>
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2E2723"/>
-      <stop offset="1" stop-color="#141110"/>
-    </linearGradient>
-    <linearGradient id="ember" gradientUnits="userSpaceOnUse" x1="0" y1="76" x2="0" y2="214">
-      <stop offset="0" stop-color="#FFB84A"/>
-      <stop offset="1" stop-color="#E94F1B"/>
+      <stop offset="0" stop-color="#242730"/>
+      <stop offset="1" stop-color="#121419"/>
     </linearGradient>
   </defs>
   <rect width="256" height="256" rx="58" fill="url(#tile)"/>
-  <g fill="url(#ember)">
-    <polygon points="50,76 156,76 186,80 216,90 200,97 186,105 172,113 50,113"/>
-    <polygon points="66,113 104,113 104,188 130,188 130,214 40,214 40,188 66,188"/>
-    <polygon points="104,136 152,136 152,160 104,160"/>
-  </g>
-  <polygon points="200,28 206,46 224,52 206,58 200,76 194,58 176,52 194,46" fill="#FFDC8A"/>
+  <rect x="56" y="57" width="84" height="22" rx="11" fill="#F2F2F2"/>
+  <rect x="86" y="97" width="116" height="22" rx="11" fill="#8A90A0"/>
+  <rect x="86" y="137" width="62" height="22" rx="11" fill="#FF8A1F"/>
+  <rect x="56" y="177" width="100" height="22" rx="11" fill="#F2F2F2"/>
+  <rect x="162" y="131" width="12" height="34" rx="6" fill="#FF8A1F"/>
 </svg>

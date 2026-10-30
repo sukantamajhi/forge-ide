@@ -4,6 +4,8 @@
 
 pub const PREVIEW: char = '\u{eb2f}';
 pub const GO_TO_FILE: char = '\u{ea94}';
+pub const TERMINAL: char = '\u{ea85}';
+pub const FOLDER_OPENED: char = '\u{eaf7}';
 pub const NEW_FILE: char = '\u{ea7f}';
 pub const NEW_FOLDER: char = '\u{ea80}';
 pub const COLLAPSE_ALL: char = '\u{eac5}';

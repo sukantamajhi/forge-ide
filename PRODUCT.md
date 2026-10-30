@@ -32,7 +32,7 @@ Documented in README.md: multi-cursor and VS Code-style editing, find/replace an
 
 ## Brand Commitments
 
-Name: Forge. Logo: `assets/forge-logo.svg` (an anvil shaped like the letter F, with a spark); icon `assets/forge.ico`. Repository: https://github.com/sukantamajhi/forge-ide. Claims limited to what README.md states.
+Name: Forge. Logo: `assets/forge-logo.svg` (lines of code with an orange line and a text caret on a dark tile); icon `assets/forge.ico`. Repository: https://github.com/sukantamajhi/forge-ide. Claims limited to what README.md states.
 
 ## Evidence on Hand
 

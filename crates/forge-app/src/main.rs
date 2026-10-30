@@ -34,6 +34,7 @@ mod file_icons;
 mod server_support;
 mod session_support;
 mod settings_view;
+mod terminal_mouse;
 mod tree;
 mod wrap;
 mod workspace;
