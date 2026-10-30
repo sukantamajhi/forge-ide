@@ -2672,6 +2672,11 @@ impl Render for Workspace {
                 self.set_status(format!("Product icon theme: {error}"));
             }
         }
+        let titlebar = crate::titlebar::key(&self.theme);
+        if self.titlebar_key != Some(titlebar) {
+            crate::titlebar::apply(window, &self.theme);
+            self.titlebar_key = Some(titlebar);
+        }
         self.sync_terminal_size(window.viewport_size().width);
         let cols = self.scm_wrap_cols();
         self.scm_message.set_wrap(cols);

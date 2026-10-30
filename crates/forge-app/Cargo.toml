@@ -18,6 +18,7 @@ forge-syntax = { path = "../forge-syntax" }
 forge-lsp = { path = "../forge-lsp" }
 forge-ext-host = { path = "../forge-ext-host" }
 gpui = "=0.2.2"
+raw-window-handle = "0.6"
 ttf-parser = "0.25"
 flate2 = "1"
 anyhow.workspace = true

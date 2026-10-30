@@ -794,6 +794,8 @@ pub(crate) struct Workspace {
     /// The font settings the code and UI fonts and the character width were worked out for.
     pub font_key: Option<(String, String, u32)>,
     pub code_link_hover: bool,
+    /// The theme colours the title bar was last painted with.
+    pub titlebar_key: Option<crate::titlebar::Key>,
     /// Where the terminal view was last drawn, to turn mouse positions into cells.
     pub term_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     pub term_sel: Option<crate::terminal_mouse::TermSel>,
@@ -1015,6 +1017,7 @@ impl Workspace {
             defer_syntax: false,
             font_key: None,
             code_link_hover: false,
+            titlebar_key: None,
             term_bounds: Default::default(),
             term_sel: None,
             term_link: None,
