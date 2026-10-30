@@ -35,6 +35,8 @@ pub(crate) enum MenuAction {
     PasteEntry,
     CloseOthers,
     CloseAll,
+    /// A title hidden behind the title bar's "...": open its menu.
+    BarMenu(usize),
     /// A choice from the menu of one particular tab: group `g`, tab `vi`.
     Tab { op: TabOp, g: usize, vi: usize },
 }
@@ -500,6 +502,10 @@ impl Workspace {
     /// Run the enabled item at `ix` of the open menu, closing the menu.
     fn run_menu_item(&mut self, ix: usize, cx: &mut Context<Self>) {
         let Some(menu) = self.context_menu.take() else { return };
+        if let Some(MenuEntry::Item { action: MenuAction::BarMenu(i), enabled: true, .. }) = menu.entries.get(ix) {
+            self.open_bar_menu_at(*i, menu.position, cx);
+            return;
+        }
         if let Some(MenuEntry::Item { action, enabled: true, .. }) = menu.entries.get(ix) {
             self.run_menu_action(action.clone(), menu.target, cx);
         }
@@ -508,6 +514,7 @@ impl Workspace {
 
     fn run_menu_action(&mut self, action: MenuAction, target: Option<(PathBuf, bool)>, cx: &mut Context<Self>) {
         match action {
+            MenuAction::BarMenu(_) => {}
             MenuAction::Command(command) => {
                 self.focus = Focus::Editor;
                 self.run_command(command, false, cx);

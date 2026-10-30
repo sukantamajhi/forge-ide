@@ -4,6 +4,13 @@
 
 pub const PREVIEW: char = '\u{eb2f}';
 pub const GO_TO_FILE: char = '\u{ea94}';
+pub const ARROW_LEFT: char = '\u{ea9b}';
+pub const ARROW_RIGHT: char = '\u{ea9c}';
+pub const LAYOUT_SIDEBAR_LEFT: char = '\u{ebf3}';
+pub const LAYOUT_SIDEBAR_LEFT_OFF: char = '\u{ec02}';
+pub const LAYOUT_PANEL: char = '\u{ebf2}';
+pub const SETTINGS_GEAR: char = '\u{eb51}';
+pub const MENU: char = '\u{eb94}';
 pub const TERMINAL: char = '\u{ea85}';
 pub const FOLDER_OPENED: char = '\u{eaf7}';
 pub const NEW_FILE: char = '\u{ea7f}';

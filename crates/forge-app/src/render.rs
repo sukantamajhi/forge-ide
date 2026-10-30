@@ -2725,7 +2725,7 @@ impl Render for Workspace {
             .text_color(rgb(t.text))
             .font_family(self.code_font.clone())
             .text_size(px(self.settings.font_size))
-            .child(self.render_menu_bar(cx))
+            .child(self.render_menu_bar(window, cx))
             .child(main)
             .child(self.render_status(cx))
             .children(self.render_completion())

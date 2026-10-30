@@ -86,7 +86,7 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions { title: Some("Forge".into()), ..Default::default() }),
+            titlebar: Some(TitlebarOptions { title: Some("Forge".into()), appears_transparent: true, ..Default::default() }),
             ..Default::default()
         };
         cx.open_window(options, move |window, cx| {
