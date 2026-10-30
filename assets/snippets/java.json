@@ -1,0 +1,112 @@
+{
+  "main": {
+    "prefix": "main",
+    "body": [
+      "public static void main(String[] args) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "main method"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "public class ${1:${TM_FILENAME_BASE}} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A class"
+  },
+  "interface": {
+    "prefix": "interface",
+    "body": [
+      "public interface ${1:${TM_FILENAME_BASE}} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "An interface"
+  },
+  "println": {
+    "prefix": "sout",
+    "body": [
+      "System.out.println(${1});"
+    ],
+    "description": "System.out.println"
+  },
+  "for": {
+    "prefix": "fori",
+    "body": [
+      "for (int ${1:i} = 0; ${1:i} < ${2:n}; ${1:i}++) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A for loop"
+  },
+  "foreach": {
+    "prefix": "foreach",
+    "body": [
+      "for (${1:Type} ${2:item} : ${3:items}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "enhanced for"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if (${1:condition}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "if"
+  },
+  "try catch": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:Exception} ${3:e}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "try / catch"
+  },
+  "constructor": {
+    "prefix": "ctor",
+    "body": [
+      "public ${1:${TM_FILENAME_BASE}}(${2}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A constructor"
+  },
+  "method": {
+    "prefix": "method",
+    "body": [
+      "public ${1:void} ${2:name}(${3}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A method"
+  },
+  "test": {
+    "prefix": "test",
+    "body": [
+      "@Test",
+      "void ${1:name}() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A JUnit test"
+  },
+  "switch": {
+    "prefix": "switch",
+    "body": [
+      "switch (${1:value}) {",
+      "\tcase ${2:x} -> $0;",
+      "\tdefault -> {}",
+      "}"
+    ],
+    "description": "A switch expression"
+  }
+}

@@ -81,6 +81,10 @@ pub struct Settings {
     pub auto_save_delay_ms: u64,
     /// `explorer.confirmDragAndDrop`: ask before a dragged file or folder is moved.
     pub confirm_drag_and_drop: bool,
+    /// `editor.snippetSuggestions`: list snippets in the completion popup (anything but `"none"`).
+    pub snippet_suggestions: bool,
+    /// `editor.builtInSnippets`: the snippets that come with Forge (for every language).
+    pub builtin_snippets: bool,
     /// `"[language]": { ... }` blocks, keyed by VS Code language id (`rust`, `python`, ...).
     pub languages: std::collections::BTreeMap<String, LangOverrides>,
     /// `ai.model` in settings.json: the OpenAI model that writes commit messages.
@@ -113,6 +117,8 @@ impl Default for Settings {
             auto_save: AutoSave::Off,
             auto_save_delay_ms: 1000,
             confirm_drag_and_drop: true,
+            snippet_suggestions: true,
+            builtin_snippets: true,
             languages: Default::default(),
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
             ai_provider: crate::ai::Provider::default(),
@@ -234,6 +240,12 @@ impl Settings {
         }
         if let Some(v) = map.get("files.autoSave").and_then(Value::as_str).and_then(AutoSave::from_id) {
             s.auto_save = v;
+        }
+        if let Some(v) = map.get("editor.snippetSuggestions").and_then(Value::as_str) {
+            s.snippet_suggestions = v != "none";
+        }
+        if let Some(v) = map.get("editor.builtInSnippets").and_then(Value::as_bool) {
+            s.builtin_snippets = v;
         }
         if let Some(v) = map.get("editor.fontFamily").and_then(Value::as_str) {
             s.font_family = v.trim().to_owned();
@@ -415,6 +427,10 @@ mod tests {
         assert_eq!(Settings::parse(r#"{ "files.autoSave": "onWindowChange" }"#).auto_save, AutoSave::OnFocusChange);
         assert_eq!(Settings::parse(r#"{ "files.autoSave": "nonsense" }"#).auto_save, AutoSave::Off);
         assert!(Settings::default().confirm_drag_and_drop);
+        assert!(Settings::default().snippet_suggestions && Settings::default().builtin_snippets);
+        assert!(!Settings::parse(r#"{ "editor.builtInSnippets": false }"#).builtin_snippets);
+        assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);
+        assert!(Settings::parse(r#"{ "editor.snippetSuggestions": "top" }"#).snippet_suggestions);
         let f = Settings::parse(r#"{ "editor.fontFamily": " JetBrains Mono ", "workbench.fontFamily": "Inter" }"#);
         assert_eq!((f.font_family.as_str(), f.ui_font_family.as_str()), ("JetBrains Mono", "Inter"));
         assert!(!Settings::parse(r#"{ "explorer.confirmDragAndDrop": false }"#).confirm_drag_and_drop);

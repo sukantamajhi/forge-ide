@@ -142,6 +142,26 @@ cargo build --release -p forge-app            # LTO; slow first build
     **Focus on Outline View** opens the symbols picker for the file (the same list as Go to Symbol in Editor), not a permanent tree.
   - **Images and binary files:** PNG, JPEG, GIF, BMP, WebP and ICO files open in a viewer over the editor (Escape or Close to leave).
     Any other file that is not UTF-8 opens as a read-only hex dump of its first 256 KiB.
+- **Snippets** (VS Code's format):
+  - **In the completion popup.** As you type a word that starts a snippet's prefix, the popup lists it ("snippet: description") along
+    with language-server items; Enter or Tab inserts it. Tab right after a full prefix still expands it. `"editor.snippetSuggestions": "none"` turns the listing off.
+  - **Walking the stops.** Tab / Shift+Tab move between `$1`, `$2`, `${3:placeholder}`; `$0` is where the caret ends; Escape leaves the
+    snippet. Typing in a stop edits every mirror of it at once. `${1|red,green,blue|}` opens a dropdown of the options (arrows then
+    Enter or Tab; Tab also moves on).
+  - **Variables:** `TM_FILENAME`, `TM_FILENAME_BASE`, `TM_DIRECTORY`, `TM_FILEPATH`, `RELATIVE_FILEPATH`, `WORKSPACE_NAME`, `WORKSPACE_FOLDER`,
+    `TM_SELECTED_TEXT`, `TM_CURRENT_LINE`, `TM_CURRENT_WORD`, `TM_LINE_INDEX`, `TM_LINE_NUMBER`, `CLIPBOARD`, `LINE_COMMENT`, `BLOCK_COMMENT_START` / `END`,
+    the `CURRENT_*` date and time ones (local time, including day and month names and `CURRENT_SECONDS_UNIX`), `RANDOM`, `RANDOM_HEX` and `UUID`.
+    `${VAR:default}` uses the default when the variable is empty.
+  - **Transforms:** `${TM_FILENAME_BASE/(.*)/${1:/upcase}/}`, with `/g` and `/i`, the `$1` and `${1:/downcase | capitalize | pascalcase | camelcase}`
+    forms and `${1:+if}` / `${1:-else}` / `${1:?if:else}`. A transform is worked out once when the snippet is inserted; it does not follow later typing.
+  - **Built in:** Forge ships about 290 snippets, kept in `assets/snippets` and built into the program: for Rust, Python,
+    JavaScript / TypeScript (with React hooks and components for `.jsx` / `.tsx`), HTML, CSS, Markdown, Go, C, C++, Java, C#, PHP, Ruby, Lua, SQL,
+    shell, YAML (GitHub Actions, Compose, Kubernetes), TOML (Cargo, pyproject), JSON (`package`, `tsconfig`, `launch`), Dockerfile and Makefile, plus
+    ones for every language (`todo`, `fixme`, `note`, `date`, `datetime`, `uuid`, `lorem`, `clip`, `region`...). Type `fn`, `def`, `log`, `class`, `iferr`, `rfc`,
+    `html5`... and press Tab. Your own snippet with the same prefix wins. `"editor.builtInSnippets": false` turns them all off.
+  - **Your own snippets:** **Configure User Snippets** (File menu or the palette) asks for a language (or "New Global Snippets file") and opens
+    `snippets\<language id>.json` (or `global.code-snippets`) next to `settings.json`, creating it with an explanation. Saving the file reloads the snippets.
+    **Insert Snippet...** lists what applies to the file. Snippets from installed extensions work too.
 - **Fonts and icons:** code, the terminal and diffs use a monospace font (Cascadia Mono, then Cascadia Code, then Consolas); menus,
   tabs, the side bar, the status bar, Settings and dialogs use a sans font (Segoe UI Variable Text, then Segoe UI). Pick others
   with `"editor.fontFamily"` and `"workbench.fontFamily"` (a name Windows has installed; a missing one falls back to the list).
@@ -277,7 +297,7 @@ an extension that needs more installs and activates but the missing parts throw 
 | Color themes | Used: workbench colors and token rules are mapped onto Forge's colors and token classes. Pick one in the theme list or set `workbench.colorTheme`. Semantic colors, font styles and descendant selectors (`a b`) are ignored. |
 | Languages | Used for languages Forge does not bundle: file detection by extension, name or glob, the status-bar name, comment toggling from `language-configuration.json`. Bracket and auto-closing pairs are read but not yet used. First-line (shebang) detection is not. |
 | TextMate grammars | Used for those languages, through a pure-Rust port of vscode-textmate (`irosashi`): colors follow the active theme. JSON grammars only (`.tmLanguage.json`); plist and YAML grammars are skipped. Files over 1 MiB stay plain. Embedded languages and injection grammars are ignored. |
-| Snippets | Used: type a prefix and press Tab, Tab/Shift+Tab move between stops, Escape ends; mirrors edit together; choices insert their first option. Your own: `snippets\<language id>.json` (or `*.code-snippets` for all) next to `settings.json`. |
+| Snippets | Used: see "Snippets" above (popup, Tab stops, choices, variables, transforms). Your own: `snippets\<language id>.json` (or `*.code-snippets` for all) next to `settings.json`. |
 | Commands, views, status bar, anything in `main` | Not run. |
 
 ### The extension host
@@ -351,7 +371,7 @@ run yet**: that is the next step and needs you to choose which ones.
 - **Highlighting:** embedded code is highlighted (`<script>` / `<style>` in HTML, fenced code in Markdown) but not above 512 KiB,
   and not inside template strings, `style=""` attributes or PHP / HTML mixes. SCSS / Less use the CSS grammar and `.h` files are
   treated as C.
-- **Completions** are plain text, and snippets are not offered in the completion popup.
+- **Completions** from language servers are inserted as plain text (a server's own snippet-format completions are not expanded); snippet transforms do not update live as you type.
 - **Language servers:** rust-analyzer, gopls, clangd, jdtls, csharp-ls, ruby-lsp, lua-language-server, taplo and sqls are
   configured but you install them yourself; `.env`, INI, Makefile, ignore files and diffs get highlighting only.
 - **Packaging:** the installer in `dist\` was built before the latest changes and has not been rebuilt.

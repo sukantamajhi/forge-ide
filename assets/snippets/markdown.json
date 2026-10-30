@@ -1,0 +1,79 @@
+{
+  "link": {
+    "prefix": "link",
+    "body": [
+      "[${1:text}](${2:url})"
+    ],
+    "description": "A link"
+  },
+  "image": {
+    "prefix": "img",
+    "body": [
+      "![${1:alt}](${2:path})"
+    ],
+    "description": "An image"
+  },
+  "code block": {
+    "prefix": "code",
+    "body": [
+      "```${1:language}",
+      "$0",
+      "```"
+    ],
+    "description": "A fenced code block"
+  },
+  "table": {
+    "prefix": "table",
+    "body": [
+      "| ${1:Column} | ${2:Column} |",
+      "| --- | --- |",
+      "| $0 | |"
+    ],
+    "description": "A table"
+  },
+  "task list": {
+    "prefix": "task",
+    "body": [
+      "- [ ] ${1:task}"
+    ],
+    "description": "A task list item"
+  },
+  "details": {
+    "prefix": "details",
+    "body": [
+      "<details>",
+      "<summary>${1:Summary}</summary>",
+      "",
+      "$0",
+      "",
+      "</details>"
+    ],
+    "description": "A collapsible section"
+  },
+  "front matter": {
+    "prefix": "front",
+    "body": [
+      "---",
+      "title: ${1:Title}",
+      "date: $CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE",
+      "---",
+      "",
+      "$0"
+    ],
+    "description": "YAML front matter"
+  },
+  "bold": {
+    "prefix": "bold",
+    "body": [
+      "**${1:text}**"
+    ],
+    "description": "Bold"
+  },
+  "quote": {
+    "prefix": "quote",
+    "body": [
+      "> ${1:quote}"
+    ],
+    "description": "A block quote"
+  }
+}

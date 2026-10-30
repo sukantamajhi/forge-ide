@@ -1,0 +1,58 @@
+{
+  "GitHub Actions workflow": {
+    "prefix": "gha",
+    "body": [
+      "name: ${1:CI}",
+      "on:",
+      "  push:",
+      "    branches: [${2:main}]",
+      "  pull_request:",
+      "jobs:",
+      "  ${3:build}:",
+      "    runs-on: ${4:ubuntu-latest}",
+      "    steps:",
+      "      - uses: actions/checkout@v4",
+      "      - name: ${5:Run}",
+      "        run: ${6:echo hello}"
+    ],
+    "description": "A GitHub Actions workflow"
+  },
+  "Docker Compose": {
+    "prefix": "compose",
+    "body": [
+      "services:",
+      "  ${1:app}:",
+      "    image: ${2:image:tag}",
+      "    ports:",
+      "      - \"${3:8080}:${4:80}\"",
+      "    environment:",
+      "      - ${5:KEY}=${6:value}"
+    ],
+    "description": "A compose file"
+  },
+  "Kubernetes Deployment": {
+    "prefix": "k8sdeploy",
+    "body": [
+      "apiVersion: apps/v1",
+      "kind: Deployment",
+      "metadata:",
+      "  name: ${1:app}",
+      "spec:",
+      "  replicas: ${2:1}",
+      "  selector:",
+      "    matchLabels:",
+      "      app: ${1:app}",
+      "  template:",
+      "    metadata:",
+      "      labels:",
+      "        app: ${1:app}",
+      "    spec:",
+      "      containers:",
+      "        - name: ${1:app}",
+      "          image: ${3:image:tag}",
+      "          ports:",
+      "            - containerPort: ${4:80}"
+    ],
+    "description": "A Kubernetes Deployment"
+  }
+}

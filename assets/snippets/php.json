@@ -1,0 +1,100 @@
+{
+  "php tag": {
+    "prefix": "php",
+    "body": [
+      "<?php",
+      "",
+      "$0"
+    ],
+    "description": "An opening tag"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name}",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "A class"
+  },
+  "function": {
+    "prefix": "fn",
+    "body": [
+      "function ${1:name}(${2}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A function"
+  },
+  "method": {
+    "prefix": "method",
+    "body": [
+      "public function ${1:name}(${2})",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "A method"
+  },
+  "constructor": {
+    "prefix": "ctor",
+    "body": [
+      "public function __construct(${1})",
+      "{",
+      "\t$0",
+      "}"
+    ],
+    "description": "A constructor"
+  },
+  "foreach": {
+    "prefix": "foreach",
+    "body": [
+      "foreach (${1:$items} as ${2:$item}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "foreach"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if (${1:condition}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "if"
+  },
+  "try catch": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:Exception} ${3:$e}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "try / catch"
+  },
+  "echo": {
+    "prefix": "echo",
+    "body": [
+      "echo ${1};"
+    ],
+    "description": "echo"
+  },
+  "var_dump": {
+    "prefix": "vd",
+    "body": [
+      "var_dump(${1});"
+    ],
+    "description": "var_dump"
+  },
+  "namespace": {
+    "prefix": "ns",
+    "body": [
+      "namespace ${1:App};"
+    ],
+    "description": "namespace"
+  }
+}

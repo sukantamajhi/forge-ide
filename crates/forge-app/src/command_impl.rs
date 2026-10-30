@@ -76,6 +76,7 @@ impl Workspace {
                 }
             }
             InsertSnippet => self.open_overlay(OverlayKind::Snippets, ""),
+            ConfigureSnippets => self.open_overlay(OverlayKind::SnippetFiles, ""),
             ExtensionsRestartHost => {
                 self.restart_host();
                 self.set_status("Extension host restarted");
@@ -575,8 +576,11 @@ impl Workspace {
             _ => false,
         };
         let open = self.completion.is_some();
-        if just_typed_access || (identifier && (open || after_access)) || (open && backspace) {
+        if (just_typed_access || (identifier && (open || after_access)) || (open && backspace)) && self.lsp_target().is_some() {
             self.request_completion();
+        } else if (identifier || (open && backspace)) && !after_access && start < caret {
+            // No server to ask (or nothing for it to add): offer the snippets whose prefix matches the word.
+            self.show_snippet_popup();
         } else if open {
             self.completion = None;
         }

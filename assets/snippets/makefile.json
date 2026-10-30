@@ -1,0 +1,26 @@
+{
+  "phony target": {
+    "prefix": "phony",
+    "body": [
+      ".PHONY: ${1:target}",
+      "${1:target}:",
+      "\t$0"
+    ],
+    "description": "A phony target"
+  },
+  "target": {
+    "prefix": "target",
+    "body": [
+      "${1:target}: ${2:deps}",
+      "\t$0"
+    ],
+    "description": "A target"
+  },
+  "variable": {
+    "prefix": "var",
+    "body": [
+      "${1:NAME} ?= ${2:value}"
+    ],
+    "description": "A variable"
+  }
+}

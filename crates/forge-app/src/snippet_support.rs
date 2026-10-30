@@ -2,12 +2,39 @@
 //! "Insert Snippet..." command lists what applies to the current language.
 
 use forge_core::settings::config_dir;
-use forge_core::snippet::{civil_date, expand, parse_snippet_file, Context as SnippetContext, Snippet};
+use forge_core::snippet::{expand, local_now, parse_snippet_file, Context as SnippetContext, Snippet};
+use forge_lsp::CompletionItem;
+use forge_syntax::Language;
 use forge_ext_host::Extension;
 use forge_text::{map_offset_through_edits, Selection, SelectionSet, TextEdit};
 use gpui::Context;
 
+use crate::completion::{identifier_start, is_identifier_char, CompletionState};
 use crate::workspace::{Item, ItemAction, Workspace};
+
+/// A completion item made here rather than by a language server is told apart by its `sort_text`.
+const SNIPPET_MARK: &str = "\u{1}snippet:";
+const CHOICE_MARK: &str = "\u{1}choice";
+
+pub enum ItemKind {
+    /// Snippet number `n` of the snippets list.
+    Snippet(usize),
+    /// One option of a `${1|a,b|}` placeholder.
+    Choice,
+    Server,
+}
+
+pub fn item_kind(sort_text: &str) -> ItemKind {
+    if let Some(n) = sort_text.strip_prefix(SNIPPET_MARK).and_then(|n| n.parse().ok()) {
+        ItemKind::Snippet(n)
+    } else if sort_text == CHOICE_MARK {
+        ItemKind::Choice
+    } else {
+        ItemKind::Server
+    }
+}
+
+const SNIPPET_TEMPLATE: &str = "{\n\t// Place your snippets here. Each snippet has a name, a prefix (what you type, then press Tab), a body and a description.\n\t// In a body, $1, $2 are tab stops (Tab moves to the next one, $0 is where the caret ends), ${1:text} is a placeholder,\n\t// ${1|one,two|} offers a list, and the same number twice edits both places. Variables: $TM_FILENAME, $CLIPBOARD,\n\t// $CURRENT_YEAR, $UUID, ${TM_FILENAME_BASE/(.*)/${1:/upcase}/} and more.\n\t// Example:\n\t// \"Print to console\": {\n\t//   \"prefix\": \"log\",\n\t//   \"body\": [\"console.log('$1');\", \"$0\"],\n\t//   \"description\": \"Log output to the console\"\n\t// }\n}\n";
 
 pub struct SnippetEntry {
     /// Language ids it applies to; empty means every language.
@@ -21,12 +48,52 @@ pub struct SnippetSession {
     pub doc: usize,
     pub stops: Vec<Vec<(usize, usize)>>,
     pub current: usize,
+    /// Placeholders that offer a list of options, following edits like the stops do.
+    pub choices: Vec<((usize, usize), Vec<String>)>,
 }
 
 /// Snippets from installed extensions, and from the user's `snippets` folder
 /// (`<language id>.json` for one language, `*.code-snippets` for all).
-pub fn load_snippets(extensions: &[Extension]) -> Vec<SnippetEntry> {
+/// The snippets Forge ships (`assets/snippets`): the language ids each file applies to (none means every language).
+const BUILTIN: &[(&[&str], &str, &str)] = &[
+    (&[], "all languages", include_str!("../../../assets/snippets/global.json")),
+    (&["rust"], "Rust", include_str!("../../../assets/snippets/rust.json")),
+    (&["python"], "Python", include_str!("../../../assets/snippets/python.json")),
+    (&["javascript", "javascriptreact", "typescript", "typescriptreact"], "JavaScript", include_str!("../../../assets/snippets/javascript.json")),
+    (&["typescript", "typescriptreact"], "TypeScript", include_str!("../../../assets/snippets/typescript.json")),
+    (&["javascriptreact", "typescriptreact"], "React", include_str!("../../../assets/snippets/react.json")),
+    (&["html"], "HTML", include_str!("../../../assets/snippets/html.json")),
+    (&["css"], "CSS", include_str!("../../../assets/snippets/css.json")),
+    (&["markdown"], "Markdown", include_str!("../../../assets/snippets/markdown.json")),
+    (&["go"], "Go", include_str!("../../../assets/snippets/go.json")),
+    (&["c", "cpp"], "C", include_str!("../../../assets/snippets/c.json")),
+    (&["cpp"], "C++", include_str!("../../../assets/snippets/cpp.json")),
+    (&["java"], "Java", include_str!("../../../assets/snippets/java.json")),
+    (&["csharp"], "C#", include_str!("../../../assets/snippets/csharp.json")),
+    (&["php"], "PHP", include_str!("../../../assets/snippets/php.json")),
+    (&["ruby"], "Ruby", include_str!("../../../assets/snippets/ruby.json")),
+    (&["lua"], "Lua", include_str!("../../../assets/snippets/lua.json")),
+    (&["sql"], "SQL", include_str!("../../../assets/snippets/sql.json")),
+    (&["shellscript"], "Shell", include_str!("../../../assets/snippets/shellscript.json")),
+    (&["yaml"], "YAML", include_str!("../../../assets/snippets/yaml.json")),
+    (&["toml"], "TOML", include_str!("../../../assets/snippets/toml.json")),
+    (&["json"], "JSON", include_str!("../../../assets/snippets/json.json")),
+    (&["dockerfile"], "Dockerfile", include_str!("../../../assets/snippets/dockerfile.json")),
+    (&["makefile"], "Makefile", include_str!("../../../assets/snippets/makefile.json")),
+];
+
+pub fn builtin_snippets() -> Vec<SnippetEntry> {
     let mut entries = Vec::new();
+    for (languages, label, text) in BUILTIN {
+        for snippet in parse_snippet_file(text).unwrap_or_default() {
+            entries.push(SnippetEntry { languages: languages.iter().map(|l| (*l).to_owned()).collect(), snippet, source: format!("built-in, {label}") });
+        }
+    }
+    entries
+}
+
+pub fn load_snippets(extensions: &[Extension], builtin: bool) -> Vec<SnippetEntry> {
+    let mut entries = if builtin { builtin_snippets() } else { Vec::new() };
     for extension in extensions {
         for contribution in &extension.manifest.contributes.snippets {
             let Some(path) = extension.resolve(&contribution.path) else { continue };
@@ -114,8 +181,15 @@ impl Workspace {
         let before: String = doc.buffer.rope().slice(line_start..range.0).to_string();
         let current_line = doc.buffer.rope().line(line).to_string().trim_end_matches(['\n', '\r']).to_owned();
         let _ = col;
-        let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let now = local_now();
         let ext = doc.ext_lang.as_ref().map(|l| &l.config);
+        let rope = doc.buffer.rope();
+        let word_start = identifier_start(&doc.buffer, range.0);
+        let mut word_end = range.0;
+        while word_end < rope.len_chars() && is_identifier_char(rope.char(word_end)) {
+            word_end += 1;
+        }
+        let current_word = rope.slice(word_start..word_end).to_string();
         let context = SnippetContext {
             file_path: doc.path.to_string_lossy().into_owned(),
             workspace_name: self.root().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -124,7 +198,15 @@ impl Workspace {
             line_comment: doc.language.and_then(|l| l.line_comment()).map(str::to_owned).or_else(|| ext.and_then(|c| c.line_comment.clone())),
             block_comment: doc.language.and_then(|l| l.block_comment()).map(|(o, c)| (o.to_owned(), c.to_owned())).or_else(|| ext.and_then(|c| c.block_comment.clone())),
             indent: before.chars().take_while(|c| *c == ' ' || *c == '\t').collect(),
-            date: civil_date(seconds),
+            date: now.date,
+            time: now.time,
+            weekday: now.weekday,
+            unix: now.unix,
+            clipboard: cx.read_from_clipboard().and_then(|c| c.text()).unwrap_or_default(),
+            current_word,
+            line_index: line,
+            relative_path: self.display_path(&doc.path),
+            workspace_folder: self.root().to_string_lossy().into_owned(),
         };
         let expanded = expand(&snippet.body, &context);
         let start = range.0;
@@ -139,9 +221,97 @@ impl Workspace {
         if expanded.stops.len() > 1 {
             if let Some(doc) = self.active_ix().map(|(g, vi)| self.groups[g].views[vi].doc) {
                 let stops = expanded.stops.iter().map(|ranges| ranges.iter().map(|(a, b)| (start + a, start + b)).collect()).collect();
-                self.snippet_session = Some(SnippetSession { doc, stops, current: 0 });
+                let choices = expanded.choices.iter().map(|((a, b), options)| ((start + a, start + b), options.clone())).collect();
+                self.snippet_session = Some(SnippetSession { doc, stops, current: 0, choices });
+                self.show_snippet_choices();
             }
         }
+    }
+
+    /// When the stop being visited is a `${1|a,b|}` placeholder, list its options in the completion popup.
+    fn show_snippet_choices(&mut self) {
+        let Some(session) = &self.snippet_session else { return };
+        let ranges = &session.stops[session.current];
+        let options = session.choices.iter().find(|(range, _)| ranges.contains(range)).map(|(_, options)| options.clone());
+        self.completion = options.map(|options| {
+            CompletionState::new(
+                options
+                    .into_iter()
+                    .map(|label| CompletionItem { label, detail: Some("choice".to_owned()), kind: Some(12), sort_text: Some(CHOICE_MARK.to_owned()), edit: None, insert_text: None })
+                    .collect(),
+            )
+        });
+    }
+
+    /// Snippets whose prefix starts with the word being typed, as completion items.
+    pub fn snippet_completion_items(&self, word: &str) -> Vec<CompletionItem> {
+        if word.is_empty() || !self.settings.snippet_suggestions {
+            return Vec::new();
+        }
+        let language = self.active_language_id();
+        let word = word.to_lowercase();
+        self.snippets
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| self.snippet_applies(e, &language))
+            .filter_map(|(i, e)| {
+                let prefix = e.snippet.prefixes.iter().find(|p| p.to_lowercase().starts_with(&word))?;
+                let detail = if e.snippet.description.is_empty() { e.snippet.name.clone() } else { e.snippet.description.clone() };
+                Some(CompletionItem { label: prefix.clone(), detail: Some(format!("snippet: {detail}")), kind: Some(15), sort_text: Some(format!("{SNIPPET_MARK}{i}")), edit: None, insert_text: None })
+            })
+            .take(30)
+            .collect()
+    }
+
+    /// Open the popup with only snippets (no language server answered, or there is none).
+    pub fn show_snippet_popup(&mut self) {
+        let Some(view) = self.active_view() else { return };
+        let Some(doc) = self.active_doc() else { return };
+        let caret = view.selections.primary().head;
+        let word = doc.buffer.rope().slice(identifier_start(&doc.buffer, caret)..caret).to_string();
+        let items = self.snippet_completion_items(&word);
+        self.completion = (!items.is_empty()).then(|| CompletionState::new(items));
+    }
+
+    /// The popup chose snippet `index`: it replaces the word before the caret.
+    pub fn accept_snippet_item(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(snippet) = self.snippets.get(index).map(|e| e.snippet.clone()) else { return };
+        let Some(view) = self.active_view() else { return };
+        let Some(doc) = self.active_doc() else { return };
+        let caret = view.selections.primary().head;
+        let start = identifier_start(&doc.buffer, caret);
+        self.insert_snippet(&snippet, (start, caret), cx);
+    }
+
+    /// The languages Configure User Snippets can make a file for.
+    pub fn snippet_file_items(&self, query: &str) -> Vec<Item> {
+        let query = query.to_lowercase();
+        let dir = config_dir().join("snippets");
+        let mut choices: Vec<(String, String, String)> = vec![("New Global Snippets file...".to_owned(), "global".to_owned(), "global.code-snippets".to_owned())];
+        choices.extend(Language::ALL.iter().map(|l| (l.name().to_owned(), l.language_id().to_owned(), format!("{}.json", l.language_id()))));
+        choices.push(("Plain Text".to_owned(), "plaintext".to_owned(), "plaintext.json".to_owned()));
+        choices
+            .into_iter()
+            .filter(|(name, id, _)| query.is_empty() || name.to_lowercase().contains(&query) || id.contains(&query))
+            .map(|(name, id, file)| {
+                let detail = if dir.join(&file).exists() { format!("{file} (exists)") } else { file };
+                Item { label: name, detail, positions: Vec::new(), action: ItemAction::SnippetFile(id) }
+            })
+            .collect()
+    }
+
+    /// Open the user's snippets file for `id` (a language id or `global`), creating it with an explanation first.
+    pub fn open_snippet_file(&mut self, id: &str, cx: &mut Context<Self>) {
+        let dir = config_dir().join("snippets");
+        let file = if id == "global" { "global.code-snippets".to_owned() } else { format!("{id}.json") };
+        let path = dir.join(file);
+        if !path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, SNIPPET_TEMPLATE)) {
+                self.set_status(format!("Cannot create {}: {e}", path.display()));
+                return;
+            }
+        }
+        self.open_file(&path, None, cx);
     }
 
     /// The word-like prefix before a lone caret that names a snippet for this language.
@@ -160,7 +330,8 @@ impl Workspace {
         for (index, entry) in self.snippets.iter().enumerate().filter(|(_, e)| self.snippet_applies(e, &language)) {
             for prefix in &entry.snippet.prefixes {
                 let len = prefix.chars().count();
-                if prefix_matches(&before, prefix) && best.is_none_or(|(_, best_len)| len > best_len) {
+                // On a tie the later one wins: user snippets come after built-in ones.
+                if prefix_matches(&before, prefix) && best.is_none_or(|(_, best_len)| len >= best_len) {
                     best = Some((index, len));
                 }
             }
@@ -182,6 +353,7 @@ impl Workspace {
             let Some(next) = next else { return false };
             session.current = next;
             let ranges = session.stops[next].clone();
+            self.completion = None;
             if next + 1 == session.stops.len() {
                 // The last stop ends the snippet.
                 self.snippet_session = None;
@@ -190,6 +362,7 @@ impl Workspace {
                 self.groups[g].views[vi].selections = SelectionSet::new(ranges.iter().map(|(a, b)| Selection { anchor: *a, head: *b }).collect());
                 self.reveal_caret(g, vi, false);
             }
+            self.show_snippet_choices();
             cx.notify();
             return true;
         }
@@ -214,12 +387,51 @@ impl Workspace {
                 *end = map_offset_through_edits(*end, edits).max(*start);
             }
         }
+        for ((start, end), _) in &mut session.choices {
+            *start = map_offset_through_edits(*start, edits);
+            *end = map_offset_through_edits(*end, edits).max(*start);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_builtin_file_parses_and_its_snippets_expand() {
+        let all = builtin_snippets();
+        assert!(all.len() > 250, "{} built-in snippets", all.len());
+        let context = forge_core::snippet::Context { file_path: "C:/p/my_file.rs".to_owned(), clipboard: "x".to_owned(), ..Default::default() };
+        for entry in &all {
+            let expanded = expand(&entry.snippet.body, &context);
+            assert!(!expanded.text.is_empty(), "{} expands to nothing", entry.snippet.name);
+            assert!(!expanded.stops.is_empty());
+            assert!(!entry.snippet.prefixes.iter().any(|p| p.contains(' ')), "{}: a prefix has a space", entry.snippet.name);
+        }
+        // Every language Forge knows has its own snippets, and "log" and "fn" are where people expect them.
+        for id in ["rust", "python", "javascript", "typescript", "html", "css", "go", "c", "cpp", "java", "csharp", "php", "ruby", "lua", "sql", "shellscript", "markdown", "yaml", "toml", "json", "dockerfile", "makefile"] {
+            assert!(all.iter().any(|e| e.languages.iter().any(|l| l == id)), "no snippets for {id}");
+        }
+        let has = |lang: &str, prefix: &str| all.iter().any(|e| e.languages.iter().any(|l| l == lang) && e.snippet.prefixes.iter().any(|p| p == prefix));
+        assert!(has("rust", "fn") && has("python", "def") && has("typescript", "log") && has("typescriptreact", "rfc") && has("go", "iferr"));
+        assert!(all.iter().any(|e| e.languages.is_empty() && e.snippet.prefixes.iter().any(|p| p == "todo")));
+    }
+
+    #[test]
+    fn a_snippet_without_a_name_clash_between_files_of_one_language_is_not_needed() {
+        // The same prefix may exist in several files (javascript and react both have none of each other's), but
+        // a single file never repeats a prefix.
+        for (_, label, text) in BUILTIN {
+            let snippets = parse_snippet_file(text).unwrap();
+            let mut seen = std::collections::BTreeSet::new();
+            for s in &snippets {
+                for p in &s.prefixes {
+                    assert!(seen.insert(p.clone()), "{label}: prefix {p} appears twice");
+                }
+            }
+        }
+    }
 
     fn matches(before: &str, prefix: &str) -> bool {
         prefix_matches(&before.chars().collect::<Vec<_>>(), prefix)

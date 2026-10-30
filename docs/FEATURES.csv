@@ -1,0 +1,97 @@
+ID,Area,Feature,Status,Priority,Verified,Notes,Owner,Updated
+F-001,Editing,Multi-cursor editing,Done,,App,Ctrl+D / Ctrl+Alt+Up/Down / Ctrl+Shift+L,,2026-10-30
+F-002,Editing,Find and replace in file,Done,,App,,,2026-10-30
+F-003,Editing,Find and Replace in Files,Done,,App,,,2026-10-30
+F-004,Editing,Code folding,Done,,App,,,2026-10-30
+F-005,Editing,Snippets,Done,,Tests,Not offered in the completion popup,,2026-10-30
+F-006,Editing,Format Document,Done,,App,Needs a language server; per-language tab size is used,,2026-10-30
+F-007,Editing,Format Selection,Partial,Medium,Not verified,Builds and sends rangeFormatting; never tried against a running language server,,2026-10-30
+F-008,Editing,Organize Imports,Partial,Medium,Not verified,Builds and sends source.organizeImports; never tried against a running language server,,2026-10-30
+F-009,Editing,Auto Save (afterDelay / onFocusChange),Done,,App,Saves only the file in front (afterDelay); format on save is not run by it,,2026-10-30
+F-010,Editing,Per-language settings ([lang] blocks),Partial,Low,Tests,Only editor.tabSize / insertSpaces / formatOnSave are read; other settings are global,,2026-10-30
+F-011,Editing,Word wrap and minimap,Done,,App,,,2026-10-30
+F-012,Editing,Emmet,Not started,Low,,,,2026-10-30
+F-013,Editing,Spell checking,Not started,Low,,,,2026-10-30
+F-014,Editing,Sticky scroll,Not started,Low,,,,2026-10-30
+F-015,Editing,Linked Editing,Not started,Low,,,,2026-10-30
+F-016,Editing,Drag and drop of text,Not started,Medium,,,,2026-10-30
+F-017,Editing,Bookmarks,Not started,Low,,,,2026-10-30
+F-018,Editing,Completions with snippets in the popup,Not started,Medium,,Completions are plain text today,,2026-10-30
+F-019,Navigation,Quick Open and Command Palette,Done,,App,,,2026-10-30
+F-020,Navigation,Go to Symbol / Line / Bracket,Done,,App,,,2026-10-30
+F-021,Navigation,Go Back / Go Forward (Alt+Left/Right),Done,,App,,,2026-10-30
+F-022,Navigation,Reopen Closed Editor (Ctrl+Shift+T),Done,,App,,,2026-10-30
+F-023,Navigation,Open Recent (Ctrl+R),Done,,App,,,2026-10-30
+F-024,Navigation,Zen mode,Done,,App,Hides side bar and panel only,,2026-10-30
+F-025,Navigation,Compare two files,Done,,App,Uses git diff --no-index; git must be installed,,2026-10-30
+F-026,Navigation,Outline (symbol picker),Partial,Medium,App,Picker only; no permanent tree view,,2026-10-30
+F-027,Navigation,Workspace symbol search (Ctrl+T),Not started,Medium,,Needs workspace/symbol request and an overlay,,2026-10-30
+F-028,Navigation,Peek Definition / References,Not started,Medium,,,,2026-10-30
+F-029,Navigation,Call Hierarchy and Type Hierarchy,Not started,Low,,,,2026-10-30
+F-030,Navigation,Search Editor,Not started,Low,,,,2026-10-30
+F-031,Workbench,Menu bar (File Edit Selection View Go Run Terminal Help),Done,,App,Mouse only,,2026-10-30
+F-032,Workbench,Menu bar access keys (Alt+F etc.),Not started,Low,,,,2026-10-30
+F-033,Workbench,Explorer toolbar (New File / New Folder / Refresh / Collapse),Done,,App,Refresh and Collapse: Collapse unit-tested,,2026-10-30
+F-034,Workbench,Explorer right-click menu for folders,Done,,App,,,2026-10-30
+F-035,Workbench,Explorer right-click menu for files,Done,,App,,,2026-10-30
+F-036,Workbench,Explorer right-click menu on empty space,Done,,App,,,2026-10-30
+F-037,Workbench,Explorer Cut / Copy / Paste of files,Partial,Medium,Tests,Unit-tested; not tried by mouse,,2026-10-30
+F-038,Workbench,Open to the Side,Done,,App,Ctrl+Enter with the Explorer focused,,2026-10-30
+F-039,Workbench,Find in Folder,Done,,App,,,2026-10-30
+F-040,Workbench,Tab right-click menu and pinning,Done,,App,,,2026-10-30
+F-041,Workbench,Split editor groups,Done,,App,Two groups,,2026-10-30
+F-042,Workbench,Settings page,Done,,App,,,2026-10-30
+F-043,Workbench,Resizable and remembered panels,Done,,App,,,2026-10-30
+F-044,Workbench,Session restore (open files and carets),Done,,App,,,2026-10-30
+F-045,Workbench,Restore unsaved edits after restart,Not started,High,,Hot exit,,2026-10-30
+F-046,Workbench,Restore the second editor group's tabs,Not started,Medium,,,,2026-10-30
+F-047,Workbench,Drag and drop of tabs,Not started,Medium,,,,2026-10-30
+F-048,Workbench,Multi-root workspaces,Not started,Medium,,Large architectural change; also needed for Add/Remove Folder from Workspace,,2026-10-30
+F-049,Workbench,Image viewer,Done,,App,PNG JPEG GIF BMP WebP ICO,,2026-10-30
+F-050,Workbench,Hex view for binary files,Done,,App,Read-only; first 256 KiB,,2026-10-30
+F-051,Workbench,Explorer menu: Share / Open Changes / Open on Remote / Timeline / Add to Chat,Not started,Low,,Need remote links and chat features that Forge does not have,,2026-10-30
+F-052,Workbench,Exit with unsaved changes warning,Partial,Low,Not verified,Asks once; second Exit discards,,2026-10-30
+F-053,Terminal,Integrated terminal with several tabs,Done,,App,,,2026-10-30
+F-054,Terminal,5000 lines of scrollback,Done,,App,,,2026-10-30
+F-055,Terminal,Open terminal in a folder,Done,,App,,,2026-10-30
+F-056,Language servers,"Completion, hover, signature help",Done,,App,,,2026-10-30
+F-057,Language servers,"Go to definition, references, rename, quick fix",Done,,App,,,2026-10-30
+F-058,Language servers,Diagnostics,Done,,App,,,2026-10-30
+F-059,Language servers,Servers installed automatically,Partial,Low,App,Several servers (rust-analyzer gopls clangd jdtls csharp-ls ruby-lsp lua-language-server taplo sqls) must be installed by the user,,2026-10-30
+F-060,Language servers,Inlay hints,Not started,Medium,,,,2026-10-30
+F-061,Language servers,Semantic highlighting,Not started,Medium,,,,2026-10-30
+F-062,Language servers,Code Lens,Not started,Low,,,,2026-10-30
+F-063,Source control,"Stage, commit, push, pull, sync, fetch, stash",Done,,App,,,2026-10-30
+F-064,Source control,"Branches, history, blame",Done,,App,,,2026-10-30
+F-065,Source control,AI commit messages (OpenAI / Gemini),Partial,Medium,Tests,Gemini endpoint reachable; a successful generation with a real key was never tested,,2026-10-30
+F-066,Source control,Side-by-side diffs,Done,,App,,,2026-10-30
+F-067,Source control,Hunk and line staging (including new files),Done,,App,,,2026-10-30
+F-068,Source control,Discard hunk / selected lines,Done,,App,,,2026-10-30
+F-069,Source control,Merge-conflict resolution with base column,Done,,App,Base side cannot be accepted or edited,,2026-10-30
+F-070,Source control,"Rebase, merge, continue / skip / abort",Done,,App,,,2026-10-30
+F-071,Source control,Interactive rebase,Partial,Low,App,No edit or break steps; no --rebase-merges,,2026-10-30
+F-072,Source control,Cherry-pick and revert,Done,,App,,,2026-10-30
+F-073,Source control,Login and GPG-passphrase prompts,Done,,App,Hardware-token PIN prompts not covered,,2026-10-30
+F-074,Source control,Cancel a running git operation,Done,,App,,,2026-10-30
+F-075,Source control,Commit graph and file timeline,Done,,App,Latest 400 commits and 12 lanes,,2026-10-30
+F-076,Source control,Submodules and worktrees,Partial,Low,App,No worktree for a new or remote branch; no per-submodule Source Control view,,2026-10-30
+F-077,Source control,Actions on a commit in the graph (checkout / cherry-pick / branch),Not started,Medium,,,,2026-10-30
+F-078,Source control,Stash management beyond push and pop,Not started,Low,,,,2026-10-30
+F-079,Source control,File History and Copy Remote File URL from the Explorer,Done,,App,GitHub / GitLab / Bitbucket style remotes,,2026-10-30
+F-080,Debugging,Python debugging (debugpy),Done,,App,,,2026-10-30
+F-081,Debugging,JavaScript / Node debugging,Done,,App,,,2026-10-30
+F-082,Debugging,Rust debugging (CodeLLDB),Done,,App,,,2026-10-30
+F-083,Debugging,Conditional breakpoints,Not started,Medium,,,,2026-10-30
+F-084,Debugging,Watch expressions,Not started,Medium,,,,2026-10-30
+F-085,Debugging,More languages,Not started,Low,,,,2026-10-30
+F-086,Extensions,"Install from Open VSX (themes, languages, grammars, snippets)",Done,,App,,,2026-10-30
+F-087,Extensions,Partial vscode API for running extension code,Partial,Medium,Tests,No third-party extension has been run yet,,2026-10-30
+F-088,Extensions,"Webviews, tree views, terminals, notebooks, tasks APIs",Not started,Low,,See docs/EXTENSIONS_PLAN.md,,2026-10-30
+F-089,Extensions,Language-feature providers from extensions,Not started,Low,,,,2026-10-30
+F-090,Text and files,Non-monospace font layout,Not started,Low,,Layout assumes one cell per character,,2026-10-30
+F-091,Text and files,Files that are not UTF-8,Not started,Low,,Such files open as a hex dump,,2026-10-30
+F-092,Text and files,Files over 64 MiB,Not started,Low,,,,2026-10-30
+F-093,Highlighting,29 languages,Done,,App,Skipped above 4 MiB,,2026-10-30
+F-094,Highlighting,Embedded code (script / style in HTML; fenced Markdown),Partial,Low,App,Not above 512 KiB; not in template strings or style attributes,,2026-10-30
+F-095,Packaging,Windows installer,Partial,High,App,dist\Forge-Setup-0.1.0.exe was built before the latest changes; rebuild it,,2026-10-30
+F-096,Packaging,Commit the work to git,Not started,High,,Nothing has been committed,,2026-10-30

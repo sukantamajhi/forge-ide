@@ -1,0 +1,97 @@
+{
+  "TODO comment": {
+    "prefix": "todo",
+    "body": [
+      "$LINE_COMMENT TODO: $0"
+    ],
+    "description": "A TODO note in this language's comment style"
+  },
+  "FIXME comment": {
+    "prefix": "fixme",
+    "body": [
+      "$LINE_COMMENT FIXME: $0"
+    ],
+    "description": "A FIXME note"
+  },
+  "NOTE comment": {
+    "prefix": "note",
+    "body": [
+      "$LINE_COMMENT NOTE: $0"
+    ],
+    "description": "A NOTE comment"
+  },
+  "HACK comment": {
+    "prefix": "hack",
+    "body": [
+      "$LINE_COMMENT HACK: $0"
+    ],
+    "description": "A HACK note"
+  },
+  "Block comment": {
+    "prefix": "bcomment",
+    "body": [
+      "$BLOCK_COMMENT_START",
+      " * $0",
+      " $BLOCK_COMMENT_END"
+    ],
+    "description": "A block comment"
+  },
+  "Current date": {
+    "prefix": "date",
+    "body": [
+      "$CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE"
+    ],
+    "description": "Today as YYYY-MM-DD"
+  },
+  "Current date and time": {
+    "prefix": "datetime",
+    "body": [
+      "$CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE $CURRENT_HOUR:$CURRENT_MINUTE:$CURRENT_SECOND"
+    ],
+    "description": "Now as YYYY-MM-DD HH:MM:SS"
+  },
+  "Time": {
+    "prefix": "time",
+    "body": [
+      "$CURRENT_HOUR:$CURRENT_MINUTE"
+    ],
+    "description": "The time as HH:MM"
+  },
+  "UUID": {
+    "prefix": "uuid",
+    "body": [
+      "$UUID"
+    ],
+    "description": "A random UUID"
+  },
+  "Lorem ipsum": {
+    "prefix": "lorem",
+    "body": [
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."
+    ],
+    "description": "Placeholder text"
+  },
+  "File name": {
+    "prefix": "filename",
+    "body": [
+      "$TM_FILENAME"
+    ],
+    "description": "The name of this file"
+  },
+  "Clipboard": {
+    "prefix": "clip",
+    "body": [
+      "$CLIPBOARD"
+    ],
+    "description": "Paste the clipboard"
+  },
+  "Region start": {
+    "prefix": "region",
+    "body": [
+      "$LINE_COMMENT region ${1:name}",
+      "$0",
+      "$LINE_COMMENT endregion"
+    ],
+    "description": "A foldable region marker"
+  }
+}

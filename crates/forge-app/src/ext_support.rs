@@ -395,7 +395,7 @@ impl Workspace {
             ExtEvent::Installed(Ok(message)) => {
                 self.extensions = load_extensions();
                 self.refresh_ext_languages();
-                self.snippets = crate::snippet_support::load_snippets(&self.extensions);
+                self.snippets = crate::snippet_support::load_snippets(&self.extensions, self.settings.builtin_snippets);
                 self.theme = resolve_theme(&self.extensions, &self.settings.theme);
                 self.icon_theme = resolve_icon_theme(&self.extensions, &self.settings.icon_theme);
                 self.product_dirty = true;
@@ -421,7 +421,7 @@ impl Workspace {
                     Ok(_) => {
                         self.extensions = load_extensions();
                         self.refresh_ext_languages();
-                        self.snippets = crate::snippet_support::load_snippets(&self.extensions);
+                        self.snippets = crate::snippet_support::load_snippets(&self.extensions, self.settings.builtin_snippets);
                         self.theme = resolve_theme(&self.extensions, &self.settings.theme);
                         self.icon_theme = resolve_icon_theme(&self.extensions, &self.settings.icon_theme);
                 self.product_dirty = true;

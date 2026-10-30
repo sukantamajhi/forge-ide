@@ -281,6 +281,8 @@ pub(crate) enum OverlayKind {
     Symbols,
     /// Folders opened before.
     OpenRecent,
+    /// Pick the language whose snippets file to open (Configure User Snippets).
+    SnippetFiles,
     /// The second file of "Compare Active File With...".
     CompareWith,
     Theme,
@@ -348,6 +350,8 @@ pub(crate) enum ItemAction {
     /// Open this folder in this window (Open Recent).
     OpenRecent(std::path::PathBuf),
     CompareWith(std::path::PathBuf),
+    /// Open (and create) the user's snippets file for this language id, or `global`.
+    SnippetFile(String),
     WorktreeAddBranch(usize),
     WorktreeRemove(usize),
     GitCommit(usize),
@@ -755,7 +759,7 @@ impl Workspace {
         }
         let extensions = crate::ext_support::load_extensions();
         let (ext_langs, tm, _warnings) = crate::ext_support::build_ext_languages(&extensions);
-        let snippets = crate::snippet_support::load_snippets(&extensions);
+        let snippets = crate::snippet_support::load_snippets(&extensions, settings.builtin_snippets);
         let theme = crate::ext_support::resolve_theme(&extensions, &settings.theme);
         let icon_theme = crate::ext_support::resolve_icon_theme(&extensions, &settings.icon_theme);
         let (git_tx, git_rx) = mpsc::channel();
@@ -1226,6 +1230,10 @@ impl Workspace {
 
     /// Saving `settings.json` or `keybindings.json` applies it immediately.
     pub(crate) fn reload_config_if_needed(&mut self, path: &Path) {
+        if path.parent().is_some_and(|dir| same_path(dir, &config_dir().join("snippets"))) {
+            self.snippets = crate::snippet_support::load_snippets(&self.extensions, self.settings.builtin_snippets);
+            self.set_status(format!("Snippets reloaded ({} available)", self.snippets.len()));
+        }
         if same_path(path, &config_dir().join("settings.json")) {
             if let Ok(text) = std::fs::read_to_string(path) {
                 let provider = self.settings.ai_provider;
@@ -1234,6 +1242,7 @@ impl Workspace {
                 if self.settings.ai_provider != provider {
                     self.ai_key = None;
                 }
+                self.snippets = crate::snippet_support::load_snippets(&self.extensions, self.settings.builtin_snippets);
                 self.theme = crate::ext_support::resolve_theme(&self.extensions, &self.settings.theme);
                 self.icon_theme = crate::ext_support::resolve_icon_theme(&self.extensions, &self.settings.icon_theme);
                 self.product_dirty = true;
@@ -1714,7 +1723,8 @@ impl Workspace {
         let doc = &self.docs[view.doc];
         let caret = view.selections.primary().head;
         let prefix = doc.buffer.rope().slice(identifier_start(&doc.buffer, caret)..caret).to_string();
-        let items = filter_items(items, &prefix);
+        let mut items = filter_items(items, &prefix);
+        items.extend(self.snippet_completion_items(&prefix));
         self.completion = (!items.is_empty()).then(|| CompletionState::new(items));
     }
 

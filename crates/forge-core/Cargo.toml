@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+regex = "1"
 forge-text = { path = "../forge-text" }
 forge-syntax = { path = "../forge-syntax" }
 ropey.workspace = true

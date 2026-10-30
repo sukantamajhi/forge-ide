@@ -1,0 +1,96 @@
+{
+  "main": {
+    "prefix": "main",
+    "body": [
+      "#include <iostream>",
+      "",
+      "int main() {",
+      "\t$0",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "A main function"
+  },
+  "cout": {
+    "prefix": "cout",
+    "body": [
+      "std::cout << ${1:value} << std::endl;"
+    ],
+    "description": "Print"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "public:",
+      "\t${1:Name}(${2});",
+      "\t~${1:Name}();",
+      "",
+      "private:",
+      "\t$0",
+      "};"
+    ],
+    "description": "A class"
+  },
+  "namespace": {
+    "prefix": "ns",
+    "body": [
+      "namespace ${1:name} {",
+      "$0",
+      "} // namespace ${1:name}"
+    ],
+    "description": "A namespace"
+  },
+  "template": {
+    "prefix": "template",
+    "body": [
+      "template <typename ${1:T}>",
+      "$0"
+    ],
+    "description": "A template"
+  },
+  "range for": {
+    "prefix": "forr",
+    "body": [
+      "for (const auto& ${1:item} : ${2:items}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A range-based for"
+  },
+  "lambda": {
+    "prefix": "lambda",
+    "body": [
+      "[${1:&}](${2:args}) { ${3:body} }"
+    ],
+    "description": "A lambda"
+  },
+  "vector": {
+    "prefix": "vec",
+    "body": [
+      "std::vector<${1:int}> ${2:v};"
+    ],
+    "description": "A vector"
+  },
+  "unique_ptr": {
+    "prefix": "uptr",
+    "body": [
+      "auto ${1:p} = std::make_unique<${2:Type}>(${3});"
+    ],
+    "description": "make_unique"
+  },
+  "shared_ptr": {
+    "prefix": "sptr",
+    "body": [
+      "auto ${1:p} = std::make_shared<${2:Type}>(${3});"
+    ],
+    "description": "make_shared"
+  },
+  "include": {
+    "prefix": "inc",
+    "body": [
+      "#include <${1:vector}>"
+    ],
+    "description": "#include <>"
+  }
+}

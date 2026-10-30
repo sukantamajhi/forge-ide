@@ -1,0 +1,92 @@
+{
+  "def": {
+    "prefix": "def",
+    "body": [
+      "def ${1:name}${2:(${3})}",
+      "\t$0",
+      "end"
+    ],
+    "description": "A method"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name}",
+      "\t$0",
+      "end"
+    ],
+    "description": "A class"
+  },
+  "module": {
+    "prefix": "module",
+    "body": [
+      "module ${1:Name}",
+      "\t$0",
+      "end"
+    ],
+    "description": "A module"
+  },
+  "each": {
+    "prefix": "each",
+    "body": [
+      "${1:items}.each do |${2:item}|",
+      "\t$0",
+      "end"
+    ],
+    "description": "each"
+  },
+  "map": {
+    "prefix": "map",
+    "body": [
+      "${1:items}.map { |${2:x}| ${3:x} }"
+    ],
+    "description": "map"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition}",
+      "\t$0",
+      "end"
+    ],
+    "description": "if"
+  },
+  "begin rescue": {
+    "prefix": "begin",
+    "body": [
+      "begin",
+      "\t$1",
+      "rescue ${2:StandardError} => ${3:e}",
+      "\t$0",
+      "end"
+    ],
+    "description": "begin / rescue"
+  },
+  "attr_accessor": {
+    "prefix": "attr",
+    "body": [
+      "attr_accessor :${1:name}"
+    ],
+    "description": "attr_accessor"
+  },
+  "initialize": {
+    "prefix": "init",
+    "body": [
+      "def initialize(${1})",
+      "\t$0",
+      "end"
+    ],
+    "description": "A constructor"
+  },
+  "spec describe": {
+    "prefix": "desc",
+    "body": [
+      "RSpec.describe ${1:Thing} do",
+      "\tit '${2:works}' do",
+      "\t\t$0",
+      "\tend",
+      "end"
+    ],
+    "description": "An RSpec block"
+  }
+}

@@ -59,6 +59,168 @@ pub struct Context {
     pub indent: String,
     /// `(year, month, day)` for the date variables.
     pub date: (i64, u32, u32),
+    /// `(hour, minute, second)`, and the weekday (0 = Sunday) and Unix time, for the time variables.
+    pub time: (u32, u32, u32),
+    pub weekday: u32,
+    pub unix: i64,
+    pub clipboard: String,
+    pub current_word: String,
+    /// Zero-based line of the insertion point.
+    pub line_index: usize,
+    pub relative_path: String,
+    pub workspace_folder: String,
+}
+
+/// The local date and time, for the variables that name them (`CURRENT_HOUR` ...). UTC where the
+/// platform gives no local time.
+pub struct LocalNow {
+    pub date: (i64, u32, u32),
+    pub time: (u32, u32, u32),
+    pub weekday: u32,
+    pub unix: i64,
+}
+
+pub fn local_now() -> LocalNow {
+    let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        #[derive(Default)]
+        struct SystemTime {
+            year: u16,
+            month: u16,
+            weekday: u16,
+            day: u16,
+            hour: u16,
+            minute: u16,
+            second: u16,
+            millis: u16,
+        }
+        extern "system" {
+            fn GetLocalTime(out: *mut SystemTime);
+        }
+        let mut t = SystemTime::default();
+        // SAFETY: GetLocalTime fills the struct it is given, which has the layout of SYSTEMTIME.
+        unsafe { GetLocalTime(&mut t) };
+        return LocalNow { date: (i64::from(t.year), u32::from(t.month), u32::from(t.day)), time: (u32::from(t.hour), u32::from(t.minute), u32::from(t.second)), weekday: u32::from(t.weekday), unix };
+    }
+    #[cfg(not(windows))]
+    {
+        let secs = unix.rem_euclid(86_400) as u32;
+        LocalNow { date: civil_date(unix), time: (secs / 3600, secs % 3600 / 60, secs % 60), weekday: (unix.div_euclid(86_400) + 4).rem_euclid(7) as u32, unix }
+    }
+}
+
+fn random_u64() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new().build_hasher().finish()
+}
+
+fn uuid_v4() -> String {
+    let (a, b) = (random_u64(), random_u64());
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&a.to_le_bytes());
+    bytes[8..].copy_from_slice(&b.to_le_bytes());
+    bytes[6] = bytes[6] & 0x0f | 0x40;
+    bytes[8] = bytes[8] & 0x3f | 0x80;
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..])
+}
+
+const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+/// Apply a snippet transform `/regex/format/options` to `input`.
+fn apply_transform(input: &str, pattern: &str, format: &str, options: &str) -> String {
+    let flags = if options.contains('i') { "(?i)" } else { "" };
+    let Ok(re) = regex::Regex::new(&format!("{flags}{pattern}")) else { return input.to_owned() };
+    let mut out = String::new();
+    let mut last = 0;
+    for caps in re.captures_iter(input) {
+        let whole = caps.get(0).expect("group 0 always matches");
+        out.push_str(&input[last..whole.start()]);
+        out.push_str(&format_replacement(format, &caps));
+        last = whole.end();
+        if !options.contains('g') {
+            break;
+        }
+    }
+    out.push_str(&input[last..]);
+    out
+}
+
+fn change_case(text: &str, how: &str) -> String {
+    let words = || text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty());
+    let cap = |w: &str| {
+        let mut chars = w.chars();
+        chars.next().map(|f| f.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
+    };
+    match how {
+        "upcase" => text.to_uppercase(),
+        "downcase" => text.to_lowercase(),
+        "capitalize" => cap(text),
+        "pascalcase" => words().map(cap).collect(),
+        "camelcase" => words().enumerate().map(|(i, w)| if i == 0 { w.to_lowercase() } else { cap(w) }).collect(),
+        _ => text.to_owned(),
+    }
+}
+
+/// Expand a transform's format string: `$1`, `${1}`, `${1:/upcase}`, `${1:+if}`, `${1:-else}`, `${1:?if:else}`.
+fn format_replacement(format: &str, caps: &regex::Captures) -> String {
+    let group = |n: usize| caps.get(n).map(|m| m.as_str().to_owned()).unwrap_or_default();
+    let chars: Vec<char> = format.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' if i + 1 < chars.len() => {
+                out.push(chars[i + 1]);
+                i += 2;
+            }
+            '$' if chars.get(i + 1).is_some_and(char::is_ascii_digit) => {
+                let mut j = i + 1;
+                let mut n = 0usize;
+                while let Some(d) = chars.get(j).and_then(|c| c.to_digit(10)) {
+                    n = n * 10 + d as usize;
+                    j += 1;
+                }
+                out.push_str(&group(n));
+                i = j;
+            }
+            '$' if chars.get(i + 1) == Some(&'{') => {
+                let Some(close) = chars[i..].iter().position(|c| *c == '}') else {
+                    out.push('$');
+                    i += 1;
+                    continue;
+                };
+                let inner: String = chars[i + 2..i + close].iter().collect();
+                i += close + 1;
+                let digits: String = inner.chars().take_while(char::is_ascii_digit).collect();
+                let Ok(n) = digits.parse::<usize>() else { continue };
+                let value = group(n);
+                let rest = &inner[digits.len()..];
+                if rest.is_empty() {
+                    out.push_str(&value);
+                } else if let Some(how) = rest.strip_prefix(":/") {
+                    out.push_str(&change_case(&value, how));
+                } else if let Some(text) = rest.strip_prefix(":+") {
+                    if !value.is_empty() {
+                        out.push_str(text);
+                    }
+                } else if let Some(text) = rest.strip_prefix(":?") {
+                    let (yes, no) = text.split_once(':').unwrap_or((text, ""));
+                    out.push_str(if value.is_empty() { no } else { yes });
+                } else if let Some(text) = rest.strip_prefix(":-").or_else(|| rest.strip_prefix(':')) {
+                    out.push_str(if value.is_empty() { text } else { &value });
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 /// A snippet ready to insert.
@@ -68,6 +230,8 @@ pub struct Expanded {
     /// Char ranges within `text`, in the order Tab visits them: stop 1, 2, ..., then `$0`
     /// (or the end of the text when the snippet has none). Mirrors share one entry.
     pub stops: Vec<Vec<(usize, usize)>>,
+    /// Placeholders that offer a list (`${1|a,b|}`): the char range of the placeholder and its options.
+    pub choices: Vec<((usize, usize), Vec<String>)>,
 }
 
 struct Parser<'a> {
@@ -79,6 +243,7 @@ struct Parser<'a> {
     stops: BTreeMap<u32, Vec<(usize, usize)>>,
     /// Text of the first definition of each stop, so a mirror written before it matches.
     defaults: BTreeMap<u32, String>,
+    choices: Vec<((usize, usize), Vec<String>)>,
     context: &'a Context,
 }
 
@@ -99,12 +264,12 @@ pub fn expand(body: &str, context: &Context) -> Expanded {
         }
     }
     stops.push(final_stop.unwrap_or_else(|| vec![(second.len, second.len)]));
-    Expanded { text: second.out, stops }
+    Expanded { text: second.out, stops, choices: second.choices }
 }
 
 impl<'a> Parser<'a> {
     fn new(body: &str, context: &'a Context, defaults: BTreeMap<u32, String>) -> Self {
-        Self { chars: body.chars().collect(), pos: 0, out: String::new(), len: 0, stops: BTreeMap::new(), defaults, context }
+        Self { chars: body.chars().collect(), pos: 0, out: String::new(), len: 0, stops: BTreeMap::new(), defaults, choices: Vec::new(), context }
     }
 
     fn peek(&self) -> Option<char> {
@@ -231,8 +396,18 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.close_brace();
-                let first = choices.into_iter().next().unwrap_or_default();
+                let first = choices.first().cloned().unwrap_or_default();
+                let start = self.len;
                 self.place(index, &first);
+                if choices.len() > 1 {
+                    self.choices.push(((start, self.len), choices));
+                }
+            }
+            Some('/') => {
+                // A transformed mirror: the stop's text, changed. It is written once, not kept in step.
+                let input = self.defaults.get(&index).cloned().unwrap_or_default();
+                let text = self.transform(&input);
+                self.push_str(&text);
             }
             _ => {
                 self.close_brace();
@@ -270,8 +445,60 @@ impl<'a> Parser<'a> {
         self.defaults.entry(index).or_insert_with(|| text.to_owned());
     }
 
+    /// After `${name` or `${N`, at the `/` of `/regex/format/options}`: read it and apply it to `input`.
+    fn transform(&mut self, input: &str) -> String {
+        self.pos += 1;
+        let pattern = self.until_slash();
+        let format = self.until_slash();
+        let mut options = String::new();
+        while let Some(c) = self.peek() {
+            self.pos += 1;
+            if c == '}' {
+                break;
+            }
+            options.push(c);
+        }
+        apply_transform(input, &pattern, &format, &options)
+    }
+
+    fn until_slash(&mut self) -> String {
+        let mut out = String::new();
+        while let Some(c) = self.peek() {
+            self.pos += 1;
+            match c {
+                '\\' => {
+                    if let Some(next) = self.peek() {
+                        self.pos += 1;
+                        if next != '/' {
+                            out.push('\\');
+                        }
+                        out.push(next);
+                    }
+                }
+                '/' => break,
+                '$' if self.peek() == Some('{') => {
+                    // `${1:/upcase}` holds a slash of its own: copy it whole.
+                    out.push('$');
+                    while let Some(inner) = self.peek() {
+                        self.pos += 1;
+                        out.push(inner);
+                        if inner == '}' {
+                            break;
+                        }
+                    }
+                }
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
     fn braced_variable(&mut self, name: String) {
-        if self.peek() == Some(':') {
+        if self.peek() == Some('/') {
+            let value = self.value_of(&name).unwrap_or_default();
+            let text = self.transform(&value);
+            self.push_str(&text);
+        } else if self.peek() == Some(':') {
             self.pos += 1;
             // The default is used when the variable has no value.
             let value = self.value_of(&name);
@@ -308,7 +535,23 @@ impl<'a> Parser<'a> {
             "TM_FILEPATH" => c.file_path.clone(),
             "TM_SELECTED_TEXT" => c.selected_text.clone(),
             "TM_CURRENT_LINE" => c.current_line.clone(),
-            "TM_CURRENT_WORD" | "CLIPBOARD" => String::new(),
+            "TM_CURRENT_WORD" => c.current_word.clone(),
+            "CLIPBOARD" => c.clipboard.clone(),
+            "TM_LINE_INDEX" => c.line_index.to_string(),
+            "TM_LINE_NUMBER" => (c.line_index + 1).to_string(),
+            "RELATIVE_FILEPATH" => c.relative_path.clone(),
+            "WORKSPACE_FOLDER" => c.workspace_folder.clone(),
+            "CURRENT_HOUR" => format!("{:02}", c.time.0),
+            "CURRENT_MINUTE" => format!("{:02}", c.time.1),
+            "CURRENT_SECOND" => format!("{:02}", c.time.2),
+            "CURRENT_DAY_NAME" => DAYS[c.weekday as usize % 7].to_owned(),
+            "CURRENT_DAY_NAME_SHORT" => DAYS[c.weekday as usize % 7][..3].to_owned(),
+            "CURRENT_MONTH_NAME" => MONTHS[(m as usize).clamp(1, 12) - 1].to_owned(),
+            "CURRENT_MONTH_NAME_SHORT" => MONTHS[(m as usize).clamp(1, 12) - 1][..3].to_owned(),
+            "CURRENT_SECONDS_UNIX" => c.unix.to_string(),
+            "RANDOM" => format!("{:06}", random_u64() % 1_000_000),
+            "RANDOM_HEX" => format!("{:06x}", random_u64() % 0x100_0000),
+            "UUID" => uuid_v4(),
             "WORKSPACE_NAME" => c.workspace_name.clone(),
             "LINE_COMMENT" => c.line_comment.clone().unwrap_or_default(),
             "BLOCK_COMMENT_START" => c.block_comment.as_ref().map(|b| b.0.clone()).unwrap_or_default(),
@@ -369,7 +612,7 @@ mod tests {
     #[test]
     fn plain_text_gets_one_final_stop_at_its_end() {
         let e = plain("hello");
-        assert_eq!(e, Expanded { text: "hello".to_owned(), stops: vec![vec![(5, 5)]] });
+        assert_eq!(e, Expanded { text: "hello".to_owned(), stops: vec![vec![(5, 5)]], choices: vec![] });
     }
 
     #[test]
@@ -436,6 +679,64 @@ mod tests {
         let e = expand("$TM_FILENAME|${TM_FILENAME_BASE}|$TM_DIRECTORY|$WORKSPACE_NAME|$LINE_COMMENT|$CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE|$CURRENT_YEAR_SHORT", &context);
         assert_eq!(e.text, "main.rs|main|C:/proj/src|proj|//|2026-03-09|26");
         assert_eq!(expand("${TM_SELECTED_TEXT:fallback}|${WORKSPACE_NAME:none}|$UNKNOWN_VAR", &context).text, "fallback|proj|UNKNOWN_VAR");
+    }
+
+    #[test]
+    fn transforms_change_variables_and_mirrors() {
+        let context = Context { file_path: "C:/src/my_file.rs".to_owned(), ..Context::default() };
+        let go = |body: &str| expand(body, &context).text;
+        assert_eq!(go("${TM_FILENAME_BASE/(.*)/${1:/upcase}/}"), "MY_FILE");
+        assert_eq!(go("${TM_FILENAME/(.*)\\..+$/$1/}"), "my_file");
+        assert_eq!(go("${TM_FILENAME_BASE/(.*)/${1:/pascalcase}/}"), "MyFile");
+        assert_eq!(go("${TM_FILENAME_BASE/(.*)/${1:/camelcase}/}"), "myFile");
+        assert_eq!(go("${TM_FILENAME_BASE/_/-/g}"), "my-file");
+        assert_eq!(go("${TM_FILENAME_BASE/x(y)?/${1:+yes}${1:-no}/}"), "my_file", "no match leaves the text alone");
+        assert_eq!(go("${1:hello world} ${1/(\\w+) (\\w+)/$2 $1/}"), "hello world world hello");
+        assert_eq!(go("${1:abc}${1/b/${0:?x:y}/}"), "abcaxc", "a conditional on the matched text");
+        assert_eq!(go("${TM_FILENAME/[/x/}"), "my_file.rs", "a broken regex changes nothing");
+    }
+
+    #[test]
+    fn more_variables_exist() {
+        let context = Context {
+            clipboard: "pasted".to_owned(),
+            current_word: "wd".to_owned(),
+            line_index: 4,
+            relative_path: "src/a.rs".to_owned(),
+            workspace_folder: "C:/p".to_owned(),
+            time: (7, 5, 9),
+            weekday: 1,
+            date: (2026, 3, 2),
+            unix: 42,
+            ..Context::default()
+        };
+        let go = |body: &str| expand(body, &context).text;
+        assert_eq!(go("$CLIPBOARD $TM_CURRENT_WORD $TM_LINE_INDEX $TM_LINE_NUMBER"), "pasted wd 4 5");
+        assert_eq!(go("$RELATIVE_FILEPATH $WORKSPACE_FOLDER"), "src/a.rs C:/p");
+        assert_eq!(go("$CURRENT_HOUR:$CURRENT_MINUTE:$CURRENT_SECOND"), "07:05:09");
+        assert_eq!(go("$CURRENT_DAY_NAME $CURRENT_DAY_NAME_SHORT $CURRENT_MONTH_NAME $CURRENT_MONTH_NAME_SHORT"), "Monday Mon March Mar");
+        assert_eq!(go("$CURRENT_SECONDS_UNIX"), "42");
+        let uuid = go("$UUID");
+        assert_eq!(uuid.len(), 36);
+        assert_eq!(uuid.matches('-').count(), 4);
+        assert_eq!(&uuid[14..15], "4", "a version 4 uuid");
+        assert_eq!(go("$RANDOM").len(), 6);
+        assert_eq!(go("$RANDOM_HEX").len(), 6);
+    }
+
+    #[test]
+    fn choices_are_recorded_for_the_popup() {
+        let e = plain("a ${1|one,two,three|} b ${2|solo|}");
+        assert_eq!(e.text, "a one b solo");
+        assert_eq!(e.choices, vec![((2, 5), vec!["one".to_owned(), "two".to_owned(), "three".to_owned()])], "a single option is not a choice");
+        assert_eq!(e.stops[0], vec![(2, 5)]);
+    }
+
+    #[test]
+    fn local_time_is_sane() {
+        let now = local_now();
+        assert!(now.date.0 >= 2024 && (1..=12).contains(&now.date.1) && (1..=31).contains(&now.date.2));
+        assert!(now.time.0 < 24 && now.time.1 < 60 && now.time.2 < 61 && now.weekday < 7);
     }
 
     #[test]

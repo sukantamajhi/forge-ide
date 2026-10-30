@@ -248,6 +248,7 @@ commands! {
     ExtensionsVsix, "forge.extensions.vsix", "Extensions: Install from VSIX...", [];
     ExtensionsManage, "forge.extensions.manage", "Extensions: Manage Installed...", [];
     InsertSnippet, "editor.action.insertSnippet", "Insert Snippet...", [];
+    ConfigureSnippets, "workbench.action.openSnippets", "Configure User Snippets", [];
     ExtensionsRestartHost, "forge.extensions.restartHost", "Extensions: Restart Extension Host", [];
 }
 

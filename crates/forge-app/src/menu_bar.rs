@@ -46,6 +46,7 @@ impl Workspace {
                 sep(),
                 c("Settings", OpenSettings),
                 c("Keyboard Shortcuts", OpenKeybindings),
+                c("Configure User Snippets", ConfigureSnippets),
                 c("Color Theme", ChangeTheme),
                 sep(),
                 c("Exit", Quit),

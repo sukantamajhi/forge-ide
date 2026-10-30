@@ -1,0 +1,92 @@
+{
+  "shebang": {
+    "prefix": "shebang",
+    "body": [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "",
+      "$0"
+    ],
+    "description": "A bash script header"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if [[ ${1:condition} ]]; then",
+      "\t$0",
+      "fi"
+    ],
+    "description": "if"
+  },
+  "if else": {
+    "prefix": "ifelse",
+    "body": [
+      "if [[ ${1:condition} ]]; then",
+      "\t$2",
+      "else",
+      "\t$0",
+      "fi"
+    ],
+    "description": "if / else"
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for ${1:item} in ${2:items}; do",
+      "\t$0",
+      "done"
+    ],
+    "description": "for"
+  },
+  "while read": {
+    "prefix": "whileread",
+    "body": [
+      "while IFS= read -r ${1:line}; do",
+      "\t$0",
+      "done < \"${2:file}\""
+    ],
+    "description": "Read lines"
+  },
+  "case": {
+    "prefix": "case",
+    "body": [
+      "case \"${1:$var}\" in",
+      "\t${2:pattern})",
+      "\t\t$0",
+      "\t\t;;",
+      "\t*)",
+      "\t\t;;",
+      "esac"
+    ],
+    "description": "case"
+  },
+  "function": {
+    "prefix": "func",
+    "body": [
+      "${1:name}() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A function"
+  },
+  "trap cleanup": {
+    "prefix": "trap",
+    "body": [
+      "cleanup() {",
+      "\t$0",
+      "}",
+      "trap cleanup EXIT"
+    ],
+    "description": "Clean up on exit"
+  },
+  "usage": {
+    "prefix": "usage",
+    "body": [
+      "if [[ \"$#\" -lt ${1:1} ]]; then",
+      "\techo \"usage: $0 ${2:args}\" >&2",
+      "\texit 1",
+      "fi"
+    ],
+    "description": "Check the arguments"
+  }
+}

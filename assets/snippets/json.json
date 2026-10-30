@@ -1,0 +1,48 @@
+{
+  "package.json": {
+    "prefix": "package",
+    "body": [
+      "{",
+      "\t\"name\": \"${1:name}\",",
+      "\t\"version\": \"${2:1.0.0}\",",
+      "\t\"scripts\": {",
+      "\t\t\"${3:start}\": \"${4:node index.js}\"",
+      "\t},",
+      "\t\"dependencies\": {}",
+      "}"
+    ],
+    "description": "A package.json"
+  },
+  "tsconfig": {
+    "prefix": "tsconfig",
+    "body": [
+      "{",
+      "\t\"compilerOptions\": {",
+      "\t\t\"target\": \"ES2022\",",
+      "\t\t\"module\": \"ESNext\",",
+      "\t\t\"strict\": true,",
+      "\t\t\"outDir\": \"${1:dist}\"",
+      "\t},",
+      "\t\"include\": [\"${2:src}\"]",
+      "}"
+    ],
+    "description": "A tsconfig.json"
+  },
+  "launch config": {
+    "prefix": "launch",
+    "body": [
+      "{",
+      "\t\"version\": \"0.2.0\",",
+      "\t\"configurations\": [",
+      "\t\t{",
+      "\t\t\t\"name\": \"${1:Launch}\",",
+      "\t\t\t\"type\": \"${2:node}\",",
+      "\t\t\t\"request\": \"launch\",",
+      "\t\t\t\"program\": \"\\${file}\"",
+      "\t\t}",
+      "\t]",
+      "}"
+    ],
+    "description": "A launch.json"
+  }
+}

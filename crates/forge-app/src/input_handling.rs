@@ -166,7 +166,7 @@ impl Workspace {
                     return true;
                 }
                 "enter" | "tab" if plain && !m.shift => {
-                    self.accept_completion(cx);
+                    self.accept_completion(k.key == "tab", cx);
                     return true;
                 }
                 _ => {}
@@ -200,9 +200,28 @@ impl Workspace {
         false
     }
 
-    fn accept_completion(&mut self, cx: &mut Context<Self>) {
+    fn accept_completion(&mut self, advance: bool, cx: &mut Context<Self>) {
         let Some(state) = self.completion.take() else { return };
         let Some(item) = state.selected_item().cloned() else { return };
+        match item.sort_text.as_deref().map(crate::snippet_support::item_kind) {
+            Some(crate::snippet_support::ItemKind::Snippet(index)) => {
+                self.accept_snippet_item(index, cx);
+                return;
+            }
+            Some(crate::snippet_support::ItemKind::Choice) => {
+                // The placeholder is selected: the chosen option replaces it. Tab then moves on to the next stop.
+                let text = item.label.clone();
+                self.mutate(cx, move |b, s| {
+                    let p = s.primary();
+                    b.replace_range(&SelectionSet::single(p), p.start(), p.end(), &text)
+                });
+                if advance {
+                    self.snippet_tab(false, cx);
+                }
+                return;
+            }
+            _ => {}
+        }
         self.mutate(cx, move |b, s| completion::accept(b, s, &item));
         self.last_typing = None;
     }
@@ -457,6 +476,7 @@ impl Workspace {
             OverlayKind::GoToLine => "Type a line number, or line:column",
             OverlayKind::Symbols => "Go to symbol in editor",
             OverlayKind::OpenRecent => "Select a folder to open",
+            OverlayKind::SnippetFiles => "Select a language for the snippets file, or a global one",
             OverlayKind::CompareWith => "Select the file to compare the active file with",
             OverlayKind::Theme => "Select a color theme",
             OverlayKind::IconTheme => "Select a file icon theme",
@@ -588,6 +608,7 @@ impl Workspace {
                 }
                 self.symbol_items(&text)
             }
+            OverlayKind::SnippetFiles => self.snippet_file_items(&text),
             OverlayKind::OpenRecent => {
                 let folders = &self.recent_folders;
                 if folders.is_empty() {
@@ -1108,6 +1129,7 @@ impl Workspace {
                 }
             }
             ItemAction::CompareWith(path) => self.compare_with(&path, cx),
+            ItemAction::SnippetFile(id) => self.open_snippet_file(&id, cx),
             ItemAction::WorktreeAddBranch(i) => {
                 if let (Some(name), Some(root)) = (self.branches.get(i).map(|b| b.name.clone()), self.git.as_ref().map(|g| g.root.clone())) {
                     let folder = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".to_owned());

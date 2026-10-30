@@ -1,0 +1,314 @@
+{
+  "console.log": {
+    "prefix": "log",
+    "body": [
+      "console.log(${1:value});"
+    ],
+    "description": "console.log"
+  },
+  "console.error": {
+    "prefix": "error",
+    "body": [
+      "console.error(${1:value});"
+    ],
+    "description": "console.error"
+  },
+  "console.table": {
+    "prefix": "table",
+    "body": [
+      "console.table(${1:value});"
+    ],
+    "description": "console.table"
+  },
+  "function": {
+    "prefix": "fn",
+    "body": [
+      "function ${1:name}(${2:args}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A function"
+  },
+  "async function": {
+    "prefix": "afn",
+    "body": [
+      "async function ${1:name}(${2:args}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "An async function"
+  },
+  "arrow function": {
+    "prefix": "arrow",
+    "body": [
+      "const ${1:name} = (${2:args}) => {",
+      "\t$0",
+      "};"
+    ],
+    "description": "An arrow function"
+  },
+  "anonymous arrow": {
+    "prefix": "=>",
+    "body": [
+      "(${1:args}) => ${2:expr}"
+    ],
+    "description": "An inline arrow function"
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for (let ${1:i} = 0; ${1:i} < ${2:array}.length; ${1:i}++) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A for loop"
+  },
+  "for of": {
+    "prefix": "forof",
+    "body": [
+      "for (const ${1:item} of ${2:items}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for...of"
+  },
+  "for in": {
+    "prefix": "forin",
+    "body": [
+      "for (const ${1:key} in ${2:object}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for...in"
+  },
+  "forEach": {
+    "prefix": "foreach",
+    "body": [
+      "${1:items}.forEach((${2:item}) => {",
+      "\t$0",
+      "});"
+    ],
+    "description": "Array forEach"
+  },
+  "map": {
+    "prefix": "map",
+    "body": [
+      "${1:items}.map((${2:item}) => ${3:item})"
+    ],
+    "description": "Array map"
+  },
+  "filter": {
+    "prefix": "filter",
+    "body": [
+      "${1:items}.filter((${2:item}) => ${3:condition})"
+    ],
+    "description": "Array filter"
+  },
+  "reduce": {
+    "prefix": "reduce",
+    "body": [
+      "${1:items}.reduce((${2:acc}, ${3:item}) => ${4:acc}, ${5:initial})"
+    ],
+    "description": "Array reduce"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if (${1:condition}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "if"
+  },
+  "if else": {
+    "prefix": "ifelse",
+    "body": [
+      "if (${1:condition}) {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "if / else"
+  },
+  "ternary": {
+    "prefix": "tern",
+    "body": [
+      "${1:condition} ? ${2:a} : ${3:b}"
+    ],
+    "description": "Ternary"
+  },
+  "switch": {
+    "prefix": "switch",
+    "body": [
+      "switch (${1:value}) {",
+      "\tcase ${2:x}:",
+      "\t\t$0",
+      "\t\tbreak;",
+      "\tdefault:",
+      "\t\tbreak;",
+      "}"
+    ],
+    "description": "switch"
+  },
+  "try catch": {
+    "prefix": "try",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:error}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "try / catch"
+  },
+  "try catch finally": {
+    "prefix": "tryf",
+    "body": [
+      "try {",
+      "\t$1",
+      "} catch (${2:error}) {",
+      "\t$3",
+      "} finally {",
+      "\t$0",
+      "}"
+    ],
+    "description": "try / catch / finally"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "\tconstructor(${2:args}) {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "A class"
+  },
+  "constructor": {
+    "prefix": "ctor",
+    "body": [
+      "constructor(${1:args}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A constructor"
+  },
+  "import": {
+    "prefix": "imp",
+    "body": [
+      "import ${2:name} from '${1:module}';"
+    ],
+    "description": "import default"
+  },
+  "import named": {
+    "prefix": "impn",
+    "body": [
+      "import { ${2:name} } from '${1:module}';"
+    ],
+    "description": "import { name }"
+  },
+  "import all": {
+    "prefix": "impa",
+    "body": [
+      "import * as ${2:name} from '${1:module}';"
+    ],
+    "description": "import * as"
+  },
+  "export default": {
+    "prefix": "expd",
+    "body": [
+      "export default ${1:name};"
+    ],
+    "description": "export default"
+  },
+  "export const": {
+    "prefix": "expc",
+    "body": [
+      "export const ${1:name} = ${2:value};"
+    ],
+    "description": "export const"
+  },
+  "require": {
+    "prefix": "req",
+    "body": [
+      "const ${1:name} = require('${2:module}');"
+    ],
+    "description": "CommonJS require"
+  },
+  "Promise": {
+    "prefix": "prom",
+    "body": [
+      "new Promise((resolve, reject) => {",
+      "\t$0",
+      "})"
+    ],
+    "description": "new Promise"
+  },
+  "await fetch": {
+    "prefix": "fetch",
+    "body": [
+      "const ${1:response} = await fetch(${2:url});",
+      "const ${3:data} = await ${1:response}.json();"
+    ],
+    "description": "fetch JSON"
+  },
+  "setTimeout": {
+    "prefix": "timeout",
+    "body": [
+      "setTimeout(() => {",
+      "\t$0",
+      "}, ${1:1000});"
+    ],
+    "description": "setTimeout"
+  },
+  "setInterval": {
+    "prefix": "interval",
+    "body": [
+      "setInterval(() => {",
+      "\t$0",
+      "}, ${1:1000});"
+    ],
+    "description": "setInterval"
+  },
+  "describe": {
+    "prefix": "desc",
+    "body": [
+      "describe('${1:name}', () => {",
+      "\t$0",
+      "});"
+    ],
+    "description": "A test suite"
+  },
+  "it": {
+    "prefix": "it",
+    "body": [
+      "it('${1:does something}', () => {",
+      "\t$0",
+      "});"
+    ],
+    "description": "A test"
+  },
+  "expect": {
+    "prefix": "expect",
+    "body": [
+      "expect(${1:actual}).${2:toBe}(${3:expected});"
+    ],
+    "description": "An assertion"
+  },
+  "destructure": {
+    "prefix": "destr",
+    "body": [
+      "const { ${2:a} } = ${1:object};"
+    ],
+    "description": "Destructuring"
+  },
+  "JSON.stringify": {
+    "prefix": "json",
+    "body": [
+      "JSON.stringify(${1:value}, null, 2)"
+    ],
+    "description": "Pretty JSON"
+  }
+}

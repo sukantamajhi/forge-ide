@@ -1,0 +1,171 @@
+{
+  "main": {
+    "prefix": "main",
+    "body": [
+      "package main",
+      "",
+      "import \"fmt\"",
+      "",
+      "func main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A main package"
+  },
+  "func": {
+    "prefix": "func",
+    "body": [
+      "func ${1:name}(${2}) ${3:error }{",
+      "\t$0",
+      "}"
+    ],
+    "description": "A function"
+  },
+  "method": {
+    "prefix": "method",
+    "body": [
+      "func (${1:r} *${2:Type}) ${3:Name}(${4}) ${5:error }{",
+      "\t$0",
+      "}"
+    ],
+    "description": "A method"
+  },
+  "struct": {
+    "prefix": "struct",
+    "body": [
+      "type ${1:Name} struct {",
+      "\t${2:Field} ${3:string}",
+      "}"
+    ],
+    "description": "A struct"
+  },
+  "interface": {
+    "prefix": "iface",
+    "body": [
+      "type ${1:Name} interface {",
+      "\t${2:Method}(${3}) ${4:error}",
+      "}"
+    ],
+    "description": "An interface"
+  },
+  "if err": {
+    "prefix": "iferr",
+    "body": [
+      "if err != nil {",
+      "\treturn ${1:err}",
+      "}"
+    ],
+    "description": "Handle an error"
+  },
+  "err check": {
+    "prefix": "errcheck",
+    "body": [
+      "${1:result}, err := ${2:call()}",
+      "if err != nil {",
+      "\treturn ${3:err}",
+      "}"
+    ],
+    "description": "Call and check the error"
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for ${1:i} := 0; ${1:i} < ${2:n}; ${1:i}++ {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A for loop"
+  },
+  "for range": {
+    "prefix": "forr",
+    "body": [
+      "for ${1:i}, ${2:v} := range ${3:items} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for range"
+  },
+  "switch": {
+    "prefix": "switch",
+    "body": [
+      "switch ${1:value} {",
+      "case ${2:x}:",
+      "\t$0",
+      "default:",
+      "}"
+    ],
+    "description": "switch"
+  },
+  "goroutine": {
+    "prefix": "go",
+    "body": [
+      "go func() {",
+      "\t$0",
+      "}()"
+    ],
+    "description": "A goroutine"
+  },
+  "defer": {
+    "prefix": "defer",
+    "body": [
+      "defer ${1:cleanup()}"
+    ],
+    "description": "defer"
+  },
+  "channel": {
+    "prefix": "chan",
+    "body": [
+      "${1:ch} := make(chan ${2:int}${3:, ${4:1}})"
+    ],
+    "description": "A channel"
+  },
+  "test": {
+    "prefix": "test",
+    "body": [
+      "func Test${1:Name}(t *testing.T) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A test"
+  },
+  "table test": {
+    "prefix": "tabletest",
+    "body": [
+      "func Test${1:Name}(t *testing.T) {",
+      "\ttests := []struct {",
+      "\t\tname string",
+      "\t\t${2:in}   ${3:string}",
+      "\t\twant ${4:string}",
+      "\t}{",
+      "\t\t{\"${5:case}\", $0},",
+      "\t}",
+      "\tfor _, tt := range tests {",
+      "\t\tt.Run(tt.name, func(t *testing.T) {",
+      "\t\t})",
+      "\t}",
+      "}"
+    ],
+    "description": "A table-driven test"
+  },
+  "printf": {
+    "prefix": "pf",
+    "body": [
+      "fmt.Printf(\"${1:%v}\\n\", ${2:value})"
+    ],
+    "description": "fmt.Printf"
+  },
+  "println": {
+    "prefix": "pl",
+    "body": [
+      "fmt.Println(${1:value})"
+    ],
+    "description": "fmt.Println"
+  },
+  "errorf": {
+    "prefix": "errorf",
+    "body": [
+      "fmt.Errorf(\"${1:message}: %w\", ${2:err})"
+    ],
+    "description": "Wrap an error"
+  }
+}

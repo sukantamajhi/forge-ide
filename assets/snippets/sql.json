@@ -1,0 +1,80 @@
+{
+  "select": {
+    "prefix": "sel",
+    "body": [
+      "SELECT ${1:*}",
+      "FROM ${2:table}",
+      "WHERE ${3:condition};"
+    ],
+    "description": "SELECT"
+  },
+  "insert": {
+    "prefix": "ins",
+    "body": [
+      "INSERT INTO ${1:table} (${2:columns})",
+      "VALUES (${3:values});"
+    ],
+    "description": "INSERT"
+  },
+  "update": {
+    "prefix": "upd",
+    "body": [
+      "UPDATE ${1:table}",
+      "SET ${2:column} = ${3:value}",
+      "WHERE ${4:condition};"
+    ],
+    "description": "UPDATE"
+  },
+  "delete": {
+    "prefix": "del",
+    "body": [
+      "DELETE FROM ${1:table}",
+      "WHERE ${2:condition};"
+    ],
+    "description": "DELETE"
+  },
+  "create table": {
+    "prefix": "crt",
+    "body": [
+      "CREATE TABLE ${1:name} (",
+      "\tid INTEGER PRIMARY KEY,",
+      "\t${2:column} ${3:TEXT} NOT NULL",
+      ");"
+    ],
+    "description": "CREATE TABLE"
+  },
+  "join": {
+    "prefix": "join",
+    "body": [
+      "${1:INNER} JOIN ${2:table} ${3:t} ON ${3:t}.${4:id} = ${5:other}.${6:id}"
+    ],
+    "description": "A JOIN"
+  },
+  "group by": {
+    "prefix": "grp",
+    "body": [
+      "SELECT ${1:column}, COUNT(*)",
+      "FROM ${2:table}",
+      "GROUP BY ${1:column}",
+      "ORDER BY COUNT(*) DESC;"
+    ],
+    "description": "GROUP BY"
+  },
+  "create index": {
+    "prefix": "idx",
+    "body": [
+      "CREATE INDEX ${1:idx_name} ON ${2:table} (${3:column});"
+    ],
+    "description": "CREATE INDEX"
+  },
+  "cte": {
+    "prefix": "cte",
+    "body": [
+      "WITH ${1:name} AS (",
+      "\t$0",
+      ")",
+      "SELECT * FROM ${1:name};"
+    ],
+    "description": "A common table expression"
+  }
+}

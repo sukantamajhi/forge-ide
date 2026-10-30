@@ -1,0 +1,77 @@
+{
+  "interface": {
+    "prefix": "interface",
+    "body": [
+      "interface ${1:Name} {",
+      "\t${2:field}: ${3:string};",
+      "}"
+    ],
+    "description": "An interface"
+  },
+  "type": {
+    "prefix": "type",
+    "body": [
+      "type ${1:Name} = ${2:string};"
+    ],
+    "description": "A type alias"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:A},",
+      "}"
+    ],
+    "description": "An enum"
+  },
+  "generic function": {
+    "prefix": "gfn",
+    "body": [
+      "function ${1:name}<${2:T}>(${3:arg}: ${2:T}): ${4:${2:T}} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "A generic function"
+  },
+  "typed arrow": {
+    "prefix": "tarrow",
+    "body": [
+      "const ${1:name} = (${2:arg}: ${3:string}): ${4:void} => {",
+      "\t$0",
+      "};"
+    ],
+    "description": "A typed arrow function"
+  },
+  "class with types": {
+    "prefix": "tclass",
+    "body": [
+      "class ${1:Name} {",
+      "\tconstructor(private ${2:field}: ${3:string}) {}",
+      "",
+      "\t$0",
+      "}"
+    ],
+    "description": "A class with a parameter property"
+  },
+  "import type": {
+    "prefix": "impt",
+    "body": [
+      "import type { ${2:Name} } from '${1:module}';"
+    ],
+    "description": "import type"
+  },
+  "Promise type": {
+    "prefix": "promt",
+    "body": [
+      "Promise<${1:void}>"
+    ],
+    "description": "A Promise type"
+  },
+  "Record": {
+    "prefix": "record",
+    "body": [
+      "Record<${1:string}, ${2:unknown}>"
+    ],
+    "description": "A Record type"
+  }
+}
