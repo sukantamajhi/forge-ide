@@ -1,0 +1,46 @@
+Source control
+
+Interactive rebase, cherry-pick and revert.
+A three-way (base) view for conflicts.
+Staging a single hunk of a new (untracked) file, and discarding a single hunk.
+GPG-signing prompts, submodules and worktrees.
+No Git Graph or Timeline view.
+
+Editor features
+
+Multi-root workspaces.
+Dragging tabs or text.
+Sticky scroll, inlay hints, semantic highlighting.
+Per-language settings.
+Restoring unsaved edits after a restart, or the tabs of a second editor group.
+No Peek definition or references, Call Hierarchy, Type Hierarchy, Code Lens, Linked Editing, Organize Imports or Format Selection.
+No Outline view, bookmarks, Zen mode, Navigate Back/Forward, Reopen Closed Editor, Open Recent, Workspace Symbol search or Search Editor.
+No Auto Save, and no compare-two-files command.
+Emmet, spell checking and a binary, image or hex viewer are also missing (not checked individually).
+Layout assumes a monospace font. Files must be UTF-8 and under 64 MiB.
+
+Language support
+
+Completions are plain text only, and snippets aren’t offered in the completion popup.
+Language servers other than a few are your own install.
+Embedded code is only partly highlighted.
+
+Debugging
+
+Only Python, Node and Rust.
+No conditional breakpoints or watch expressions.
+No Test Explorer, and no Tasks or build tasks (no command exists for either).
+
+Extensions
+
+Webviews, tree views, notebooks, and the tasks, debugging and terminal APIs are unsupported.
+No third-party extension has been run end to end.
+Marketplace is Open VSX only, not Microsoft’s.
+Not checked: settings sync, profiles, workspace trust, and a visual keybindings editor (keybindings are JSON only).
+
+Not applicable here
+
+Remote development (SSH, WSL, containers), Live Share, Copilot chat and notebooks.
+Screen-reader accessibility and translations.
+Auto-update.
+I haven’t checked these in detail.
