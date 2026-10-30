@@ -41,6 +41,15 @@ pub struct SnippetEntry {
     pub languages: Vec<String>,
     pub snippet: Snippet,
     pub source: String,
+    /// The prefixes in lower case, worked out once, for matching as you type.
+    pub prefixes_lower: Vec<String>,
+}
+
+impl SnippetEntry {
+    pub fn new(languages: Vec<String>, snippet: Snippet, source: String) -> Self {
+        let prefixes_lower = snippet.prefixes.iter().map(|p| p.to_lowercase()).collect();
+        Self { languages, snippet, source, prefixes_lower }
+    }
 }
 
 /// An expansion in progress: the stops still to visit, as absolute char ranges that follow edits.
@@ -86,7 +95,7 @@ pub fn builtin_snippets() -> Vec<SnippetEntry> {
     let mut entries = Vec::new();
     for (languages, label, text) in BUILTIN {
         for snippet in parse_snippet_file(text).unwrap_or_default() {
-            entries.push(SnippetEntry { languages: languages.iter().map(|l| (*l).to_owned()).collect(), snippet, source: format!("built-in, {label}") });
+            entries.push(SnippetEntry::new(languages.iter().map(|l| (*l).to_owned()).collect(), snippet, format!("built-in, {label}")));
         }
     }
     entries
@@ -100,7 +109,7 @@ pub fn load_snippets(extensions: &[Extension], builtin: bool) -> Vec<SnippetEntr
             let Ok(text) = std::fs::read_to_string(path) else { continue };
             let Ok(snippets) = parse_snippet_file(&text) else { continue };
             for snippet in snippets {
-                entries.push(SnippetEntry { languages: contribution.language.iter().cloned().collect(), snippet, source: extension.display_name() });
+                entries.push(SnippetEntry::new(contribution.language.iter().cloned().collect(), snippet, extension.display_name()));
             }
         }
     }
@@ -116,7 +125,7 @@ pub fn load_snippets(extensions: &[Extension], builtin: bool) -> Vec<SnippetEntr
             };
             let Ok(text) = std::fs::read_to_string(&path) else { continue };
             for snippet in parse_snippet_file(&text).unwrap_or_default() {
-                entries.push(SnippetEntry { languages: languages.clone(), snippet, source: "your snippets".to_owned() });
+                entries.push(SnippetEntry::new(languages.clone(), snippet, "your snippets".to_owned()));
             }
         }
     }
@@ -255,7 +264,8 @@ impl Workspace {
             .enumerate()
             .filter(|(_, e)| self.snippet_applies(e, &language))
             .filter_map(|(i, e)| {
-                let prefix = e.snippet.prefixes.iter().find(|p| p.to_lowercase().starts_with(&word))?;
+                let at = e.prefixes_lower.iter().position(|p| p.starts_with(&word))?;
+                let prefix = &e.snippet.prefixes[at];
                 let detail = if e.snippet.description.is_empty() { e.snippet.name.clone() } else { e.snippet.description.clone() };
                 Some(CompletionItem { label: prefix.clone(), detail: Some(format!("snippet: {detail}")), kind: Some(15), sort_text: Some(format!("{SNIPPET_MARK}{i}")), edit: None, insert_text: None })
             })
@@ -270,8 +280,10 @@ impl Workspace {
         let caret = view.selections.primary().head;
         let word = doc.buffer.rope().slice(identifier_start(&doc.buffer, caret)..caret).to_string();
         let mut items = self.snippet_completion_items(&word);
-        if self.settings.word_suggestions && word.chars().count() >= 2 && doc.buffer.len_chars() <= 300_000 {
-            let text = doc.buffer.text();
+        if self.settings.word_suggestions && word.chars().count() >= 2 {
+            // Words from the stretch of the file around the caret, so a huge file costs the same as a small one.
+            let len = doc.buffer.len_chars();
+            let text = doc.buffer.rope().slice(caret.saturating_sub(100_000)..(caret + 100_000).min(len)).to_string();
             items.extend(forge_core::fuzzy::words_with_prefix(&text, &word, 12).into_iter().map(|label| CompletionItem {
                 label,
                 detail: Some("word".to_owned()),

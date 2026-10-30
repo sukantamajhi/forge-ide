@@ -60,33 +60,29 @@ pub struct LineBracket {
     pub unmatched: bool,
 }
 
-/// The brackets of one line outside strings and line comments, given the nesting depth the line starts at,
-/// and the depth the line ends at. Quotes are guessed per line: a `'` only opens a string when a closing `'`
-/// follows on the same line (otherwise it is an apostrophe); with `lifetimes` (Rust) it must follow within three
-/// chars, so `'a` and `&'a str` are not taken for a string.
-pub fn line_brackets(line: &str, start_depth: i32, line_comment: Option<&str>, lifetimes: bool) -> (Vec<LineBracket>, i32) {
-    const APOSTROPHE: char = '\u{27}';
-    const BACKSLASH: char = '\u{5c}';
-    let chars: Vec<char> = line.chars().collect();
-    let comment: Vec<char> = line_comment.unwrap_or("").chars().collect();
-    let mut out = Vec::new();
+/// Walk one line as bytes (every character that matters is ASCII, and ASCII bytes never occur inside a multi-byte
+/// character, so this is safe for UTF-8) and call `found(byte index, depth, unmatched)` for each bracket outside strings
+/// and line comments. Returns the depth the line ends at.
+fn scan_line(line: &[u8], start_depth: i32, comment: &[u8], lifetimes: bool, mut found: impl FnMut(usize, i32, bool)) -> i32 {
+    const APOSTROPHE: u8 = b'\'';
+    const BACKSLASH: u8 = b'\\';
     let mut depth = start_depth.max(0);
     let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if !comment.is_empty() && chars[i..].starts_with(&comment) {
+    while i < line.len() {
+        let c = line[i];
+        if !comment.is_empty() && c == comment[0] && line[i..].starts_with(comment) {
             break;
         }
         match c {
-            '"' | '`' | APOSTROPHE => {
+            b'"' | b'`' | APOSTROPHE => {
                 let mut end = None;
                 let mut k = i + 1;
-                while k < chars.len() {
-                    if chars[k] == BACKSLASH {
+                while k < line.len() {
+                    if line[k] == BACKSLASH {
                         k += 2;
                         continue;
                     }
-                    if chars[k] == c {
+                    if line[k] == c {
                         end = Some(k);
                         break;
                     }
@@ -105,32 +101,61 @@ pub fn line_brackets(line: &str, start_depth: i32, line_comment: Option<&str>, l
                     None => {}
                 }
             }
-            '(' | '[' | '{' => {
-                out.push(LineBracket { col: i, depth, unmatched: false });
+            b'(' | b'[' | b'{' => {
+                found(i, depth, false);
                 depth += 1;
             }
-            ')' | ']' | '}' => {
+            b')' | b']' | b'}' => {
                 if depth == 0 {
-                    out.push(LineBracket { col: i, depth: 0, unmatched: true });
+                    found(i, 0, true);
                 } else {
                     depth -= 1;
-                    out.push(LineBracket { col: i, depth, unmatched: false });
+                    found(i, depth, false);
                 }
             }
             _ => {}
         }
         i += 1;
     }
-    (out, depth)
+    depth
+}
+
+/// The brackets of one line outside strings and line comments, given the nesting depth the line starts at,
+/// and the depth the line ends at. Quotes are guessed per line: a `'` only opens a string when a closing `'`
+/// follows on the same line (otherwise it is an apostrophe); with `lifetimes` (Rust) it must follow within three
+/// chars, so `'a` and `&'a str` are not taken for a string.
+pub fn line_brackets(line: &str, start_depth: i32, line_comment: Option<&str>, lifetimes: bool) -> (Vec<LineBracket>, i32) {
+    let mut out = Vec::new();
+    // Byte positions become char columns with one running count, not one count per bracket.
+    let (mut last_byte, mut last_col) = (0usize, 0usize);
+    let end = scan_line(line.as_bytes(), start_depth, line_comment.unwrap_or("").as_bytes(), lifetimes, |byte, depth, unmatched| {
+        last_col += line[last_byte..byte].chars().count();
+        last_byte = byte;
+        out.push(LineBracket { col: last_col, depth, unmatched });
+    });
+    (out, end)
 }
 
 /// The nesting depth at the start of every line (plus one entry for the end), for [`line_brackets`].
+/// Lines are read in place and nothing is allocated per line, so it stays cheap on big files.
 pub fn depths_at_line_starts(rope: &Rope, line_comment: Option<&str>, lifetimes: bool) -> Vec<i32> {
+    let comment = line_comment.unwrap_or("").as_bytes();
     let mut depths = Vec::with_capacity(rope.len_lines() + 1);
     let mut depth = 0i32;
+    let mut joined = String::new();
     for line in rope.lines() {
         depths.push(depth);
-        depth = line_brackets(&line.to_string(), depth, line_comment, lifetimes).1;
+        depth = match line.as_str() {
+            Some(text) => scan_line(text.as_bytes(), depth, comment, lifetimes, |_, _, _| {}),
+            None => {
+                // A line that spans two of the rope's chunks is copied once into a reused buffer.
+                joined.clear();
+                for chunk in line.chunks() {
+                    joined.push_str(chunk);
+                }
+                scan_line(joined.as_bytes(), depth, comment, lifetimes, |_, _, _| {})
+            }
+        };
     }
     depths.push(depth);
     depths
@@ -196,5 +221,19 @@ mod tests {
 ");
         // Before each line, then at the end: 0, then inside `{`, then inside `g(`, closed again, then outside.
         assert_eq!(depths_at_line_starts(&rope, Some("//"), true), vec![0, 1, 2, 2, 1, 0, 0]);
+    }
+
+    /// `cargo test --release -p forge-text bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_depths_on_a_big_file() {
+        let line = "    let value = compute(a, b[3], { x: (1 + 2) * 3 }); // trailing (comment
+";
+        let rope = Rope::from_str(&line.repeat(25_000));
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            std::hint::black_box(depths_at_line_starts(&rope, Some("//"), true));
+        }
+        eprintln!("bracket depths, {} lines: {:?} per pass", rope.len_lines(), start.elapsed() / 10);
     }
 }

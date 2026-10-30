@@ -76,10 +76,16 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<FuzzyMatch> {
 /// Words of at least three chars in `text` that start with `prefix` (case-insensitively) and are longer than it,
 /// most frequent first, then alphabetical, at most `limit`. The word being typed (exactly `prefix`) is not offered.
 pub fn words_with_prefix(text: &str, prefix: &str, limit: usize) -> Vec<String> {
-    let prefix_lower = prefix.to_lowercase();
+    let prefix_chars: Vec<char> = prefix.chars().flat_map(char::to_lowercase).collect();
+    let prefix_len = prefix.chars().count();
     let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for word in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
-        if word.chars().count() >= 3 && word.chars().count() > prefix.chars().count() && word.to_lowercase().starts_with(&prefix_lower) {
+        // Cheap checks first, and the prefix compared char by char: no string is built for the words that do not match.
+        if word.len() < 3 || word.len() <= prefix.len().min(prefix_len) {
+            continue;
+        }
+        let mut have = word.chars().flat_map(char::to_lowercase);
+        if prefix_chars.iter().all(|p| have.next() == Some(*p)) && word.chars().count() > prefix_len {
             *counts.entry(word).or_default() += 1;
         }
     }

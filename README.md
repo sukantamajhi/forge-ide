@@ -402,6 +402,22 @@ run yet**: that is the next step and needs you to choose which ones.
   configured but you install them yourself; `.env`, INI, Makefile, ignore files and diffs get highlighting only.
 - **Packaging:** the installer in `dist\` was built before the latest changes and has not been rebuilt.
 
+## Performance notes
+
+The editing aids run on every keystroke, so they are kept cheap (release-build timings on a 1.8 MB, 25,000-line file unless noted):
+
+| Work | Before | After | How |
+|---|---|---|---|
+| Bracket nesting for the whole file (after each edit) | 16.2 ms | 3.6 ms | bytes scanned in place, no per-line allocation |
+| Word suggestions on a 300 KB file | 2.2 ms | 0.8 ms | no string built for words that do not match; only 200,000 chars around the caret are read |
+| Auto rename tags while typing text | whole file read and scanned (about 3 ms+) | a look at the 80 chars before the caret | the file is read only when the caret is in a tag name |
+| `>` / `</` closing tags | up to 200,000 chars copied | 4,000 chars for `>`; nothing for a slash not after `<` | |
+| Sticky scroll lines | highlighted again every frame | highlighted once per text change | cached per document revision and theme |
+| Snippet matching as you type | lower-cased every prefix per key | lower-cased once at load | |
+
+Run the timings yourself: `cargo test --release -p forge-text bench -- --ignored --nocapture` and
+`cargo test --release -p forge-core --test bench -- --ignored --nocapture`. Parsing 100,000 CSV rows (7.7 MB) takes about 130 ms, once, when the preview opens.
+
 ## Testing aid
 
 `FORGE_REPLAY="ctrl+p text:main enter"` feeds keystrokes through the normal key handler after startup

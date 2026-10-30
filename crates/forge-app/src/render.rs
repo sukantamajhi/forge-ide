@@ -47,6 +47,16 @@ struct LineCtx {
     scroll_x: f32,
 }
 
+/// A pinned line: its text with tabs expanded, and its coloured runs.
+pub(crate) type StickyLine = (String, Vec<(Range<usize>, HighlightStyle)>);
+
+/// Which document and text the cached sticky lines were made for, and the lines by number.
+#[derive(Default)]
+pub(crate) struct StickyCache {
+    key: (usize, u64, String),
+    lines: std::collections::HashMap<usize, StickyLine>,
+}
+
 /// Give the bytes `range` of a line the colour `color`, splitting any highlight run it cuts across.
 fn paint_range(runs: &mut Vec<(Range<usize>, HighlightStyle)>, range: Range<usize>, color: u32) {
     let mut out: Vec<(Range<usize>, HighlightStyle)> = Vec::with_capacity(runs.len() + 3);
@@ -454,26 +464,39 @@ impl Workspace {
             return None;
         }
         let t = &self.theme;
+        let mut cache = self.sticky_cache.borrow_mut();
+        let key = (view.doc, doc.revision, self.settings.theme.clone());
+        if cache.key != key {
+            cache.key = key;
+            cache.lines.clear();
+        }
         let rows: Vec<gpui::Stateful<Div>> = starts
             .iter()
             .map(|&line| {
-                let text = doc.buffer.line(line);
-                let (shown, byte_of_col) = expand_tabs_mapped(text.trim_end());
-                let spans = match (doc.syntax.as_ref(), doc.tm.as_ref()) {
-                    (Some(s), _) => s.highlight_lines(doc.buffer.rope(), line..line + 1),
-                    (None, Some(tm)) => tm.highlight_lines(doc.buffer.rope(), line..line + 1),
-                    (None, None) => Vec::new(),
-                };
-                let runs: Vec<(Range<usize>, HighlightStyle)> = spans
-                    .first()
-                    .map(|spans| {
-                        spans
-                            .iter()
-                            .filter(|s| s.end_col < byte_of_col.len())
-                            .map(|s| (byte_of_col[s.start_col]..byte_of_col[s.end_col], HighlightStyle { color: Some(rgb(t.syntax_color(s.class)).into()), ..Default::default() }))
-                            .collect()
+                let (shown, runs) = cache
+                    .lines
+                    .entry(line)
+                    .or_insert_with(|| {
+                        let text = doc.buffer.line(line);
+                        let (shown, byte_of_col) = expand_tabs_mapped(text.trim_end());
+                        let spans = match (doc.syntax.as_ref(), doc.tm.as_ref()) {
+                            (Some(s), _) => s.highlight_lines(doc.buffer.rope(), line..line + 1),
+                            (None, Some(tm)) => tm.highlight_lines(doc.buffer.rope(), line..line + 1),
+                            (None, None) => Vec::new(),
+                        };
+                        let runs: Vec<(Range<usize>, HighlightStyle)> = spans
+                            .first()
+                            .map(|spans| {
+                                spans
+                                    .iter()
+                                    .filter(|s| s.end_col < byte_of_col.len())
+                                    .map(|s| (byte_of_col[s.start_col]..byte_of_col[s.end_col], HighlightStyle { color: Some(rgb(t.syntax_color(s.class)).into()), ..Default::default() }))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        (shown, runs)
                     })
-                    .unwrap_or_default();
+                    .clone();
                 div()
                     .id(("sticky", g * 100_000 + line))
                     .flex()

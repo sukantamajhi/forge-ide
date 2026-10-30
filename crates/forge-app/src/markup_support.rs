@@ -35,7 +35,12 @@ impl Workspace {
         }
         let caret = view.selections.primary().head;
         let rope = doc.buffer.rope();
-        let start = caret.saturating_sub(200_000);
+        // `</` only matters right after a `<`, so most slashes are ruled out without reading anything.
+        if text == "/" && (caret < 2 || rope.char(caret - 2) != '<') {
+            return;
+        }
+        // `>` only needs the tag it just ended (the last few thousand chars); `</` needs everything still open before it.
+        let start = caret.saturating_sub(if text == ">" { 4_000 } else { 200_000 });
         let before: Vec<char> = rope.slice(start..caret).chars().collect();
         let after: String = rope.slice(caret..(caret + 64).min(rope.len_chars())).to_string();
         let insert = if text == ">" {
@@ -140,7 +145,19 @@ impl Workspace {
             return;
         }
         let caret = view.selections.primary().head;
-        let chars: Vec<char> = doc.buffer.rope().chars().collect();
+        // The caret has to be in a tag's name, which nearly never holds while writing text: a look at the few chars
+        // before it settles that, and only then is the whole file read.
+        let rope = doc.buffer.rope();
+        let (mut at, mut looked) = (caret, 0);
+        while at > 0 && looked < 80 && (rope.char(at - 1).is_alphanumeric() || matches!(rope.char(at - 1), '-' | '_' | ':' | '.')) {
+            at -= 1;
+            looked += 1;
+        }
+        let after_open = at > 0 && (rope.char(at - 1) == '<' || (rope.char(at - 1) == '/' && at > 1 && rope.char(at - 2) == '<'));
+        if !after_open {
+            return;
+        }
+        let chars: Vec<char> = rope.chars().collect();
         let Some((start, end, name)) = tags::rename_partner(&chars, caret, jsx) else { return };
         let delta = name.chars().count() as isize - (end - start) as isize;
         let new_caret = if start < caret { (caret as isize + delta).max(0) as usize } else { caret };

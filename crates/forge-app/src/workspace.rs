@@ -632,6 +632,9 @@ pub(crate) struct Workspace {
     /// The tab strip of each editor group scrolls sideways; with the `(active tab, tab count)` it was last
     /// scrolled for, so the active tab is brought into view when it changes and the strip is left alone otherwise.
     pub tab_scrolls: std::cell::RefCell<Vec<(gpui::ScrollHandle, (usize, usize))>>,
+    /// Sticky-scroll lines with their syntax colours, kept while the text and theme stay as they were,
+    /// so the pinned lines are not highlighted again on every frame.
+    pub sticky_cache: std::cell::RefCell<crate::render::StickyCache>,
     pub explorer_selected: Option<usize>,
 
     pub lsp: LspManager,
@@ -952,6 +955,7 @@ impl Workspace {
             graph_pending: false,
             graph_scroll: UniformListScrollHandle::new(),
             tab_scrolls: std::cell::RefCell::new(Vec::new()),
+            sticky_cache: std::cell::RefCell::new(Default::default()),
             timeline: None,
             timeline_pending: false,
             timeline_scroll: UniformListScrollHandle::new(),
