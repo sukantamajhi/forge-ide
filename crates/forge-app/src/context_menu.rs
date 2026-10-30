@@ -669,6 +669,7 @@ impl Workspace {
                 .absolute()
                 .left(px(x))
                 .top(px(y))
+                .font_family(self.ui_font.clone())
                 .w(px(MENU_WIDTH * k))
                 .py_1()
                 .bg(rgb(t.popup))

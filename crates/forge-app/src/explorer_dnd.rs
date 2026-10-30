@@ -8,7 +8,6 @@ use gpui::{div, prelude::*, rgb, Context, IntoElement, Render, Window};
 #[derive(Clone, Debug)]
 pub struct DraggedEntry {
     pub path: PathBuf,
-    pub is_dir: bool,
 }
 
 /// The label that follows the pointer while dragging.

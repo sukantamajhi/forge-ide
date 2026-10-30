@@ -566,6 +566,9 @@ pub(crate) struct Workspace {
     pub status_kind: StatusKind,
     pub status_at: Instant,
     pub char_width: Pixels,
+    /// The font of code, the terminal and diffs (monospace), and of menus, tabs and the side bar (sans).
+    pub code_font: SharedString,
+    pub ui_font: SharedString,
     pub clipboard_lines: Option<String>,
     pub last_typing: Option<Instant>,
     pub close_armed: Option<(usize, usize)>,
@@ -765,6 +768,8 @@ impl Workspace {
             focus_handle: cx.focus_handle(),
             focus: Focus::Editor,
             char_width: px(settings.font_size * 0.55),
+            code_font: SharedString::from(FONT),
+            ui_font: SharedString::from("Segoe UI"),
             settings,
             theme,
             icon_theme,

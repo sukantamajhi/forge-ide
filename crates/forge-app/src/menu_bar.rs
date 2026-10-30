@@ -173,6 +173,7 @@ impl Workspace {
             .border_b_1()
             .border_color(rgb(t.border))
             .text_size(px(13.0))
+            .font_family(self.ui_font.clone())
             .children((0..TITLES.len()).map(|ix| {
                 div()
                     .id(("menu-bar", ix))

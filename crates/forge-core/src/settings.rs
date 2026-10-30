@@ -52,6 +52,10 @@ pub const BUILTIN_PRODUCT_ICON_THEME: &str = "Default";
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub font_size: f32,
+    /// `editor.fontFamily`: the code font. Empty picks the best monospace font Windows has.
+    pub font_family: String,
+    /// `workbench.fontFamily`: the font of menus, tabs, the side bar and dialogs. Empty picks Segoe UI.
+    pub ui_font_family: String,
     pub tab_size: usize,
     pub insert_spaces: bool,
     pub auto_closing_brackets: bool,
@@ -91,6 +95,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             font_size: 14.0,
+            font_family: String::new(),
+            ui_font_family: String::new(),
             tab_size: 4,
             insert_spaces: true,
             auto_closing_brackets: true,
@@ -228,6 +234,12 @@ impl Settings {
         }
         if let Some(v) = map.get("files.autoSave").and_then(Value::as_str).and_then(AutoSave::from_id) {
             s.auto_save = v;
+        }
+        if let Some(v) = map.get("editor.fontFamily").and_then(Value::as_str) {
+            s.font_family = v.trim().to_owned();
+        }
+        if let Some(v) = map.get("workbench.fontFamily").and_then(Value::as_str) {
+            s.ui_font_family = v.trim().to_owned();
         }
         if let Some(v) = map.get("explorer.confirmDragAndDrop").and_then(Value::as_bool) {
             s.confirm_drag_and_drop = v;
@@ -403,6 +415,8 @@ mod tests {
         assert_eq!(Settings::parse(r#"{ "files.autoSave": "onWindowChange" }"#).auto_save, AutoSave::OnFocusChange);
         assert_eq!(Settings::parse(r#"{ "files.autoSave": "nonsense" }"#).auto_save, AutoSave::Off);
         assert!(Settings::default().confirm_drag_and_drop);
+        let f = Settings::parse(r#"{ "editor.fontFamily": " JetBrains Mono ", "workbench.fontFamily": "Inter" }"#);
+        assert_eq!((f.font_family.as_str(), f.ui_font_family.as_str()), ("JetBrains Mono", "Inter"));
         assert!(!Settings::parse(r#"{ "explorer.confirmDragAndDrop": false }"#).confirm_drag_and_drop);
     }
 

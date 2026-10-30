@@ -50,6 +50,36 @@ pub fn badge(name: &str) -> (&'static str, u32) {
     }
 }
 
+/// The Codicon that stands for a file called `name`; `badge` gives its colour. Codicons are drawn from the
+/// bundled icon font, so every file type is a small picture instead of two letters.
+pub fn icon(name: &str) -> char {
+    let lower = name.to_ascii_lowercase();
+    let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
+    match (lower.as_str(), ext) {
+        ("dockerfile" | "containerfile", _) => '\u{eb29}',
+        ("makefile" | "gnumakefile", _) => '\u{eb6d}',
+        (".gitignore" | ".gitattributes" | ".gitmodules" | ".dockerignore", _) => '\u{eafc}',
+        ("license" | "licence" | "copying", _) => '\u{eb12}',
+        ("readme" | "readme.md", _) => '\u{eb1d}',
+        _ if lower == ".env" || lower.starts_with(".env.") || lower.ends_with(".env") => '\u{eb11}',
+        (_, "json" | "jsonc" | "json5") => '\u{eb0f}',
+        (_, "md" | "markdown" | "mdx") => '\u{eb1d}',
+        (_, "png" | "jpg" | "jpeg" | "gif" | "webp" | "ico" | "bmp") => '\u{eaea}',
+        (_, "zip" | "gz" | "tar" | "7z" | "vsix") => '\u{eaef}',
+        (_, "pdf") => '\u{eaeb}',
+        (_, "exe" | "dll" | "bin" | "so" | "o" | "obj" | "wasm") => '\u{eae8}',
+        (_, "html" | "htm" | "xml" | "svg" | "plist" | "csproj" | "xaml") => '\u{eac4}',
+        (_, "css" | "scss" | "sass" | "less") => '\u{eb5c}',
+        (_, "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd") => '\u{ea85}',
+        (_, "sql") => '\u{eace}',
+        (_, "toml" | "yaml" | "yml" | "ini" | "cfg" | "conf" | "properties") => '\u{eb51}',
+        (_, "lock") => '\u{ea75}',
+        (_, "txt" | "log") => '\u{ec5e}',
+        (_, "rs" | "py" | "pyi" | "pyw" | "js" | "mjs" | "cjs" | "jsx" | "ts" | "mts" | "cts" | "tsx" | "go" | "java" | "kt" | "kts" | "c" | "h" | "cc" | "cpp" | "cxx" | "hpp" | "hh" | "cs" | "php" | "rb" | "lua") => '\u{eae9}',
+        _ => '\u{ea7b}',
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +103,16 @@ mod tests {
         assert_eq!(badge("prod.env").0, "EN");
         assert_eq!(badge("Cargo.lock").0, "LK");
         assert_eq!(badge("README.md").0, "MD");
+    }
+
+    #[test]
+    fn every_kind_of_file_has_a_codicon() {
+        assert_eq!(icon("main.rs"), '\u{eae9}');
+        assert_eq!(icon("package.json"), '\u{eb0f}');
+        assert_eq!(icon("notes.TXT"), '\u{ec5e}');
+        assert_eq!(icon(".env.example"), '\u{eb11}');
+        assert_eq!(icon("Dockerfile"), '\u{eb29}');
+        assert_eq!(icon("data.xyz"), '\u{ea7b}');
     }
 
     #[test]

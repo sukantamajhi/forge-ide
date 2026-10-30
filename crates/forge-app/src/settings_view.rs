@@ -269,6 +269,7 @@ impl Workspace {
 
         Some(
             crate::scroll::overlay_page("settings-page", left, t.bg, t.text)
+                .font_family(self.ui_font.clone())
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     this.settings_model_focus = false;
                     this.focus = Focus::Editor;

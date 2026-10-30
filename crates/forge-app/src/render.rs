@@ -14,7 +14,7 @@ use forge_text::columns::{display_width, expand_tabs_mapped, TAB_WIDTH};
 use forge_text::search::Match;
 use gpui::{
     div, font, prelude::*, px, relative, rems, rgb, rgba, uniform_list, AnyElement, App, Context, Div, FontWeight, HighlightStyle, MouseButton, MouseDownEvent, MouseMoveEvent,
-    Pixels, StyledText, Window,
+    Pixels, SharedString, StyledText, Window,
 };
 
 use crate::resize::{equal_shares, Edge, Resize};
@@ -43,8 +43,8 @@ struct LineCtx {
 
 /// The small coloured file-type badge shown before a file's name.
 fn file_badge(name: &str) -> Div {
-    let (label, color) = crate::file_icons::badge(name);
-    div().w(rems(1.5)).flex_none().flex().justify_center().text_size(rems(0.6875)).font_weight(FontWeight::BOLD).text_color(rgb(color)).child(label)
+    let (_, color) = crate::file_icons::badge(name);
+    div().w(rems(1.5)).flex_none().flex().justify_center().items_center().child(crate::icons::glyph(crate::file_icons::icon(name), 1.0, color))
 }
 
 /// A file's icon: the extension icon theme's image when there is one, else the letter badge.
@@ -66,7 +66,16 @@ fn px_f(v: f32) -> Pixels {
 impl Workspace {
     pub fn measure_font(&mut self, cx: &App) {
         let system = cx.text_system();
-        let id = system.resolve_font(&font(FONT));
+        // The first installed family of: the one in settings, then the usual good ones.
+        let installed = system.all_font_names();
+        let pick = |wanted: &str, fallbacks: &[&str], keep: &str| -> SharedString {
+            let have = |name: &str| installed.iter().any(|n| n.eq_ignore_ascii_case(name));
+            let first = std::iter::once(wanted).filter(|w| !w.is_empty()).chain(fallbacks.iter().copied()).find(|n| have(n));
+            SharedString::from(first.unwrap_or(keep).to_owned())
+        };
+        self.code_font = pick(&self.settings.font_family, &["Cascadia Mono", "Cascadia Code", "Consolas"], FONT);
+        self.ui_font = pick(&self.settings.ui_font_family, &["Segoe UI Variable Text", "Segoe UI", "Arial"], "Segoe UI");
+        let id = system.resolve_font(&font(self.code_font.clone()));
         if let Ok(size) = system.advance(id, px(self.settings.font_size), 'm') {
             self.char_width = size.width;
         }
@@ -203,6 +212,7 @@ impl Workspace {
             .flex_none()
             .items_center()
             .h(px(TAB_BAR_HEIGHT))
+            .font_family(self.ui_font.clone())
             .bg(rgb(t.sidebar))
             .child(div().flex().flex_row().flex_1().min_w_0().h_full().overflow_hidden().children(tabs))
             .child(actions)
@@ -218,7 +228,7 @@ impl Workspace {
             let path = &doc.path;
             path.strip_prefix(self.root()).unwrap_or(path).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("  ›  ")
         });
-        div().flex().flex_row().items_center().flex_none().h(px(BREADCRUMB_HEIGHT)).px_3().text_xs().text_color(rgb(t.dim)).bg(rgb(t.bg)).child(crumbs.unwrap_or_default())
+        div().flex().flex_row().items_center().flex_none().h(px(BREADCRUMB_HEIGHT)).font_family(self.ui_font.clone()).px_3().text_xs().text_color(rgb(t.dim)).bg(rgb(t.bg)).child(crumbs.unwrap_or_default())
     }
 
     fn render_group(&mut self, g: usize, cx: &mut Context<Self>) -> Div {
@@ -687,6 +697,7 @@ impl Workspace {
             .w(px(self.sidebar_width()))
             .h_full()
             .relative()
+            .font_family(self.ui_font.clone())
             .bg(rgb(t.sidebar))
             .border_r_1()
             .border_color(rgb(t.border))
@@ -771,7 +782,7 @@ impl Workspace {
                                         .id(("entry", ix))
                                         .w_full()
                                         .h(px(line_h))
-                                        .on_drag(crate::explorer_dnd::DraggedEntry { path: entry.path.clone(), is_dir }, move |_, _, _, cx| {
+                                        .on_drag(crate::explorer_dnd::DraggedEntry { path: entry.path.clone() }, move |_, _, _, cx| {
                                             cx.new(|_| crate::explorer_dnd::DragChip { name: chip_name.clone(), bg: chip_bg, fg: chip_fg, border: chip_border })
                                         })
                                         .when(is_dir, |d| d.drag_over::<crate::explorer_dnd::DraggedEntry>(move |s, _, _, _| s.bg(rgb(hover_bg))).drag_over::<gpui::ExternalPaths>(move |s, _, _, _| s.bg(rgb(hover_bg))))
@@ -821,7 +832,10 @@ impl Workspace {
                                                 } else {
                                                     file_icon(this.icon_theme.as_ref(), &entry.name)
                                                 })
-                                                .children(entry.is_dir.then(|| this.icon_theme.as_ref().and_then(|i| i.folder_icon(&entry.name, entry.expanded)).map(icon_image)).flatten())
+                                                .children(entry.is_dir.then(|| match this.icon_theme.as_ref().and_then(|i| i.folder_icon(&entry.name, entry.expanded)) {
+                                                    Some(path) => icon_image(path),
+                                                    None => div().w(rems(1.5)).flex_none().flex().justify_center().items_center().child(crate::icons::glyph(if entry.expanded { '\u{eaf7}' } else { '\u{ea83}' }, 1.0, 0xd6a85a)),
+                                                }))
                                                 .child(entry.name.clone()),
                                         )
                                         .child(div().text_xs().text_color(rgb(name_color)).child(badge))
@@ -2116,6 +2130,7 @@ impl Workspace {
                 .child(
                     div()
                         .w(rems(40.0))
+                        .font_family(self.ui_font.clone())
                         .flex()
                         .flex_col()
                         .gap_1()
@@ -2219,6 +2234,7 @@ impl Workspace {
             .px_3()
             .h(rems(1.5))
             .text_xs()
+            .font_family(self.ui_font.clone())
             .bg(rgb(t.sidebar))
             .border_t_1()
             .border_color(rgb(t.border))
@@ -2369,7 +2385,7 @@ impl Render for Workspace {
             .flex_col()
             .bg(rgb(t.bg))
             .text_color(rgb(t.text))
-            .font_family(FONT)
+            .font_family(self.code_font.clone())
             .text_size(px(self.settings.font_size))
             .child(self.render_menu_bar(cx))
             .child(main)

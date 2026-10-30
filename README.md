@@ -142,6 +142,11 @@ cargo build --release -p forge-app            # LTO; slow first build
     **Focus on Outline View** opens the symbols picker for the file (the same list as Go to Symbol in Editor), not a permanent tree.
   - **Images and binary files:** PNG, JPEG, GIF, BMP, WebP and ICO files open in a viewer over the editor (Escape or Close to leave).
     Any other file that is not UTF-8 opens as a read-only hex dump of its first 256 KiB.
+- **Fonts and icons:** code, the terminal and diffs use a monospace font (Cascadia Mono, then Cascadia Code, then Consolas); menus,
+  tabs, the side bar, the status bar, Settings and dialogs use a sans font (Segoe UI Variable Text, then Segoe UI). Pick others
+  with `"editor.fontFamily"` and `"workbench.fontFamily"` (a name Windows has installed; a missing one falls back to the list).
+  Files and folders have Codicon pictures instead of two-letter badges (a code file, JSON, Markdown, image, archive, terminal,
+  settings gear, key for `.env`, lock, folder open / closed...), coloured by language. Icon themes from extensions still win.
 - **Resizable panels:** drag the edge of the sidebar, the top edge of the bottom panel, the left edge of the Markdown
   preview, the divider between split editors, or the dividers between the Debug panel's columns. The sidebar, bottom
   panel, preview and Debug columns are remembered in `%APPDATA%\Forge\ui-state.json`; split editors reset to equal shares.
