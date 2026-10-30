@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest something Forge should do, or do better
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `docs/FEATURES.xlsx` lists what is built, partly built and planned, with priorities. Check it first: if your idea is already a row there (for example "F-027"), open this issue and quote the row so it can be tracked.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the solution. What is hard or missing today?
+      placeholder: "When I review a pull request I want to ... but today I have to ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Forge to do?
+      description: How it should look and behave. Shortcuts, menu entries and settings if you have them in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: vscode
+    attributes:
+      label: How does VS Code (or another editor) do it?
+      description: Forge follows VS Code's behaviour and names where it can. A command name, a setting name or a screenshot is enough.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do instead today?
+      description: A workaround, an extension, another tool.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Editor
+        - Explorer
+        - Source control
+        - Language server features
+        - Terminal
+        - Debugging
+        - Extensions
+        - Previews
+        - Menus, tabs, settings, themes
+        - Installer or startup
+        - Performance
+        - Something else
+    validations:
+      required: true
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - label: I would like to work on this myself (the README says how to build and test).

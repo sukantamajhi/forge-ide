@@ -1,0 +1,45 @@
+name: Performance problem
+description: Forge feels slow, uses a lot of CPU or memory, or stutters
+title: "[Performance]: "
+labels: ["performance", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Numbers make these fixable. Forge can print them for you: set `FORGE_PROFILE=1` in the environment, start Forge, do the slow thing for ten seconds, and copy the `[prof]` lines from the terminal.
+  - type: textarea
+    id: slow
+    attributes:
+      label: What is slow?
+      description: The action (typing, scrolling, opening a file, staging, starting up) and how slow it feels.
+    validations:
+      required: true
+  - type: textarea
+    id: size
+    attributes:
+      label: How big is what you are working on?
+      description: File size and number of lines, number of files in the project, whether it is a git repository, how many tabs are open.
+      placeholder: "A 40 MB log file with 600,000 lines; 12 tabs; the folder has 30,000 files"
+    validations:
+      required: true
+  - type: textarea
+    id: profile
+    attributes:
+      label: Profile output
+      description: Lines starting with `[prof]` (frames per second, time per step, startup phases).
+      render: shell
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      description: CPU, RAM, graphics card, Windows version, and whether the files are on a network or external drive.
+      placeholder: "Ryzen 5 5600, 16 GB, RTX 3060, Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Forge version
+      placeholder: "0.1.0"
+    validations:
+      required: true

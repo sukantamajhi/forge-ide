@@ -1,0 +1,100 @@
+name: Bug report
+description: Something in Forge does not work the way it should
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A good report has the steps to see the problem and what you expected instead.
+        Please search the open and closed issues first, and check `docs/FEATURES.xlsx`: some things are listed there as not built yet, which makes them a feature request, not a bug.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected to see instead.
+      placeholder: "When I press Ctrl+Shift+V on a .csv file, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from opening Forge. A small file or folder that shows it helps a lot (attach it, or paste its contents).
+      placeholder: |
+        1. Open the folder ...
+        2. Open the file ...
+        3. Press ...
+        4. See ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      options:
+        - Editor (typing, selection, scrolling, snippets, Emmet, tags)
+        - Explorer (files, folders, drag and drop)
+        - Source control (stage, diff, rebase, conflicts, graph)
+        - Language server (completion, hover, rename, diagnostics)
+        - Terminal
+        - Debugging
+        - Extensions
+        - Previews (Markdown, CSV, images, hex)
+        - Menus, tabs, settings, themes, fonts
+        - Installer or startup
+        - Performance (slow, high CPU or memory)
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Forge version
+      description: The installer's version or the release tag. If you built it yourself, give the commit (`git rev-parse --short HEAD`).
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Press Win+R and run `winver`.
+      placeholder: "Windows 11 23H2 (22631)"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Graphics card and display
+      description: Forge draws on the GPU. Useful for drawing problems, slowness and a window that stays blank.
+      placeholder: "Intel UHD 620, one 1920x1080 display at 125% scaling"
+  - type: input
+    id: language-server
+    attributes:
+      label: Language server and file type
+      description: Only if it is about code intelligence.
+      placeholder: "rust-analyzer 2024-10-28, a .rs file in a Cargo workspace"
+  - type: textarea
+    id: settings
+    attributes:
+      label: Relevant settings
+      description: Anything from settings.json (Ctrl+, then "Open settings.json") that could matter, such as the font, auto save or language blocks. Remove anything private.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or screenshot
+      description: |
+        Drag a screenshot in here. For crashes or odd behaviour, start Forge from a terminal (`forge.exe path\to\folder`) and paste what it prints.
+        For slowness, set `FORGE_PROFILE=1` before starting it and paste a few of the `[prof]` lines.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I searched the open and closed issues and did not find this one.
+          required: true
+        - label: I used the latest release, or I say above which version I used.
+          required: false

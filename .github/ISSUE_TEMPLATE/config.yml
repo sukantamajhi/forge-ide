@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: What is built and what is planned
+    url: https://github.com/sukantamajhi/forge-ide/blob/main/docs/FEATURES.xlsx
+    about: The feature tracker, with the status and priority of every item.
+  - name: Security problem
+    url: https://github.com/sukantamajhi/forge-ide/security/advisories/new
+    about: Report a vulnerability privately instead of in a public issue.
