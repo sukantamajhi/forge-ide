@@ -181,8 +181,8 @@ code, kbd {
 
 code {
   white-space: nowrap;
-  font-size: 0.88em;
-  padding: 0.125em 0.4375em;
+  font-size: 0.86em;
+  padding: 0.125em 0.35em;
   border-radius: var(--radius-xs);
   background: rgba(255, 255, 255, 0.08);
   color: #ffffff;
@@ -896,15 +896,15 @@ h4,
 }
 
 .row {
-  margin-top: clamp(3rem, 6.5vw, 6.5rem);
+  margin-top: clamp(3rem, 6vw, 5.5rem);
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
-  gap: clamp(1.75rem, 5.5vw, 5.5rem);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(2rem, 5vw, 4.5rem);
   align-items: center;
 }
 
 .row-flip {
-  grid-template-columns: minmax(0, 6fr) minmax(0, 5fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .row-flip .row-text {
@@ -946,7 +946,7 @@ kbd {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-window);
   overflow: hidden;
-  max-width: 42rem;
+  max-width: 38rem;
   width: 100%;
 }
 
@@ -1033,9 +1033,9 @@ kbd {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-window);
   padding: 1.375rem;
-  max-width: 30rem;
+  max-width: 38rem;
   width: 100%;
-  margin-inline: auto;
+  margin-inline: 0;
 }
 
 .row-flip .scm {
