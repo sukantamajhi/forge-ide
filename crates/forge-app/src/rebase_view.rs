@@ -77,7 +77,7 @@ impl Workspace {
     }
 
     /// Keys while the page is open. True when the key was used (or must not reach the editor behind).
-    pub(crate) fn rebase_key(&mut self, k: &Keystroke) -> bool {
+    pub(crate) fn rebase_key(&mut self, k: &Keystroke, cx: &mut Context<Self>) -> bool {
         let ctrl = k.modifiers.control || k.modifiers.platform;
         let Some(page) = self.rebase_page.as_mut() else { return false };
         if k.key == "escape" {
@@ -88,7 +88,7 @@ impl Workspace {
             return true;
         }
         if let Some(i) = page.focus {
-            return match page.messages[i].apply(&k.key, ctrl, k.key_char.as_deref()) {
+            return match crate::input_handling::line_input_key(&mut page.messages[i], k, cx) {
                 Outcome::Submit => {
                     page.focus = None;
                     true
@@ -185,7 +185,7 @@ impl Workspace {
                             cx.stop_propagation();
                             cx.notify();
                         }))
-                        .child(self.render_input(&page.messages[i], "New message", focused))
+                        .child(self.render_input(&page.messages[i], crate::workspace::InputField::Rebase(i), "New message", focused, cx))
                         .into_any_element()
                 } else {
                     div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().when(dropped, |d| d.text_color(rgb(t.dim)).line_through()).child(item.subject.clone()).into_any_element()

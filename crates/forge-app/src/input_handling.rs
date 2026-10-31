@@ -19,13 +19,49 @@ use forge_text::columns::col_at_cell;
 use forge_text::search::Finder;
 use forge_text::words::word_range_at;
 use forge_text::{Selection, SelectionSet};
-use gpui::{Context, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point};
+use gpui::{ClipboardItem, Context, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point};
 
 use crate::completion;
 use crate::workspace::{
     Focus, Item, ItemAction, Overlay, OverlayKind, PanelView, SidebarView, Workspace, GLYPH_WIDTH, GUTTER_WIDTH,
     LINE_NUMBER_WIDTH, TEXT_PAD,
 };
+
+/// Keys every one-line text field shares: Ctrl+C / Ctrl+X / Ctrl+V on the clipboard, and Shift extending the
+/// selection. Anything else goes to the field itself.
+pub(crate) fn line_input_key(input: &mut LineInput, k: &Keystroke, cx: &mut gpui::App) -> Outcome {
+    let ctrl = k.modifiers.control || k.modifiers.platform;
+    if ctrl && !k.modifiers.alt {
+        match k.key.as_str() {
+            "c" => {
+                if let Some(text) = input.selected_text() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+                return Outcome::Moved;
+            }
+            "x" => {
+                return match input.cut() {
+                    Some(text) => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        Outcome::Edited
+                    }
+                    None => Outcome::Moved,
+                };
+            }
+            "v" => {
+                return match cx.read_from_clipboard().and_then(|i| i.text()) {
+                    Some(text) => {
+                        input.insert(&text);
+                        Outcome::Edited
+                    }
+                    None => Outcome::Moved,
+                };
+            }
+            _ => {}
+        }
+    }
+    input.apply_with(&k.key, ctrl, k.modifiers.shift, k.key_char.as_deref())
+}
 
 pub(crate) enum SearchMsg {
     Hits(Vec<Hit>),
@@ -87,7 +123,7 @@ impl Workspace {
             cx.notify();
             return;
         }
-        if self.rebase_page.is_some() && self.overlay.is_none() && self.rebase_key(k) {
+        if self.rebase_page.is_some() && self.overlay.is_none() && self.rebase_key(k, cx) {
             cx.notify();
             return;
         }
@@ -101,7 +137,7 @@ impl Workspace {
             cx.notify();
             return;
         }
-        if self.settings_open && self.overlay.is_none() && self.settings_key(k) {
+        if self.settings_open && self.overlay.is_none() && self.settings_key(k, cx) {
             cx.notify();
             return;
         }
@@ -963,18 +999,11 @@ impl Workspace {
                 self.accept_overlay(cx);
                 return true;
             }
-            ("v", true) => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                    overlay.input.insert(&text);
-                    overlay.selected = 0;
-                    self.refresh_overlay();
-                }
-            }
             _ => {
                 if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardMany { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. }) {
                     return true;
                 }
-                match overlay.input.apply(&k.key, ctrl, k.key_char.as_deref()) {
+                match line_input_key(&mut overlay.input, k, cx) {
                     Outcome::Edited => {
                         overlay.selected = 0;
                         self.refresh_overlay();
@@ -1251,7 +1280,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn find_key(&mut self, k: &Keystroke, pressed: &str, cx: &mut Context<Self>) -> bool {
+    fn find_key(&mut self, k: &Keystroke, _pressed: &str, cx: &mut Context<Self>) -> bool {
         let m = k.modifiers;
         let ctrl = m.control || m.platform;
         match (k.key.as_str(), ctrl, m.alt) {
@@ -1300,20 +1329,8 @@ impl Workspace {
             _ => {}
         }
         let replace_field = self.find.focus_replace && self.find.replace_visible;
-        if pressed == "ctrl+v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                if replace_field {
-                    self.find.replacement.insert(&text);
-                } else {
-                    self.find.query.insert(&text);
-                    self.refresh_find();
-                    self.select_current_find_match();
-                }
-            }
-            return true;
-        }
         let input = if replace_field { &mut self.find.replacement } else { &mut self.find.query };
-        match input.apply(&k.key, ctrl, k.key_char.as_deref()) {
+        match line_input_key(input, k, cx) {
             Outcome::Edited => {
                 if !replace_field {
                     self.refresh_find();
@@ -1513,7 +1530,7 @@ impl Workspace {
         self.set_status(message);
     }
 
-    fn search_key(&mut self, k: &Keystroke, pressed: &str, cx: &mut Context<Self>) -> bool {
+    fn search_key(&mut self, k: &Keystroke, _pressed: &str, cx: &mut Context<Self>) -> bool {
         let m = k.modifiers;
         let ctrl = m.control || m.platform;
         let in_replace = self.search.replace_open && self.search.replace_focused;
@@ -1583,13 +1600,7 @@ impl Workspace {
             _ => {}
         }
         let field = if in_replace { &mut self.search.replace } else { &mut self.search.query };
-        if pressed == "ctrl+v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                field.insert(&text);
-            }
-            return true;
-        }
-        matches!(field.apply(&k.key, ctrl, k.key_char.as_deref()), Outcome::Edited | Outcome::Moved)
+        matches!(line_input_key(field, k, cx), Outcome::Edited | Outcome::Moved)
     }
 
     // ---- source control ----

@@ -19,7 +19,7 @@ use gpui::{
 
 use crate::resize::{equal_shares, Edge, Resize};
 use crate::workspace::{
-    Focus, OverlayKind, PanelView, SearchRow, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
+    Focus, InputField, InputHit, OverlayKind, PanelView, SearchRow, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
     GLYPH_WIDTH, LINE_NUMBER_WIDTH, TAB_BAR_HEIGHT, TEXT_PAD,
 };
 
@@ -127,30 +127,78 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn render_input(&self, input: &LineInput, placeholder: &str, focused: bool) -> Div {
-        self.render_input_with(input, placeholder, focused, Vec::new())
+    pub(crate) fn render_input(&self, input: &LineInput, field: InputField, placeholder: &str, focused: bool, cx: &mut Context<Self>) -> Div {
+        self.render_input_with(input, field, placeholder, focused, Vec::new(), cx)
     }
 
     /// The one-line text box every panel uses: roomy, rounded, a clear ring when it has the keyboard, a dim
     /// placeholder, and `trailing` buttons (match case, whole word, regex...) inside its right edge.
-    pub(crate) fn render_input_with(&self, input: &LineInput, placeholder: &str, focused: bool, trailing: Vec<AnyElement>) -> Div {
+    ///
+    /// It behaves like a normal text box: a click puts the caret between the characters it landed on, a drag
+    /// or Shift+arrows select a range, a double click selects a word and a triple click everything.
+    pub(crate) fn render_input_with(&self, input: &LineInput, field: InputField, placeholder: &str, focused: bool, trailing: Vec<AnyElement>, cx: &mut Context<Self>) -> Div {
+        const CARET_WIDTH: f32 = 1.5;
         let t = &self.theme;
         let text = input.text();
-        let split = text.char_indices().nth(input.cursor()).map_or(text.len(), |(b, _)| b);
-        let (before, after) = text.split_at(split);
-        let caret = |on: bool| div().w(px(1.5)).h(rems(1.0)).flex_none().rounded_full().bg(if on { rgb(t.caret).into() } else { gpui::transparent_black() });
+        let cursor = input.cursor();
+        let selection = input.selection();
+        let caret = |on: bool| div().w(px(CARET_WIDTH)).h(rems(1.0)).flex_none().rounded_full().bg(if on { rgb(t.caret).into() } else { gpui::transparent_black() });
         let content = if text.is_empty() {
             div().flex().flex_row().items_center().child(caret(focused)).child(div().text_color(rgb(t.dim)).opacity(0.8).child(placeholder.to_owned()))
         } else {
-            let selected = input.is_all_selected();
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .child(div().when(selected, |d| d.bg(rgb(t.selection))).child(before.to_owned()))
-                .child(caret(focused && !selected))
-                .child(div().when(selected, |d| d.bg(rgb(t.selection))).child(after.to_owned()))
+            // Cut the text at the selection edges and the caret, and draw each piece; the caret sits between two.
+            let bytes: Vec<usize> = text.char_indices().map(|(b, _)| b).chain([text.len()]).collect();
+            let len = bytes.len() - 1;
+            let mut cuts = vec![0, len, cursor.min(len)];
+            if let Some((a, b)) = selection {
+                cuts.extend([a.min(len), b.min(len)]);
+            }
+            cuts.sort_unstable();
+            cuts.dedup();
+            let mut row = div().flex().flex_row().items_center();
+            let mut caret_drawn = false;
+            for w in cuts.windows(2) {
+                let (from, to) = (w[0], w[1]);
+                if from == cursor && !caret_drawn {
+                    row = row.child(caret(focused));
+                    caret_drawn = true;
+                }
+                let selected = selection.is_some_and(|(a, b)| a <= from && to <= b);
+                row = row.child(div().when(selected, |d| d.bg(rgb(t.selection))).child(text[bytes[from]..bytes[to]].to_owned()));
+            }
+            if !caret_drawn {
+                row = row.child(caret(focused));
+            }
+            row
         };
+
+        // Measure where each character boundary is drawn, with the font this box inherits, for click-to-caret.
+        let hits = self.input_hits.clone();
+        let measured = SharedString::from(text.to_owned());
+        let measure = gpui::canvas(
+            move |bounds, window, _| {
+                let mut boundaries = Vec::with_capacity(measured.chars().count() + 1);
+                if measured.is_empty() {
+                    boundaries.push(0.0);
+                } else {
+                    let style = window.text_style();
+                    let size = style.font_size.to_pixels(window.rem_size());
+                    let run = gpui::TextRun { len: measured.len(), font: style.font(), color: style.color, background_color: None, underline: None, strikethrough: None };
+                    let line = window.text_system().shape_line(measured.clone(), size, &[run], None);
+                    let starts = measured.char_indices().map(|(b, _)| b).chain([measured.len()]);
+                    // The caret's own width pushes everything after it right.
+                    boundaries.extend(starts.enumerate().map(|(ci, b)| f32::from(line.x_for_index(b)) + if ci > cursor { CARET_WIDTH } else { 0.0 }));
+                }
+                hits.borrow_mut().insert(field, InputHit { left: f32::from(bounds.origin.x), boundaries });
+            },
+            |_, _, _, _| (),
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+
+        let place = move |this: &mut Self, x: Pixels| -> Option<usize> { this.input_hits.borrow().get(&field).map(|h| h.index_at(f32::from(x))) };
         div()
             .flex()
             .flex_row()
@@ -166,7 +214,46 @@ impl Workspace {
             .rounded(px(INPUT_RADIUS))
             .overflow_hidden()
             .whitespace_nowrap()
-            .child(content.flex_1().min_w_0().overflow_hidden())
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                // Clicking a box gives it the keyboard (the replace boxes had no way to be clicked into).
+                match field {
+                    InputField::FindQuery | InputField::FindReplace => {
+                        this.focus = Focus::Find;
+                        this.find.focus_replace = field == InputField::FindReplace;
+                    }
+                    InputField::SearchQuery | InputField::SearchReplace => {
+                        this.focus = Focus::Search;
+                        this.search.replace_focused = field == InputField::SearchReplace;
+                    }
+                    InputField::Extensions => this.focus = Focus::Extensions,
+                    InputField::Settings => this.settings_model_focus = true,
+                    InputField::Overlay | InputField::Rebase(_) => {}
+                }
+                let Some(at) = place(this, ev.position.x) else { return };
+                let Some(input) = this.input_mut(field) else { return };
+                match ev.click_count {
+                    1 => input.set_cursor(at, ev.modifiers.shift),
+                    2 => input.select_word_at(at),
+                    _ => input.select_all(),
+                }
+                this.input_dragging = (ev.click_count == 1).then_some(field);
+                cx.notify();
+            }))
+            .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                if this.input_dragging != Some(field) {
+                    return;
+                }
+                if ev.pressed_button != Some(MouseButton::Left) {
+                    this.input_dragging = None;
+                    return;
+                }
+                let Some(at) = place(this, ev.position.x) else { return };
+                if let Some(input) = this.input_mut(field) {
+                    input.set_cursor(at, true);
+                    cx.notify();
+                }
+            }))
+            .child(content.flex_1().min_w_0().overflow_hidden().relative().child(measure))
             .children(trailing)
     }
 
@@ -958,6 +1045,7 @@ impl Workspace {
                     .gap_1()
                     .child(div().flex_1().min_w_0().child(self.render_input_with(
                         &f.query,
+                        InputField::FindQuery,
                         "Find",
                         self.focus == Focus::Find && !f.focus_replace,
                         vec![
@@ -965,6 +1053,7 @@ impl Workspace {
                             toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", f.options.whole_word, 1, cx).into_any_element(),
                             toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", f.options.regex, 2, cx).into_any_element(),
                         ],
+                        cx,
                     )))
                     .child(div().w(rems(4.375)).text_xs().text_color(rgb(if error { t.error } else { t.dim })).child(status))
                     .child(step(crate::codicons::ARROW_UP, false, cx))
@@ -996,7 +1085,7 @@ impl Workspace {
                     .flex_row()
                     .items_center()
                     .gap_1()
-                    .child(div().flex_1().min_w_0().child(self.render_input(&f.replacement, "Replace", self.focus == Focus::Find && f.focus_replace)))
+                    .child(div().flex_1().min_w_0().child(self.render_input(&f.replacement, InputField::FindReplace, "Replace", self.focus == Focus::Find && f.focus_replace, cx)))
                     .child(div().id("replace-one").px_1().cursor_pointer().text_xs().text_color(rgb(t.text)).on_click(cx.listener(|this, _, _, cx| {
                         this.find.focus_replace = true;
                         this.replace_current(cx);
@@ -1324,6 +1413,7 @@ impl Workspace {
                         cx.notify();
                     })).child(self.render_input_with(
                         &s.query,
+                        InputField::SearchQuery,
                         "Search",
                         self.focus == Focus::Search && !s.replace_focused,
                         vec![
@@ -1331,6 +1421,7 @@ impl Workspace {
                             toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", s.options.whole_word, 1, cx).into_any_element(),
                             toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", s.options.regex, 2, cx).into_any_element(),
                         ],
+                        cx,
                     ))),
             )
             .children(s.replace_open.then(|| {
@@ -1345,7 +1436,7 @@ impl Workspace {
                         this.focus = Focus::Search;
                         cx.stop_propagation();
                         cx.notify();
-                    })).child(self.render_input(&s.replace, "Replace", self.focus == Focus::Search && s.replace_focused)))
+                    })).child(self.render_input(&s.replace, InputField::SearchReplace, "Replace", self.focus == Focus::Search && s.replace_focused, cx)))
                     .child(
                         div()
                             .id("search-replace-all")
@@ -2579,6 +2670,15 @@ impl Workspace {
         let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardMany { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. });
         let start = overlay.selected.saturating_sub(11);
         let end = (start + 12).min(overlay.items.len());
+        let input_el = show_input.then(|| {
+            if overlay.kind == OverlayKind::AiKey || matches!(&overlay.kind, OverlayKind::GitCredential(p) if forge_core::askpass::is_secret(p)) {
+                // The key is never drawn: one dot per character.
+                let dots = overlay.input.masked('•');
+                self.render_input(&dots, InputField::Overlay, &overlay.placeholder, true, cx)
+            } else {
+                self.render_input(&overlay.input, InputField::Overlay, &overlay.placeholder, true, cx)
+            }
+        });
         let rows = (start..end).map(|ix| {
             let item = &overlay.items[ix];
             let selected = ix == overlay.selected;
@@ -2632,15 +2732,7 @@ impl Workspace {
                         .shadow_lg()
                         .occlude()
                         .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
-                        .when(show_input, |d| {
-                            if overlay.kind == OverlayKind::AiKey || matches!(&overlay.kind, OverlayKind::GitCredential(p) if forge_core::askpass::is_secret(p)) {
-                                // The key is never drawn: one dot per character.
-                                let dots = LineInput::new(&"•".repeat(overlay.input.text().chars().count()));
-                                d.child(self.render_input(&dots, &overlay.placeholder, true))
-                            } else {
-                                d.child(self.render_input(&overlay.input, &overlay.placeholder, true))
-                            }
-                        })
+                        .children(input_el)
                         .children(overlay.note.clone().map(|n| div().px_2().py_1().text_xs().text_color(rgb(t.dim)).child(n)))
                         .children(rows),
                 ),

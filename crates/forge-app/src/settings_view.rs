@@ -65,7 +65,7 @@ impl Workspace {
     }
 
     /// Keys while the Settings page is open. True when the key was used (or must not reach the editor).
-    pub fn settings_key(&mut self, k: &Keystroke) -> bool {
+    pub fn settings_key(&mut self, k: &Keystroke, cx: &mut Context<Self>) -> bool {
         let ctrl = k.modifiers.control || k.modifiers.platform;
         if k.key == "escape" {
             if self.settings_model_focus {
@@ -77,7 +77,7 @@ impl Workspace {
             return true;
         }
         if self.settings_model_focus {
-            match self.settings_model.apply(&k.key, ctrl, k.key_char.as_deref()) {
+            match crate::input_handling::line_input_key(&mut self.settings_model, k, cx) {
                 Outcome::Submit => {
                     let model = self.settings_model.text().trim().to_owned();
                     if !model.is_empty() {
@@ -186,7 +186,7 @@ impl Workspace {
                 cx.stop_propagation();
                 cx.notify();
             }))
-            .child(self.render_input(&self.settings_model, s.ai_provider.default_model(), model_focused))
+            .child(self.render_input(&self.settings_model, crate::workspace::InputField::Settings, s.ai_provider.default_model(), model_focused, cx))
             .into_any_element();
         let provider_chips = div().flex().flex_row().gap_2().children(forge_core::ai::Provider::ALL.into_iter().enumerate().map(|(i, provider)| {
             let selected = s.ai_provider == provider;

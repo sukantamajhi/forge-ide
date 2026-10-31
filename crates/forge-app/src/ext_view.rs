@@ -23,8 +23,7 @@ fn count(n: u64) -> String {
 }
 
 impl Workspace {
-    pub(crate) fn ext_key(&mut self, k: &Keystroke, pressed: &str, cx: &mut Context<Self>) -> bool {
-        let ctrl = k.modifiers.control || k.modifiers.platform;
+    pub(crate) fn ext_key(&mut self, k: &Keystroke, _pressed: &str, cx: &mut Context<Self>) -> bool {
         match k.key.as_str() {
             "escape" => {
                 self.focus = Focus::Editor;
@@ -36,13 +35,7 @@ impl Workspace {
             }
             _ => {}
         }
-        if pressed == "ctrl+v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                self.ext_panel.query.insert(&text);
-            }
-            return true;
-        }
-        matches!(self.ext_panel.query.apply(&k.key, ctrl, k.key_char.as_deref()), Outcome::Edited | Outcome::Moved)
+        matches!(crate::input_handling::line_input_key(&mut self.ext_panel.query, k, cx), Outcome::Edited | Outcome::Moved)
     }
 
     /// The square with an extension's first letter, standing in for its icon.
@@ -179,7 +172,7 @@ impl Workspace {
                         this.focus = Focus::Extensions;
                         cx.notify();
                     }))
-                    .child(self.render_input(&panel.query, "Search Extensions in Open VSX", self.focus == Focus::Extensions)),
+                    .child(self.render_input(&panel.query, crate::workspace::InputField::Extensions, "Search Extensions in Open VSX", self.focus == Focus::Extensions, cx)),
             )
             .child(div().px_3().text_xs().text_color(rgb(if panel.error.is_some() { t.error } else { t.dim })).child(status))
             .child(list)

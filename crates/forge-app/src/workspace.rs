@@ -417,6 +417,42 @@ pub(crate) struct Group {
     pub active: usize,
 }
 
+/// Which one-line text box a mouse click landed in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum InputField {
+    FindQuery,
+    FindReplace,
+    SearchQuery,
+    SearchReplace,
+    Extensions,
+    Overlay,
+    Settings,
+    Rebase(usize),
+}
+
+/// Where a text box's characters were last drawn: the left edge of its text, and the x offset of each char
+/// boundary from it (`boundaries[i]` is where char `i` starts; the last entry is the end of the text).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct InputHit {
+    pub left: f32,
+    pub boundaries: Vec<f32>,
+}
+
+impl InputHit {
+    /// The char boundary nearest to window x position `x`.
+    pub fn index_at(&self, x: f32) -> usize {
+        let rel = x - self.left;
+        let mut best = (0, f32::MAX);
+        for (i, b) in self.boundaries.iter().enumerate() {
+            let d = (b - rel).abs();
+            if d < best.1 {
+                best = (i, d);
+            }
+        }
+        best.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Focus {
     Editor,
@@ -901,6 +937,10 @@ pub(crate) struct Workspace {
     pub titlebar_key: Option<crate::titlebar::Key>,
     /// Where the terminal view was last drawn, to turn mouse positions into cells.
     pub term_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
+    /// Where each text box's characters were last drawn, to turn a click into a caret position.
+    pub input_hits: std::rc::Rc<std::cell::RefCell<HashMap<InputField, InputHit>>>,
+    /// The text box a mouse drag is selecting in.
+    pub input_dragging: Option<InputField>,
     pub term_sel: Option<crate::terminal_mouse::TermSel>,
     /// The link under the pointer in the terminal.
     pub term_link: Option<crate::terminal_mouse::TermLink>,
@@ -1140,6 +1180,8 @@ impl Workspace {
             outline_followed: std::cell::Cell::new(None),
             titlebar_key: None,
             term_bounds: Default::default(),
+            input_hits: Default::default(),
+            input_dragging: None,
             term_sel: None,
             term_link: None,
             csv_cache: None,
@@ -2466,5 +2508,40 @@ mod untitled_tests {
         let doc = Doc::new_untitled(3);
         assert_eq!(doc.name(), "Untitled-3");
         assert!(doc.untitled && !doc.dirty && !doc.path.is_file());
+    }
+}
+
+impl Workspace {
+    /// The text box `field` names, if it exists right now.
+    pub(crate) fn input_mut(&mut self, field: InputField) -> Option<&mut LineInput> {
+        match field {
+            InputField::FindQuery => Some(&mut self.find.query),
+            InputField::FindReplace => Some(&mut self.find.replacement),
+            InputField::SearchQuery => Some(&mut self.search.query),
+            InputField::SearchReplace => Some(&mut self.search.replace),
+            InputField::Extensions => Some(&mut self.ext_panel.query),
+            InputField::Overlay => self.overlay.as_mut().map(|o| &mut o.input),
+            InputField::Settings => Some(&mut self.settings_model),
+            InputField::Rebase(i) => self.rebase_page.as_mut().and_then(|p| p.messages.get_mut(i)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod input_hit_tests {
+    use super::InputHit;
+
+    #[test]
+    fn a_click_lands_on_the_nearest_char_boundary() {
+        // "abc" drawn from x = 100, each char 10px wide: boundaries at 0, 10, 20, 30.
+        let hit = InputHit { left: 100.0, boundaries: vec![0.0, 10.0, 20.0, 30.0] };
+        assert_eq!(hit.index_at(100.0), 0);
+        assert_eq!(hit.index_at(103.0), 0, "left half of 'a' puts the caret before it");
+        assert_eq!(hit.index_at(107.0), 1, "right half of 'a' puts it after");
+        assert_eq!(hit.index_at(114.0), 1);
+        assert_eq!(hit.index_at(116.0), 2, "between characters, not only at the ends");
+        assert_eq!(hit.index_at(500.0), 3, "past the end is the end");
+        assert_eq!(hit.index_at(10.0), 0, "left of the text is the start");
+        assert_eq!(InputHit::default().index_at(5.0), 0, "nothing measured yet");
     }
 }
