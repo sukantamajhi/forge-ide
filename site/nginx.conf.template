@@ -27,7 +27,8 @@ server {
     # nginx drops server-level headers in a location that sets its own, so each one includes the shared set.
     location = /index.html {
         include /etc/nginx/snippets/security-headers.conf;
-        add_header Cache-Control "no-cache" always;
+        # Always revalidate HTML via ETag; browsers re-download only when the file changes.
+        add_header Cache-Control "no-cache, must-revalidate" always;
     }
 
     location ~ ^/(robots\.txt|sitemap\.xml)$ {
@@ -35,14 +36,18 @@ server {
         add_header Cache-Control "public, max-age=3600" always;
     }
 
+    # Fonts: immutable — filenames are stable and files never change.
     location /assets/fonts/ {
         include /etc/nginx/snippets/security-headers.conf;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
     }
 
+    # CSS, JS, WebP images, SVG and ICO: 1 year immutable.
+    # These files are small enough that a 1-year cache is safe — bump the
+    # filename (e.g. style.v2.css) whenever content changes.
     location ~* \.(?:css|js|webp|svg|ico)$ {
         include /etc/nginx/snippets/security-headers.conf;
-        add_header Cache-Control "public, max-age=86400" always;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
     }
 
     location / {

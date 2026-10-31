@@ -47,8 +47,22 @@
     </script>
     <link rel="icon" href="assets/forge-logo.svg" type="image/svg+xml">
     <link rel="icon" href="assets/favicon.ico" sizes="any">
+    <!-- Preconnect to third-party origins used on this page -->
+    <link rel="preconnect" href="https://static-lib.com" crossorigin>
+    <link rel="preconnect" href="https://www.google-analytics.com" crossorigin>
+    <!-- Preload the fonts that are on the critical rendering path.
+         geistmono-400: used by the hero editor illustration (LCP element pre.src).
+         geist-400: used by body text (font-weight 400 default).
+         geist-600: used by headings / buttons above the fold. -->
+    <link rel="preload" href="assets/fonts/geistmono-400.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="preload" href="assets/fonts/geist-400.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="assets/fonts/geist-600.ttf" as="font" type="font/ttf" crossorigin>
-    <link rel="stylesheet" href="css/style.css">
+    <!-- Load the stylesheet asynchronously to eliminate the render-blocking request.
+         The preload fetches the file at high priority; onload switches rel to stylesheet
+         once the file is ready. The <noscript> fallback handles JS-disabled browsers. -->
+    <link rel="preload" href="css/style.css" as="style"
+          onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="css/style.css"></noscript>
 </head>
 
 <body>
@@ -184,7 +198,7 @@
                                         <li>13</li>
                                         <li>14</li>
                                     </ol>
-                                    <pre class="src"><span class="c">//! Shared scroll containers. GPUI sizes a scroll
+                                    <pre class="src" fetchpriority="high"><span class="c">//! Shared scroll containers. GPUI sizes a scroll
                                             area from its direct children,</span>
                                         <span class="c">//! so the children must be as tall as their content.</span>
 
@@ -356,7 +370,9 @@
                     </p>
                 </div>
                 <figure class="shot">
-                    <img src="assets/forge-extensions.webp" width="2000" height="1089"
+                    <img src="assets/forge-extensions.webp"
+                        width="2000" height="1089"
+                        sizes="(max-width: 94rem) 100vw, 94rem"
                         alt="Forge's Extensions view searching Open VSX, with the page of Language Support for Java by Red Hat open in an editor tab."
                         loading="lazy">
                     <figcaption>Forge with an Open VSX extension's page open in its own tab.</figcaption>
