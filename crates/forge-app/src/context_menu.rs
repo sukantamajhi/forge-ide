@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use forge_core::commands::Command;
 use gpui::{div, prelude::*, px, rgb, AnyElement, ClipboardItem, Context, Div, MouseButton, MouseDownEvent, Pixels, Point, Size};
 
-use crate::workspace::{Focus, OverlayKind, SidebarView, Workspace};
+use crate::workspace::{Focus, InputField, OverlayKind, SidebarView, Workspace};
 
 const MENU_WIDTH: f32 = 300.0;
 const ROW_HEIGHT: f32 = 30.0;
@@ -43,6 +43,26 @@ pub(crate) enum MenuAction {
     BarMenu(usize),
     /// A choice from the menu of one particular tab: group `g`, tab `vi`.
     Tab { op: TabOp, g: usize, vi: usize },
+    /// A choice from the right-click menu of a text box.
+    Input(InputOp, InputTarget),
+}
+
+/// What a text box's right-click menu can do, as in any native text field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputOp {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+}
+
+/// The text box a menu belongs to: a one-line field, or the commit message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputTarget {
+    Line(InputField),
+    Message,
 }
 
 /// What the right-click menu of a commit in the graph can do.
@@ -131,6 +151,94 @@ impl Workspace {
         ];
         self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
         cx.notify();
+    }
+
+    /// The Undo / Cut / Copy / Paste / Select All menu of a text box. Secrets cannot be cut or copied.
+    pub fn open_input_menu(&mut self, position: Point<Pixels>, target: InputTarget, cx: &mut Context<Self>) {
+        let (selected, can_undo, can_redo, secret) = match target {
+            InputTarget::Line(f) => {
+                let secret = self.input_is_secret(f);
+                match self.input_mut(f) {
+                    Some(i) => (i.selection().is_some(), i.can_undo(), i.can_redo(), secret),
+                    None => return,
+                }
+            }
+            InputTarget::Message => (self.scm_message.selection().is_some(), true, true, false),
+        };
+        let has_text = cx.read_from_clipboard().is_some_and(|i| i.text().is_some());
+        let item = |this: &Self, label: &str, key: &str, op: InputOp, enabled: bool| this.menu_item(label, MenuAction::Input(op, target), Some(key.to_owned()), enabled);
+        let entries = vec![
+            item(self, "Undo", "Ctrl+Z", InputOp::Undo, can_undo),
+            item(self, "Redo", "Ctrl+Y", InputOp::Redo, can_redo),
+            MenuEntry::Separator,
+            item(self, "Cut", "Ctrl+X", InputOp::Cut, selected && !secret),
+            item(self, "Copy", "Ctrl+C", InputOp::Copy, selected && !secret),
+            item(self, "Paste", "Ctrl+V", InputOp::Paste, has_text),
+            MenuEntry::Separator,
+            item(self, "Select All", "Ctrl+A", InputOp::SelectAll, true),
+        ];
+        self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
+        cx.notify();
+    }
+
+    /// Run a choice from a text box's menu.
+    fn input_op(&mut self, op: InputOp, target: InputTarget, cx: &mut Context<Self>) {
+        let pasted = cx.read_from_clipboard().and_then(|i| i.text());
+        match target {
+            InputTarget::Line(field) => {
+                let secret = self.input_is_secret(field);
+                self.focus_input(field);
+                let Some(input) = self.input_mut(field) else { return };
+                let edited = match op {
+                    InputOp::Undo => input.undo(),
+                    InputOp::Redo => input.redo(),
+                    InputOp::Cut if !secret => match input.cut() {
+                        Some(text) => {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            true
+                        }
+                        None => false,
+                    },
+                    InputOp::Copy if !secret => {
+                        if let Some(text) = input.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        false
+                    }
+                    InputOp::Paste => pasted.map(|text| input.insert(&text)).is_some(),
+                    InputOp::SelectAll => {
+                        input.select_all();
+                        false
+                    }
+                    InputOp::Cut | InputOp::Copy => false,
+                };
+                if edited {
+                    self.input_edited(field);
+                }
+            }
+            InputTarget::Message => {
+                self.focus = Focus::Scm;
+                let area = &mut self.scm_message;
+                match op {
+                    InputOp::Undo => drop(area.apply("z", true, false, None)),
+                    InputOp::Redo => drop(area.apply("y", true, false, None)),
+                    InputOp::Cut | InputOp::Copy => {
+                        if let Some(text) = area.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                            if op == InputOp::Cut {
+                                area.delete_selection();
+                            }
+                        }
+                    }
+                    InputOp::Paste => {
+                        if let Some(text) = pasted {
+                            area.insert(&text);
+                        }
+                    }
+                    InputOp::SelectAll => area.select_all(),
+                }
+            }
+        }
     }
 
     /// The Git view's "more actions" menu, opened from the Commit button's arrow or the ... icon.
@@ -735,6 +843,7 @@ impl Workspace {
                 self.tab_op(if action == MenuAction::CloseAll { TabOp::CloseAll } else { TabOp::CloseOthers }, g, vi, cx);
             }
             MenuAction::Tab { op, g, vi } => self.tab_op(op, g, vi, cx),
+            MenuAction::Input(op, target) => self.input_op(op, target, cx),
             MenuAction::RevealEntry => {
                 if let Some((path, _)) = target {
                     match reveal_in_file_manager(&path) {

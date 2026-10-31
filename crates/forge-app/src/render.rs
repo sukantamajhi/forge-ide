@@ -172,8 +172,11 @@ impl Workspace {
             row
         };
 
-        // Measure where each character boundary is drawn, with the font this box inherits, for click-to-caret.
+        // Measure where each character boundary is drawn, with the font this box inherits, for click-to-caret and
+        // to keep the caret in view: a long entry scrolls sideways like a native text field.
         let hits = self.input_hits.clone();
+        let scrolls = self.input_scroll.clone();
+        let scroll = scrolls.borrow().get(&field).copied().unwrap_or(0.0);
         let measured = SharedString::from(text.to_owned());
         let measure = gpui::canvas(
             move |bounds, window, _| {
@@ -189,7 +192,23 @@ impl Workspace {
                     // The caret's own width pushes everything after it right.
                     boundaries.extend(starts.enumerate().map(|(ci, b)| f32::from(line.x_for_index(b)) + if ci > cursor { CARET_WIDTH } else { 0.0 }));
                 }
-                hits.borrow_mut().insert(field, InputHit { left: f32::from(bounds.origin.x), boundaries });
+                // Scroll so the caret is inside the box; the next frame draws at the new offset.
+                let width = f32::from(bounds.size.width);
+                let caret_x = boundaries.get(cursor).copied().unwrap_or(0.0);
+                let total = boundaries.last().copied().unwrap_or(0.0) + CARET_WIDTH;
+                let mut want = scroll;
+                if caret_x < want {
+                    want = caret_x;
+                } else if caret_x + CARET_WIDTH > want + width {
+                    want = caret_x + CARET_WIDTH - width;
+                }
+                let want = want.clamp(0.0, (total - width).max(0.0));
+                if (want - scroll).abs() > 0.5 {
+                    scrolls.borrow_mut().insert(field, want);
+                    window.refresh();
+                }
+                // Positions are measured from the text's start, which is `scroll` left of the box's edge.
+                hits.borrow_mut().insert(field, InputHit { left: f32::from(bounds.origin.x) - scroll, boundaries });
             },
             |_, _, _, _| (),
         )
@@ -216,19 +235,7 @@ impl Workspace {
             .whitespace_nowrap()
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                 // Clicking a box gives it the keyboard (the replace boxes had no way to be clicked into).
-                match field {
-                    InputField::FindQuery | InputField::FindReplace => {
-                        this.focus = Focus::Find;
-                        this.find.focus_replace = field == InputField::FindReplace;
-                    }
-                    InputField::SearchQuery | InputField::SearchReplace => {
-                        this.focus = Focus::Search;
-                        this.search.replace_focused = field == InputField::SearchReplace;
-                    }
-                    InputField::Extensions => this.focus = Focus::Extensions,
-                    InputField::Settings => this.settings_model_focus = true,
-                    InputField::Overlay | InputField::Rebase(_) => {}
-                }
+                this.focus_input(field);
                 let Some(at) = place(this, ev.position.x) else { return };
                 let Some(input) = this.input_mut(field) else { return };
                 match ev.click_count {
@@ -236,24 +243,24 @@ impl Workspace {
                     2 => input.select_word_at(at),
                     _ => input.select_all(),
                 }
+                // The drag carries on from the window's mouse-move handler, so it can leave the box.
                 this.input_dragging = (ev.click_count == 1).then_some(field);
                 cx.notify();
             }))
-            .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
-                if this.input_dragging != Some(field) {
-                    return;
+            .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                this.focus_input(field);
+                // Like a native box: a right click inside the selection keeps it, anywhere else moves the caret.
+                if let Some(at) = place(this, ev.position.x) {
+                    if let Some(input) = this.input_mut(field) {
+                        if !input.selection().is_some_and(|(a, b)| a <= at && at <= b) {
+                            input.set_cursor(at, false);
+                        }
+                    }
                 }
-                if ev.pressed_button != Some(MouseButton::Left) {
-                    this.input_dragging = None;
-                    return;
-                }
-                let Some(at) = place(this, ev.position.x) else { return };
-                if let Some(input) = this.input_mut(field) {
-                    input.set_cursor(at, true);
-                    cx.notify();
-                }
+                this.open_input_menu(ev.position, crate::context_menu::InputTarget::Line(field), cx);
+                cx.stop_propagation();
             }))
-            .child(content.flex_1().min_w_0().overflow_hidden().relative().child(measure))
+            .child(div().flex_1().min_w_0().h_full().overflow_hidden().relative().child(content.absolute().top_0().h_full().left(px(-scroll))).child(measure))
             .children(trailing)
     }
 
@@ -1589,6 +1596,15 @@ impl Workspace {
                     }
                     this.scm_dragging = ev.click_count == 1;
                     cx.notify();
+                }))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.focus = Focus::Scm;
+                    let offset = this.scm_message.offset_at(ri, column_at(ev.position.x));
+                    if !this.scm_message.selection().is_some_and(|(a, b)| a <= offset && offset <= b) {
+                        this.scm_message.set_cursor(offset, false);
+                    }
+                    this.open_input_menu(ev.position, crate::context_menu::InputTarget::Message, cx);
                 }))
                 .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
                     if !this.scm_dragging {

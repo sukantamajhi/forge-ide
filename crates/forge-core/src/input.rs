@@ -11,6 +11,22 @@ pub struct LineInput {
     cursor: usize,
     /// The other end of the selection, when there is one.
     anchor: Option<usize>,
+    /// Earlier states (text, caret) for Ctrl+Z, and the ones undone for Ctrl+Y.
+    undo: Vec<(String, usize)>,
+    redo: Vec<(String, usize)>,
+    /// What the last edit was, so a run of typing (or of Backspaces) undoes in one step.
+    last_edit: Option<Edit>,
+}
+
+const UNDO_LIMIT: usize = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit {
+    Typing,
+    Backspace,
+    Delete,
+    /// Paste, cut, word deletion, replacing a selection: always its own step.
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,7 +45,7 @@ impl LineInput {
     /// A field holding `text`, all selected (like VS Code's find box) so typing replaces it.
     pub fn new(text: &str) -> Self {
         let len = text.chars().count();
-        Self { text: text.to_owned(), cursor: len, anchor: (len > 0).then_some(0) }
+        Self { text: text.to_owned(), cursor: len, anchor: (len > 0).then_some(0), ..Self::default() }
     }
 
     pub fn text(&self) -> &str {
@@ -57,13 +73,59 @@ impl LineInput {
 
     /// The same field with every char shown as `mask` (for secrets), keeping the caret and selection.
     pub fn masked(&self, mask: char) -> Self {
-        Self { text: self.text.chars().map(|_| mask).collect(), cursor: self.cursor, anchor: self.anchor }
+        Self { text: self.text.chars().map(|_| mask).collect(), cursor: self.cursor, anchor: self.anchor, ..Self::default() }
     }
 
     pub fn set_text(&mut self, text: &str) {
         self.text = text.to_owned();
         self.cursor = text.chars().count();
         self.anchor = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.last_edit = None;
+    }
+
+    /// Remember the state before an edit of `kind`. Consecutive typing, Backspaces or Deletes share a step.
+    fn record(&mut self, kind: Edit) {
+        if self.selection().is_some() || kind == Edit::Other || self.last_edit != Some(kind) {
+            self.undo.push((self.text.clone(), self.cursor));
+            if self.undo.len() > UNDO_LIMIT {
+                self.undo.remove(0);
+            }
+        }
+        self.last_edit = Some(kind);
+        self.redo.clear();
+    }
+
+    fn restore(&mut self, (text, cursor): (String, usize)) {
+        self.text = text;
+        self.cursor = cursor.min(self.len());
+        self.anchor = None;
+        self.last_edit = None;
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    /// Ctrl+Z. True when there was something to undo.
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo.pop() else { return false };
+        self.redo.push((self.text.clone(), self.cursor));
+        self.restore(previous);
+        true
+    }
+
+    /// Ctrl+Y / Ctrl+Shift+Z. True when there was something to redo.
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo.pop() else { return false };
+        self.undo.push((self.text.clone(), self.cursor));
+        self.restore(next);
+        true
     }
 
     /// Put the caret at char `offset` (clamped), extending the selection when `extend`. This is what a click
@@ -94,6 +156,7 @@ impl LineInput {
     /// Remove the selection and return its text, for Cut.
     pub fn cut(&mut self) -> Option<String> {
         let text = self.selected_text()?;
+        self.record(Edit::Other);
         self.delete_selection();
         Some(text)
     }
@@ -120,6 +183,10 @@ impl LineInput {
     /// Insert at the caret, replacing the selection if there is one.
     pub fn insert(&mut self, s: &str) {
         let s: String = s.chars().filter(|c| !matches!(c, '\n' | '\r')).collect();
+        if s.is_empty() && self.selection().is_none() {
+            return;
+        }
+        self.record(if s.chars().count() == 1 { Edit::Typing } else { Edit::Other });
         self.delete_selection();
         let at = self.byte_at(self.cursor);
         self.text.insert_str(at, &s);
@@ -163,8 +230,16 @@ impl LineInput {
                 self.set_cursor(target, shift);
                 Outcome::Moved
             }
+            ("z", true) if !shift => {
+                if self.undo() { Outcome::Edited } else { Outcome::Moved }
+            }
+            ("y", true) | ("z", true) => {
+                if self.redo() { Outcome::Edited } else { Outcome::Moved }
+            }
             ("backspace", _) | ("delete", _) => {
-                if self.delete_selection() {
+                if self.selection().is_some() {
+                    self.record(Edit::Other);
+                    self.delete_selection();
                     return Outcome::Edited;
                 }
                 let (from, to) = match (key, ctrl) {
@@ -176,6 +251,11 @@ impl LineInput {
                 if from == to {
                     return Outcome::Moved;
                 }
+                self.record(match (key, ctrl) {
+                    (_, true) => Edit::Other,
+                    ("backspace", _) => Edit::Backspace,
+                    _ => Edit::Delete,
+                });
                 self.delete_range(from, to);
                 Outcome::Edited
             }
@@ -317,5 +397,43 @@ mod tests {
         assert_eq!(i.cut().as_deref(), Some("bar"));
         assert_eq!(i.text(), "foo  baz");
         assert_eq!(i.cut(), None);
+    }
+
+    #[test]
+    fn undo_and_redo_step_through_edits() {
+        let mut i = LineInput::default();
+        typed(&mut i, "hello");
+        assert_eq!(i.apply("z", true, None), Outcome::Edited);
+        assert_eq!(i.text(), "", "a run of typing undoes as one step");
+        assert_eq!(i.apply_with("y", true, false, None), Outcome::Edited);
+        assert_eq!(i.text(), "hello");
+        i.apply("backspace", false, None);
+        i.apply("backspace", false, None);
+        assert_eq!(i.text(), "hel");
+        i.apply("z", true, None);
+        assert_eq!(i.text(), "hello", "so do consecutive Backspaces");
+        i.apply_with("z", true, true, None);
+        assert_eq!(i.text(), "hel", "Ctrl+Shift+Z redoes");
+        typed(&mut i, "p");
+        assert_eq!(i.apply_with("y", true, false, None), Outcome::Moved, "a new edit clears redo");
+        assert_eq!(LineInput::default().apply("z", true, None), Outcome::Moved);
+    }
+
+    #[test]
+    fn paste_and_cut_are_their_own_undo_steps() {
+        let mut i = LineInput::default();
+        typed(&mut i, "ab");
+        i.insert("PASTED");
+        typed(&mut i, "c");
+        i.apply("z", true, None);
+        assert_eq!(i.text(), "abPASTED");
+        i.apply("z", true, None);
+        assert_eq!(i.text(), "ab");
+        i.select_all();
+        i.cut();
+        assert_eq!(i.text(), "");
+        i.apply("z", true, None);
+        assert_eq!(i.text(), "ab", "cut is undone");
+        assert_eq!(i.cursor(), 2);
     }
 }

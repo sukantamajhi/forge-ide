@@ -244,8 +244,8 @@ impl TextArea {
                 self.select_all();
                 return Outcome::Moved;
             }
-            ("z", true) => return self.undo_step(false),
-            ("y", true) => return self.undo_step(true),
+            ("z", true) if !shift => return self.undo_step(false),
+            ("y", true) | ("z", true) => return self.undo_step(true),
             ("left" | "right" | "up" | "down" | "home" | "end", _) => return self.move_caret(key, ctrl, shift),
             ("backspace" | "delete", _) => {
                 if self.delete_selection() {

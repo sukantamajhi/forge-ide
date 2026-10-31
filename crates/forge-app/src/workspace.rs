@@ -941,6 +941,8 @@ pub(crate) struct Workspace {
     pub input_hits: std::rc::Rc<std::cell::RefCell<HashMap<InputField, InputHit>>>,
     /// The text box a mouse drag is selecting in.
     pub input_dragging: Option<InputField>,
+    /// How far each text box's text is scrolled left, so the caret stays in view in a long entry.
+    pub input_scroll: std::rc::Rc<std::cell::RefCell<HashMap<InputField, f32>>>,
     pub term_sel: Option<crate::terminal_mouse::TermSel>,
     /// The link under the pointer in the terminal.
     pub term_link: Option<crate::terminal_mouse::TermLink>,
@@ -1182,6 +1184,7 @@ impl Workspace {
             term_bounds: Default::default(),
             input_hits: Default::default(),
             input_dragging: None,
+            input_scroll: Default::default(),
             term_sel: None,
             term_link: None,
             csv_cache: None,
@@ -2512,6 +2515,34 @@ mod untitled_tests {
 }
 
 impl Workspace {
+    /// Give the keyboard to the text box `field`.
+    pub(crate) fn focus_input(&mut self, field: InputField) {
+        match field {
+            InputField::FindQuery | InputField::FindReplace => {
+                self.focus = Focus::Find;
+                self.find.focus_replace = field == InputField::FindReplace;
+            }
+            InputField::SearchQuery | InputField::SearchReplace => {
+                self.focus = Focus::Search;
+                self.search.replace_focused = field == InputField::SearchReplace;
+            }
+            InputField::Extensions => self.focus = Focus::Extensions,
+            InputField::Settings => self.settings_model_focus = true,
+            InputField::Overlay => {}
+            InputField::Rebase(i) => {
+                if let Some(p) = self.rebase_page.as_mut() {
+                    p.focus = Some(i);
+                }
+            }
+        }
+    }
+
+    /// Whether `field` holds a secret (an API key or password), which can be typed and pasted but never copied.
+    pub(crate) fn input_is_secret(&self, field: InputField) -> bool {
+        field == InputField::Overlay
+            && self.overlay.as_ref().is_some_and(|o| o.kind == OverlayKind::AiKey || matches!(&o.kind, OverlayKind::GitCredential(p) if forge_core::askpass::is_secret(p)))
+    }
+
     /// The text box `field` names, if it exists right now.
     pub(crate) fn input_mut(&mut self, field: InputField) -> Option<&mut LineInput> {
         match field {

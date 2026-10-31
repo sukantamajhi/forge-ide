@@ -452,6 +452,18 @@ impl Workspace {
             cx.notify();
             return;
         }
+        // A text box is being dragged over: keep selecting, even once the pointer has left the box.
+        if let Some(field) = self.input_dragging {
+            if ev.pressed_button == Some(MouseButton::Left) {
+                let at = self.input_hits.borrow().get(&field).map(|h| h.index_at(f32::from(ev.position.x)));
+                if let (Some(at), Some(input)) = (at, self.input_mut(field)) {
+                    input.set_cursor(at, true);
+                }
+                cx.notify();
+                return;
+            }
+            self.input_dragging = None;
+        }
         let moved_far = self.mouse.is_none_or(|p| (p.x - ev.position.x).abs() > px_f(2.0) || (p.y - ev.position.y).abs() > px_f(2.0));
         self.mouse = Some(ev.position);
         if self.terminal_mouse_move(ev) {
@@ -513,6 +525,7 @@ impl Workspace {
 
     pub fn on_mouse_up(&mut self, ev: &MouseUpEvent, cx: &mut Context<Self>) {
         self.terminal_mouse_up(ev, cx);
+        self.input_dragging = None;
         self.drag = None;
         self.scm_dragging = false;
         self.minimap_dragging = false;
@@ -975,6 +988,24 @@ impl Workspace {
             .collect()
     }
 
+    /// What a text box's content changing sets going: Find re-searches, the pickers refilter.
+    pub(crate) fn input_edited(&mut self, field: crate::workspace::InputField) {
+        use crate::workspace::InputField;
+        match field {
+            InputField::FindQuery => {
+                self.refresh_find();
+                self.select_current_find_match();
+            }
+            InputField::Overlay => {
+                if let Some(overlay) = self.overlay.as_mut() {
+                    overlay.selected = 0;
+                }
+                self.refresh_overlay();
+            }
+            _ => {}
+        }
+    }
+
     /// Returns true when the overlay consumed the key.
     fn overlay_key(&mut self, k: &Keystroke, pressed: &str, cx: &mut Context<Self>) -> bool {
         // The pickers can be switched between without closing first.
@@ -984,6 +1015,7 @@ impl Workspace {
                 return false;
             }
         }
+        let secret = self.input_is_secret(crate::workspace::InputField::Overlay);
         let Some(overlay) = self.overlay.as_mut() else { return false };
         let ctrl = k.modifiers.control || k.modifiers.platform;
         match (k.key.as_str(), ctrl) {
@@ -1001,6 +1033,10 @@ impl Workspace {
             }
             _ => {
                 if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardMany { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. }) {
+                    return true;
+                }
+                // A password box never gives its text back: no copy, no cut.
+                if ctrl && matches!(k.key.as_str(), "c" | "x") && secret {
                     return true;
                 }
                 match line_input_key(&mut overlay.input, k, cx) {
