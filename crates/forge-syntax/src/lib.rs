@@ -118,6 +118,30 @@ fn parse_rope(parser: &mut Parser, rope: &Rope, old: Option<&Tree>) -> Option<Tr
     parser.parse_with_options(&mut read, old, None)
 }
 
+/// `base` (sorted, not overlapping) with `over` (sorted, not overlapping) laid on top: wherever they meet, `over`
+/// wins and the span of `base` it covers is cut or split.
+pub fn overlay_spans(base: &[Span], over: &[Span]) -> Vec<Span> {
+    if over.is_empty() {
+        return base.to_vec();
+    }
+    let mut out: Vec<Span> = Vec::with_capacity(base.len() + over.len());
+    for b in base {
+        let mut start = b.start_col;
+        for o in over.iter().filter(|o| o.end_col > b.start_col && o.start_col < b.end_col) {
+            if o.start_col > start {
+                out.push(Span { start_col: start, end_col: o.start_col, class: b.class });
+            }
+            start = start.max(o.end_col);
+        }
+        if start < b.end_col {
+            out.push(Span { start_col: start, end_col: b.end_col, class: b.class });
+        }
+    }
+    out.extend_from_slice(over);
+    out.sort_by_key(|s| (s.start_col, s.end_col));
+    out
+}
+
 impl Syntax {
     /// `None` if the grammar and its bundled query cannot be loaded together.
     pub fn new(language: Language) -> Option<Self> {
@@ -683,5 +707,25 @@ mod tests {
         let spans = syntax.highlight_lines(buffer.rope(), 0..1);
         assert_eq!(spans[0].last().map(|s| (s.start_col, s.end_col, s.class)), Some((2, 4, HighlightClass::Number)));
         assert!(syntax.fold_regions().is_empty() && syntax.enclosing_range(buffer.rope(), 0, 0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+
+    fn span(a: usize, b: usize, class: HighlightClass) -> Span {
+        Span { start_col: a, end_col: b, class }
+    }
+
+    #[test]
+    fn the_overlay_wins_where_the_spans_meet() {
+        use HighlightClass::*;
+        let base = [span(0, 10, Keyword), span(12, 20, String)];
+        let over = [span(3, 5, Function), span(8, 14, Type)];
+        let got = overlay_spans(&base, &over);
+        assert_eq!(got, vec![span(0, 3, Keyword), span(3, 5, Function), span(5, 8, Keyword), span(8, 14, Type), span(14, 20, String)]);
+        assert_eq!(overlay_spans(&base, &[]), base.to_vec());
+        assert_eq!(overlay_spans(&[], &over), over.to_vec());
     }
 }

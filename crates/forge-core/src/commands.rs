@@ -201,6 +201,7 @@ commands! {
     GitStageFile, "git.stage", "Git: Stage Changes in Current File", [];
     GitUnstageFile, "git.unstage", "Git: Unstage Current File", [];
     GitDiscardFile, "git.clean", "Git: Discard Changes in Current File", [];
+    GitDiscardAll, "git.cleanAll", "Git: Discard All Changes", [];
     GitOpenChanges, "git.openChange", "Git: Open Changes of Current File", [];
     GitCommit, "git.commit", "Git: Commit", [];
     GitCommitAll, "git.commitAll", "Git: Commit All", [];

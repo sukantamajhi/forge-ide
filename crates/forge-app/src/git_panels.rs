@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use forge_core::git::{self, Commit, GraphCommit};
 use forge_core::graph::{self, GraphRow};
-use gpui::{div, prelude::*, px, rgb, uniform_list, AnyElement, Context, Div, FontWeight, SharedString};
+use gpui::{div, prelude::*, px, rgb, uniform_list, AnyElement, Context, Div, FontWeight, MouseButton, SharedString};
 
 use crate::workspace::{GitMsg, PanelView, Workspace};
 
@@ -188,6 +188,13 @@ impl Workspace {
                             .gap_2()
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(t.tab_active)))
+                            .on_mouse_down(MouseButton::Right, {
+                                let hash = hash.clone();
+                                cx.listener(move |this, ev: &gpui::MouseDownEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.open_graph_menu(ev.position, hash.clone(), cx);
+                                })
+                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.git_show_hash(hash.clone(), subject.clone(), None);
                                 cx.notify();

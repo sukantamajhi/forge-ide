@@ -10,6 +10,13 @@ pub struct DraggedEntry {
     pub path: PathBuf,
 }
 
+/// An editor tab being dragged by its title: its group and its place in the group's strip.
+#[derive(Clone, Debug)]
+pub struct DraggedTab {
+    pub group: usize,
+    pub index: usize,
+}
+
 /// The label that follows the pointer while dragging.
 pub struct DragChip {
     pub name: String,

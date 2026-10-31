@@ -525,6 +525,20 @@ pub fn create_branch(root: &Path, name: &str) -> Result<String, String> {
     run(root, &["switch", "-c", name])
 }
 
+/// Check out a commit itself: HEAD is detached there.
+pub fn checkout_commit(root: &Path, hash: &str) -> Result<String, String> {
+    run(root, &["switch", "--detach", hash]).map(|_| format!("Checked out {} (detached HEAD)", short_hash(hash)))
+}
+
+/// A new branch starting at `hash`, switched to.
+pub fn create_branch_at(root: &Path, name: &str, hash: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains(char::is_whitespace) {
+        return Err("A branch name cannot be empty or contain spaces".to_owned());
+    }
+    run(root, &["switch", "-c", name, hash])
+}
+
 pub fn fetch(root: &Path) -> Result<String, String> {
     run(root, &["fetch", "--all", "--prune"]).map(|_| "Fetched".to_owned())
 }

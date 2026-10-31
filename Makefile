@@ -36,7 +36,7 @@ LINUX_DEPS := build-essential pkg-config clang cmake libfontconfig-dev libwaylan
 
 .DEFAULT_GOAL := help
 .PHONY: help run build release release-windows release-linux release-all test check fmt fmt-check lint clean \
-        installer package-windows package-linux package-all linux-deps site
+        installer package-windows package-linux package-all linux-deps site site-docker-build site-docker-run
 
 help: ## List the available tasks
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-16s %s\n", $$1, $$2}'
@@ -121,6 +121,15 @@ package-all: package-windows package-linux ## Windows installer and Linux archiv
 
 site: ## Serve the landing page on port 8099 (SITE_PORT=...)
 	cd site && python -m http.server $(SITE_PORT) --bind 127.0.0.1
+
+SITE_IMAGE ?= forge-site
+SITE_DOCKER_PORT ?= 8080
+
+site-docker-build: ## Build the landing page image (site/Dockerfile)
+	docker build -t $(SITE_IMAGE) site
+
+site-docker-run: site-docker-build ## Run the landing page image at http://localhost:$(SITE_DOCKER_PORT)
+	docker run --rm -p $(SITE_DOCKER_PORT):8080 $(SITE_IMAGE)
 
 clean: ## Remove build output (including the WSL Linux build folder)
 	$(CARGO) clean

@@ -184,10 +184,19 @@ pub fn initialize_params(root_uri: Option<&str>) -> Value {
                 "formatting": {},
                 "rangeFormatting": {},
                 "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
+                "semanticTokens": {
+                    "requests": { "full": true },
+                    "tokenTypes": ["namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "event", "function", "method", "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator", "decorator", "lifetime", "builtinType", "selfKeyword", "selfTypeKeyword", "attribute", "derive", "label", "formatSpecifier", "unresolvedReference", "constParameter", "typeAlias", "bool", "angle", "brace", "bracket", "comma", "colon", "dot", "parenthesis", "semicolon", "punctuation", "builtinAttribute", "deriveHelper", "generic", "boolean", "const"],
+                    "tokenModifiers": ["declaration", "definition", "readonly", "static", "deprecated", "abstract", "async", "modification", "documentation", "defaultLibrary"],
+                    "formats": ["relative"],
+                    "overlappingTokenSupport": false,
+                    "multilineTokenSupport": false
+                },
+                "inlayHint": { "dynamicRegistration": false },
                 "codeAction": { "codeActionLiteralSupport": { "codeActionKind": { "valueSet": ["quickfix", "refactor", "source", "source.organizeImports"] } } }
             },
             "window": { "workDoneProgress": true },
-            "workspace": { "workspaceFolders": true, "configuration": true }
+            "workspace": { "workspaceFolders": true, "configuration": true, "semanticTokens": { "refreshSupport": true }, "inlayHint": { "refreshSupport": true } }
         }
     })
 }

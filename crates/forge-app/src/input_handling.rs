@@ -261,7 +261,11 @@ impl Workspace {
             if let Some(end) = end_cell {
                 cell_x = cell_x.min(end as f32 - 0.51);
             }
-            let col = if cell_x <= 0.0 { 0 } else { col_at_cell(&doc.buffer.line(line), cell_x) };
+            let text = doc.buffer.line(line);
+            if view.wrap.is_none() {
+                cell_x = crate::inline_hints::cell_without_hints(&text, doc.hints_on(line), cell_x);
+            }
+            let col = if cell_x <= 0.0 { 0 } else { col_at_cell(&text, cell_x) };
             return Some((g, line, col));
         }
         None
@@ -504,7 +508,7 @@ impl Workspace {
             OverlayKind::NewEntry { folder: false, .. } => "File name (a/b/c.txt creates folders)",
             OverlayKind::NewEntry { folder: true, .. } => "Folder name",
             OverlayKind::RenameEntry(_) => "New name",
-            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. } => "",
+            OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardMany { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. } => "",
             OverlayKind::GitCheckout => "Select a branch to switch to",
             OverlayKind::GitRebase => "Select the branch to rebase the current branch onto",
             OverlayKind::GitMerge => "Select a branch to merge into the current branch",
@@ -517,6 +521,7 @@ impl Workspace {
             OverlayKind::GitWorktreeRemove => "Select a worktree to remove",
             OverlayKind::GitCredential(prompt) => prompt.trim(),
             OverlayKind::GitCreateBranch => "New branch name",
+            OverlayKind::GitBranchAt(_) => "Name of the new branch",
             OverlayKind::GitHistory => "Select a commit to view its changes",
             OverlayKind::LanguageServers => "Filter language servers (Enter installs the selected one)",
             OverlayKind::ExtSearch => "Search Open VSX, or type publisher.name",
@@ -728,12 +733,25 @@ impl Workspace {
                 });
                 Vec::new()
             }
+            OverlayKind::ConfirmDiscardMany { files } => {
+                let untracked = files.iter().filter(|(_, u)| *u).count();
+                overlay.note = Some(if untracked > 0 {
+                    format!("Press Enter to discard the changes in {} files ({untracked} untracked, which go to the Recycle Bin). This cannot be undone. Escape to cancel", files.len())
+                } else {
+                    format!("Press Enter to discard ALL unstaged changes in {} files. This cannot be undone. Escape to cancel", files.len())
+                });
+                Vec::new()
+            }
             OverlayKind::ConfirmDiscardHunk { rel, what, .. } => {
                 overlay.note = Some(format!("Press Enter to discard {what} in '{rel}'. This cannot be undone. Escape to cancel"));
                 Vec::new()
             }
             OverlayKind::GitCreateBranch => {
                 overlay.note = Some("Creates the branch from HEAD and switches to it".to_owned());
+                Vec::new()
+            }
+            OverlayKind::GitBranchAt(hash) => {
+                overlay.note = Some(format!("Creates the branch at commit {} and switches to it", hash.chars().take(8).collect::<String>()));
                 Vec::new()
             }
             OverlayKind::GitCherryPick | OverlayKind::GitRevert | OverlayKind::GitRebaseFrom => {
@@ -953,7 +971,7 @@ impl Workspace {
                 }
             }
             _ => {
-                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. }) {
+                if matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardMany { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. }) {
                     return true;
                 }
                 match overlay.input.apply(&k.key, ctrl, k.key_char.as_deref()) {
@@ -1043,6 +1061,7 @@ impl Workspace {
             OverlayKind::ConfirmDelete(path) => self.finish_delete_entry(&path, cx),
             OverlayKind::ConfirmMove { from, dir } => self.transfer_entries(&[from], &dir, false, cx),
             OverlayKind::ConfirmDiscard { rel, untracked } => self.finish_discard(&rel, untracked),
+            OverlayKind::ConfirmDiscardMany { files } => self.finish_discard_many(&files),
             OverlayKind::ConfirmDiscardHunk { patch, what, .. } => {
                 self.git_job("hunk", move |root| git::apply_patch(root, &patch, false, true).map(|_| format!("Discarded {what}")));
             }
@@ -1060,6 +1079,10 @@ impl Workspace {
             OverlayKind::GitCreateBranch => {
                 let name = text.clone();
                 self.git_job("branch", move |r| forge_core::git::create_branch(r, &name).map(|_| format!("Created and switched to {name}")));
+            }
+            OverlayKind::GitBranchAt(hash) => {
+                let name = text.clone();
+                self.git_job("branch", move |r| forge_core::git::create_branch_at(r, &name, &hash).map(|_| format!("Created and switched to {name}")));
             }
             _ => {}
         }

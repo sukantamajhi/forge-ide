@@ -156,3 +156,41 @@ const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").match
     }
   });
 })();
+
+(function mobileNav() {
+  const toggle = document.getElementById("nav-toggle");
+  const nav = document.getElementById("nav-menu");
+  if (!toggle || !nav) return;
+
+  const closeNav = () => {
+    toggle.setAttribute("aria-expanded", "false");
+    nav.classList.remove("open");
+    document.body.classList.remove("nav-open");
+  };
+
+  toggle.addEventListener("click", () => {
+    const isExpanded = toggle.getAttribute("aria-expanded") === "true";
+    toggle.setAttribute("aria-expanded", String(!isExpanded));
+    nav.classList.toggle("open", !isExpanded);
+    document.body.classList.toggle("nav-open", !isExpanded);
+  });
+
+  nav.querySelectorAll("a").forEach((link) => {
+    link.addEventListener("click", () => {
+      closeNav();
+    });
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && nav.classList.contains("open")) {
+      closeNav();
+      toggle.focus();
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (nav.classList.contains("open") && !nav.contains(e.target) && !toggle.contains(e.target)) {
+      closeNav();
+    }
+  });
+})();

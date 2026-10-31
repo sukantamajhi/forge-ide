@@ -97,6 +97,10 @@ pub struct Settings {
     pub sticky_scroll: bool,
     /// `editor.wordBasedSuggestions`: with no language server, complete from words already in the file.
     pub word_suggestions: bool,
+    /// `editor.inlayHints.enabled`: show the language server's hints (types, parameter names) inside lines.
+    pub inlay_hints: bool,
+    /// `editor.semanticHighlighting.enabled`: colour code by what the language server says it is.
+    pub semantic_highlighting: bool,
     /// `workbench.editor.enablePreview`: a single click in the Explorer opens a replaceable (italic) tab.
     pub enable_preview: bool,
     pub sticky_max_lines: usize,
@@ -140,6 +144,8 @@ impl Default for Settings {
             bracket_colors: true,
             sticky_scroll: true,
             word_suggestions: true,
+            inlay_hints: true,
+            semantic_highlighting: true,
             enable_preview: true,
             sticky_max_lines: 5,
             languages: Default::default(),
@@ -287,6 +293,13 @@ impl Settings {
         }
         if let Some(v) = map.get("workbench.editor.enablePreview").and_then(Value::as_bool) {
             s.enable_preview = v;
+        }
+        let on_off = |v: &Value| v.as_bool().or_else(|| v.as_str().map(|s| s != "off" && s != "false"));
+        if let Some(v) = map.get("editor.inlayHints.enabled").and_then(on_off) {
+            s.inlay_hints = v;
+        }
+        if let Some(v) = map.get("editor.semanticHighlighting.enabled").and_then(on_off) {
+            s.semantic_highlighting = v;
         }
         if let Some(v) = map.get("editor.linkedEditing").and_then(Value::as_bool) {
             s.linked_editing = v;
@@ -480,6 +493,9 @@ mod tests {
         let off = Settings::parse(r#"{ "html.autoClosingTags": false, "editor.linkedEditing": false }"#);
         assert!(!off.auto_closing_tags && !off.linked_editing);
         assert!(Settings::default().enable_preview);
+        assert!(Settings::default().inlay_hints && Settings::default().semantic_highlighting);
+        let off = Settings::parse(r#"{ "editor.inlayHints.enabled": "off", "editor.semanticHighlighting.enabled": false }"#);
+        assert!(!off.inlay_hints && !off.semantic_highlighting);
         assert!(!Settings::parse(r#"{ "workbench.editor.enablePreview": false }"#).enable_preview);
         assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);
         assert!(Settings::parse(r#"{ "editor.snippetSuggestions": "top" }"#).snippet_suggestions);

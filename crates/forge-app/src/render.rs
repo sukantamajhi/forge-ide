@@ -161,8 +161,18 @@ impl Workspace {
             let doc = &self.docs[view.doc];
             let active = group.active == vi;
             let problems = doc.diagnostics.iter().filter(|d| d.severity == Severity::Error).count();
+            let (chip_name, chip_bg, chip_fg, chip_border) = (doc.name(), t.popup, t.text, t.border);
+            let drop_mark = t.info;
             div()
                 .id(("tab", g * 1000 + vi))
+                // Drag a tab to reorder it, or onto another group's tabs or editor to move it there.
+                .on_drag(crate::explorer_dnd::DraggedTab { group: g, index: vi }, move |_, _, _, cx| {
+                    cx.new(|_| crate::explorer_dnd::DragChip { name: chip_name.clone(), bg: chip_bg, fg: chip_fg, border: chip_border })
+                })
+                .drag_over::<crate::explorer_dnd::DraggedTab>(move |s, _, _, _| s.bg(rgba(0x3b82f633)).border_l_2().border_color(rgb(drop_mark)))
+                .on_drop(cx.listener(move |this, dragged: &crate::explorer_dnd::DraggedTab, _, cx| {
+                    this.move_tab(dragged.group, dragged.index, g, Some(vi), cx);
+                }))
                 .group("tab")
                 .relative()
                 .flex_none()
@@ -289,7 +299,19 @@ impl Workspace {
                     // The wheel scrolls the strip sideways when there are more tabs than fit.
                     .overflow_x_scroll()
                     .track_scroll(&strip)
-                    .children(tabs),
+                    .children(tabs)
+                    // Dropping on the empty end of the strip puts the tab last.
+                    .child(
+                        div()
+                            .id(("tab-strip-end", g))
+                            .flex_1()
+                            .min_w(px(24.0))
+                            .h_full()
+                            .drag_over::<crate::explorer_dnd::DraggedTab>(|s, _, _, _| s.bg(rgba(0x3b82f633)))
+                            .on_drop(cx.listener(move |this, dragged: &crate::explorer_dnd::DraggedTab, _, cx| {
+                                this.move_tab(dragged.group, dragged.index, g, None, cx);
+                            })),
+                    ),
             )
             .child(actions)
     }
@@ -340,7 +362,17 @@ impl Workspace {
             .when(g + 1 < self.groups.len(), |d| d.child(self.resize_handle(("resize-group", g), Resize::Groups(g), Edge::Right, cx)))
             .child(self.render_tabs(g, cx))
             .child(self.render_breadcrumbs(g))
-            .child(div().relative().flex_1().min_h_0().child(body).children((g == self.focused_group && self.find.open && has_views).then(|| self.render_find_widget(cx))))
+            .child(
+                div()
+                    .id(("group-body", g))
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .drag_over::<crate::explorer_dnd::DraggedTab>(|s, _, _, _| s.bg(rgba(0x3b82f61a)))
+                    .on_drop(cx.listener(move |this, dragged: &crate::explorer_dnd::DraggedTab, _, cx| {
+                        this.move_tab(dragged.group, dragged.index, g, None, cx);
+                    }))
+                    .child(body).children((g == self.focused_group && self.find.open && has_views).then(|| self.render_find_widget(cx))))
     }
 
     /// What the empty editor shows: the mark, the name, quick actions with their shortcuts, and recent folders.
@@ -624,7 +656,11 @@ impl Workspace {
         let char_w = ctx.char_w;
         let line_h = px(ctx.line_h);
         // A wrapped row shows the whole line shifted left by its start cell; the text area clips it.
-        let x_of = |col: usize| char_w * (display_width(&text, col) as f32 - row.start as f32) + px(TEXT_PAD) - px(ctx.scroll_x);
+        // Inlay hints are drawn inside the line (not with word wrap): everything after one moves right by its width.
+        let hints: Vec<(usize, String)> = if view.wrap.is_none() && !doc.diff { doc.hints_on(line).to_vec() } else { Vec::new() };
+        let hint_cells = |before: usize| -> usize { hints.iter().filter(|(c, _)| *c < before).map(|(_, l)| l.chars().count()).sum() };
+        let dw = |col: usize| display_width(&text, col) + hint_cells(col);
+        let x_of = |col: usize| char_w * (dw(col) as f32 - row.start as f32) + px(TEXT_PAD) - px(ctx.scroll_x);
 
         let runs: Vec<(Range<usize>, HighlightStyle)> = ctx
             .spans
@@ -663,7 +699,7 @@ impl Workspace {
         for m in ctx.matches.iter().filter(|m| m.start <= line_end && m.end > line_start) {
             let from = m.start.max(line_start) - line_start;
             let to = m.end.min(line_end) - line_start;
-            let cells = (display_width(&text, to) - display_width(&text, from)).max(1);
+            let cells = (dw(to) - dw(from)).max(1);
             let current = ctx.current_match == Some(*m);
             layers.push(rect(from, cells, if current { t.find_current } else { t.find_match }));
         }
@@ -682,9 +718,9 @@ impl Workspace {
                 let to = sel.end().min(line_end) - line_start;
                 // A selection running past the line end also covers its newline cell.
                 let extra = usize::from(sel.end() > line_end);
-                layers.push(rect(from, display_width(&text, to) - display_width(&text, from) + extra, t.selection));
+                layers.push(rect(from, dw(to) - dw(from) + extra, t.selection));
             }
-            let head_cell = display_width(&text, sel.head.saturating_sub(line_start));
+            let head_cell = dw(sel.head.saturating_sub(line_start));
             let in_row = head_cell >= row.start && row.end.is_none_or(|e| head_cell < e);
             if ctx.focused && in_row && doc.buffer.offset_to_point(sel.head).0 == line {
                 layers.push(div().absolute().top_0().left(x_of(sel.head - line_start)).w(px(2.0)).h(line_h).bg(rgb(t.caret)));
@@ -699,7 +735,7 @@ impl Workspace {
             });
             let from = if d.range.start.line == line { doc.buffer.offset_from_utf16(line, d.range.start.character) - line_start } else { 0 };
             let to = if d.range.end.line == line { doc.buffer.offset_from_utf16(line, d.range.end.character) - line_start } else { line_end - line_start };
-            let cells = (display_width(&text, to.max(from + 1)) - display_width(&text, from)).max(1);
+            let cells = (dw(to.max(from + 1)) - dw(from)).max(1);
             let color = match d.severity {
                 Severity::Error => t.error,
                 Severity::Warning => t.warning,
@@ -796,7 +832,17 @@ impl Workspace {
                             .when(row.end.is_none(), |d| d.w_full())
                             .overflow_hidden()
                             .children(layers)
-                            .child(div().absolute().top_0().left(px(TEXT_PAD) - px(ctx.scroll_x) - char_w * row.start as f32).whitespace_nowrap().child(StyledText::new(shown).with_highlights(runs))),
+                            .child({
+                                // The hints go into the drawn text with their own look; the colours are cut around them.
+                                let (shown, runs) = if hints.is_empty() {
+                                    (shown, runs)
+                                } else {
+                                    let inserts: Vec<(usize, &str)> = hints.iter().map(|(c, l)| (byte_of_col[(*c).min(byte_of_col.len() - 1)], l.as_str())).collect();
+                                    let style = HighlightStyle { color: Some(rgb(t.dim).into()), background_color: Some(rgba((t.border << 8) | 0x99).into()), ..Default::default() };
+                                    crate::inline_hints::splice_hints(&shown, runs, &inserts, style)
+                                };
+                                div().absolute().top_0().left(px(TEXT_PAD) - px(ctx.scroll_x) - char_w * row.start as f32).whitespace_nowrap().child(StyledText::new(shown).with_highlights(runs))
+                            }),
                     ),
             )
     }
@@ -1140,8 +1186,10 @@ impl Workspace {
                                                 .child(if entry.is_dir {
                                                     div().w(rems(1.5)).flex_none().flex().justify_center().child(crate::icons::glyph(if entry.expanded { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 1.0, t.dim))
                                                 } else {
-                                                    file_icon(this.icon_theme.as_ref(), &entry.name)
+                                                    // A file has no chevron, but leaves its room so its icon lines up with the folder icons.
+                                                    div().w(rems(1.5)).flex_none()
                                                 })
+                                                .children((!entry.is_dir).then(|| file_icon(this.icon_theme.as_ref(), &entry.name)))
                                                 .children(entry.is_dir.then(|| match this.icon_theme.as_ref().and_then(|i| i.folder_icon(&entry.name, entry.expanded)) {
                                                     Some(path) => icon_image(path),
                                                     None => div().w(rems(1.5)).flex_none().flex().justify_center().items_center().child(crate::icons::glyph(if entry.expanded { '\u{eaf7}' } else { '\u{ea83}' }, 1.0, 0xd6a85a)),
@@ -1778,6 +1826,26 @@ impl Workspace {
                                             }))
                                             .child(crate::icons::glyph(if open { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 1.0, t.dim))
                                             .child(div().flex_1().whitespace_nowrap().child(label))
+                                            .children((!staged).then(|| {
+                                                div()
+                                                    .id("scm-discard-all")
+                                                    .invisible()
+                                                    .group_hover(group.clone(), |s| s.visible())
+                                                    .w(rems(1.625))
+                                                    .h(rems(1.5))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded_sm()
+                                                    .hover(|s| s.bg(rgb(t.border)))
+                                                    .cursor_pointer()
+                                                    .tooltip(this.tooltip("Discard All Changes", Some(Command::GitDiscardAll)))
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        cx.stop_propagation();
+                                                        this.run_command(Command::GitDiscardAll, false, cx);
+                                                    }))
+                                                    .child(crate::icons::glyph(crate::codicons::DISCARD, 1.0, t.text))
+                                            }))
                                             .child(
                                                 div()
                                                     .id(("scm-bulk", usize::from(staged)))
@@ -1828,7 +1896,8 @@ impl Workspace {
                                         let conflicted = change.conflicted;
                                         let (open_rel, stage_rel, discard_rel) = (change.path.clone(), change.path.clone(), change.path.clone());
                                         let group = format!("scm-file-{i}");
-                                        let action = |id: usize, glyph: char, tip: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace) + 'static>| {
+                                        let selected = this.scm_selected.iter().any(|(r, s)| *r == change.path && *s == is_staged);
+                                        let action = |id: usize, glyph: char, tip: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace, &mut Context<Workspace>) + 'static>| {
                                             div()
                                                 .id(("scm-action", i * 4 + id))
                                                 .w(rems(1.625))
@@ -1842,20 +1911,37 @@ impl Workspace {
                                                 .hover(|s| s.bg(rgb(t.border)))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     cx.stop_propagation();
-                                                    f(this);
+                                                    f(this, cx);
                                                     cx.notify();
                                                 }))
                                                 .child(crate::icons::glyph(glyph, 1.0, t.text))
                                         };
                                         let mut actions = div().flex().flex_row().flex_none().invisible().group_hover(group.clone(), |s| s.visible());
+                                        // The file itself, in a replaceable tab (the diff is what a click opens).
+                                        let rel = open_rel.clone();
+                                        actions = actions.child(action(2, crate::codicons::GO_TO_FILE, "Open File", cx, Box::new(move |w, cx| {
+                                            match w.git.as_ref().map(|g| g.root.join(&rel)) {
+                                                Some(path) if path.is_file() => w.open_file_preview(&path, cx),
+                                                _ => w.set_status(format!("{rel} does not exist in the working tree")),
+                                            }
+                                        })));
                                         if is_staged {
                                             let rel = stage_rel.clone();
-                                            actions = actions.child(action(1, crate::codicons::REMOVE, "Unstage Changes", cx, Box::new(move |w| w.scm_unstage(rel.clone()))));
+                                            actions = actions.child(action(1, crate::codicons::REMOVE, "Unstage Changes", cx, Box::new(move |w, _| {
+                                                let targets = w.scm_targets(&rel, true);
+                                                w.scm_unstage_many(targets);
+                                            })));
                                         } else {
                                             let rel = discard_rel.clone();
-                                            actions = actions.child(action(0, crate::codicons::DISCARD, "Discard Changes", cx, Box::new(move |w| w.scm_confirm_discard(rel.clone(), untracked))));
+                                            actions = actions.child(action(0, crate::codicons::DISCARD, "Discard Changes", cx, Box::new(move |w, _| {
+                                                let targets = w.scm_targets(&rel, false);
+                                                w.scm_confirm_discard_many(targets);
+                                            })));
                                             let rel = stage_rel.clone();
-                                            actions = actions.child(action(1, crate::codicons::ADD, "Stage Changes", cx, Box::new(move |w| w.scm_stage(rel.clone()))));
+                                            actions = actions.child(action(1, crate::codicons::ADD, "Stage Changes", cx, Box::new(move |w, _| {
+                                                let targets = w.scm_targets(&rel, false);
+                                                w.scm_stage_many(targets);
+                                            })));
                                         }
                                         div()
                                             .id(("scm-file", i))
@@ -1870,12 +1956,44 @@ impl Workspace {
                                             .pr(rems(0.5))
                                             .cursor_pointer()
                                             .whitespace_nowrap()
-                                            .hover(|s| s.bg(rgb(t.tab_active)))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if conflicted {
-                                                    this.open_conflict_page(open_rel.clone());
+                                            .when(selected, |d| d.bg(rgb(t.selection)))
+                                            .when(!selected, |d| d.hover(|s| s.bg(rgb(t.tab_active))))
+                                            // Right-click: the menu of this change (or of all picked ones).
+                                            .on_mouse_down(MouseButton::Right, {
+                                                let rel = open_rel.clone();
+                                                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.open_scm_change_menu(ev.position, rel.clone(), is_staged, cx);
+                                                })
+                                            })
+                                            // Click: pick it and show its changes in a replaceable tab (double-click keeps the tab).
+                                            // Ctrl+click adds it to the picked changes, Shift+click picks the range from the last one.
+                                            .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                                                let key = (open_rel.clone(), is_staged);
+                                                let m = ev.modifiers();
+                                                if m.control || m.platform {
+                                                    match this.scm_selected.iter().position(|k| *k == key) {
+                                                        Some(at) => {
+                                                            this.scm_selected.remove(at);
+                                                        }
+                                                        None => this.scm_selected.push(key.clone()),
+                                                    }
+                                                    this.scm_anchor = Some(key);
+                                                } else if m.shift {
+                                                    let rows = this.scm_file_rows();
+                                                    let from = this.scm_anchor.as_ref().and_then(|a| rows.iter().position(|r| r == a)).unwrap_or(0);
+                                                    let to = rows.iter().position(|r| *r == key).unwrap_or(from);
+                                                    this.scm_selected = rows[from.min(to)..=from.max(to)].to_vec();
                                                 } else {
-                                                    this.git_open_diff(open_rel.clone(), is_staged, untracked);
+                                                    this.scm_selected = vec![key.clone()];
+                                                    this.scm_anchor = Some(key);
+                                                    if conflicted {
+                                                        this.open_conflict_page(open_rel.clone());
+                                                    } else if ev.click_count() >= 2 {
+                                                        this.git_open_diff(open_rel.clone(), is_staged, untracked);
+                                                    } else {
+                                                        this.git_open_diff_preview(open_rel.clone(), is_staged, untracked);
+                                                    }
                                                 }
                                                 cx.notify();
                                             }))
@@ -2420,7 +2538,7 @@ impl Workspace {
     fn render_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
         let t = &self.theme;
         let overlay = self.overlay.as_ref()?;
-        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. });
+        let show_input = !matches!(overlay.kind, OverlayKind::ConfirmDelete(_) | OverlayKind::ConfirmMove { .. } | OverlayKind::ConfirmDiscard { .. } | OverlayKind::ConfirmDiscardMany { .. } | OverlayKind::ConfirmDiscardHunk { .. } | OverlayKind::ConfirmReplace { .. });
         let start = overlay.selected.saturating_sub(11);
         let end = (start + 12).min(overlay.items.len());
         let rows = (start..end).map(|ix| {

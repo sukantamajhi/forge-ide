@@ -105,6 +105,12 @@ pub(crate) struct Doc {
     pub parse_pending: bool,
     /// Set when the tab shows an extension's page instead of text.
     pub ext_page: Option<Box<ExtDetail>>,
+    /// Colours from the language server's semantic tokens, per line, laid over the syntax colours; lines edited since
+    /// they arrived are listed in `semantic_skip` and keep only the syntax colours.
+    pub semantic: Vec<Vec<forge_syntax::Span>>,
+    pub semantic_skip: std::collections::HashSet<usize>,
+    /// The server's inlay hints per line: (char column the hint sits before, text).
+    pub hints: std::collections::HashMap<usize, Vec<(usize, String)>>,
 }
 
 /// Decode file contents, splitting a leading UTF-8 byte-order mark off the text.
@@ -164,6 +170,9 @@ impl Doc {
             ext_lang: None,
             tm: None,
             ext_page: None,
+            semantic: Vec::new(),
+            semantic_skip: Default::default(),
+            hints: Default::default(),
         }
     }
 
@@ -192,10 +201,44 @@ impl Doc {
                 (None, Some(t)) => t.highlight_lines(self.buffer.rope(), wanted.clone()),
                 (None, None) => Vec::new(),
             };
+            let mut spans = spans;
+            if !self.semantic.is_empty() {
+                for (i, line_spans) in spans.iter_mut().enumerate() {
+                    let line = wanted.start + i;
+                    if let Some(over) = self.semantic.get(line).filter(|o| !o.is_empty() && !self.semantic_skip.contains(&line)) {
+                        *line_spans = forge_syntax::overlay_spans(line_spans, over);
+                    }
+                }
+            }
             *cache = (self.revision, wanted.start, spans);
         }
         let (_, first, lines) = &*cache;
         lines.iter().skip(range.start.saturating_sub(*first)).take(range.len()).cloned().collect()
+    }
+
+    /// The inlay hints sitting in `line`, by column.
+    pub fn hints_on(&self, line: usize) -> &[(usize, String)] {
+        self.hints.get(&line).map_or(&[], Vec::as_slice)
+    }
+
+    /// An edit makes what the server said about the touched lines out of date. Edits that change the number of
+    /// lines move everything below them, so then all of it goes until the server answers again.
+    pub fn note_edits(&mut self, edits: &[TextEdit]) {
+        if self.semantic.is_empty() && self.hints.is_empty() {
+            return;
+        }
+        if edits.iter().any(|e| e.old_end_point.0 != e.new_end_point.0) {
+            self.semantic.clear();
+            self.semantic_skip.clear();
+            self.hints.clear();
+            return;
+        }
+        for e in edits {
+            for line in e.start_point.0..=e.new_end_point.0 {
+                self.semantic_skip.insert(line);
+                self.hints.remove(&line);
+            }
+        }
     }
 
     /// Display width in cells of the longest line (tabs expanded), kept until the text changes.
@@ -449,8 +492,12 @@ pub(crate) enum OverlayKind {
     /// A question from git (a username, password or passphrase), to be answered for the running command.
     GitCredential(String),
     GitCreateBranch,
+    /// A new branch at this commit (the graph's "Create Branch from Here").
+    GitBranchAt(String),
     GitHistory,
     ConfirmDiscard { rel: String, untracked: bool },
+    /// Several files at once; each is `(path, untracked)`.
+    ConfirmDiscardMany { files: Vec<(String, bool)> },
     /// Replace every search result: how many matches in how many files.
     ConfirmReplace { matches: usize, files: usize },
     LanguageServers,
@@ -823,6 +870,21 @@ pub(crate) struct Workspace {
     /// The font settings the code and UI fonts and the character width were worked out for.
     pub font_key: Option<(String, String, u32)>,
     pub code_link_hover: bool,
+    /// The file and revision the semantic tokens and hints were last asked for, what was last seen, and when it changed.
+    pub extras_key: Option<(PathBuf, u64)>,
+    pub extras_seen: Option<(PathBuf, u64)>,
+    pub extras_changed: Instant,
+    pub extras_requested: Option<(PathBuf, u64)>,
+    /// Not before this: asking again after the server said things changed (or cancelled a request).
+    pub extras_retry_at: Option<Instant>,
+    /// The changes picked in the Source Control list (path, staged), and the one a Shift-click range starts from.
+    pub scm_selected: Vec<(String, bool)>,
+    pub scm_anchor: Option<(String, bool)>,
+    /// The diff whose tab is to open as a replaceable one when its text arrives.
+    pub diff_preview: Option<String>,
+    /// What was last written as backups of unsaved edits, and when it was last looked at.
+    pub backup_signature: Option<Vec<(String, u64, usize)>>,
+    pub backup_checked: Instant,
     /// The Outline section of the Explorer: open or folded, what it lists, and what that list was made for.
     pub outline_open: bool,
     pub outline_items: Vec<forge_core::outline::OutlineItem>,
@@ -1058,6 +1120,16 @@ impl Workspace {
             defer_syntax: false,
             font_key: None,
             code_link_hover: false,
+            extras_key: None,
+            extras_seen: None,
+            extras_changed: Instant::now(),
+            extras_requested: None,
+            extras_retry_at: None,
+            scm_selected: Vec::new(),
+            scm_anchor: None,
+            diff_preview: None,
+            backup_signature: None,
+            backup_checked: Instant::now(),
             outline_open: true,
             outline_items: Vec::new(),
             outline_key: None,
@@ -1141,6 +1213,7 @@ impl Workspace {
         // Closing the window saves the session one last time, however recently it last changed.
         cx.on_app_quit(|this, _| {
             this.save_session(true);
+            this.save_backups(true);
             std::future::ready(())
         })
         .detach();
@@ -1349,30 +1422,75 @@ impl Workspace {
     /// Open `path` in a replaceable tab, as a single click in the Explorer does: it takes the place of the
     /// group's current preview tab. A file already open keeps its tab as it is.
     pub fn open_file_preview(&mut self, path: &Path, cx: &mut Context<Self>) {
+        let path = path.to_path_buf();
         if !self.settings.enable_preview {
-            self.open_file(path, None, cx);
+            self.open_file(&path, None, cx);
             return;
         }
+        self.as_preview(cx, move |this, cx| this.open_file(&path, None, cx));
+    }
+
+    /// Run `open`, which opens something in a tab. If that made a NEW tab, it becomes the group's replaceable
+    /// (italic) tab and the previous replaceable tab, if it has no unsaved changes, is closed.
+    pub fn as_preview(&mut self, cx: &mut Context<Self>, open: impl FnOnce(&mut Self, &mut Context<Self>)) {
         let g = self.focused_group;
-        let was_open = self.groups[g].views.iter().any(|v| same_path(&self.docs[v.doc].path, path));
-        let old_doc = self.groups[g].views.iter().find(|v| v.preview && !same_path(&self.docs[v.doc].path, path)).map(|v| v.doc);
-        self.open_file(path, None, cx);
-        if was_open {
+        let before: Vec<PathBuf> = self.groups[g].views.iter().map(|v| self.docs[v.doc].path.clone()).collect();
+        let old = self.groups[g].views.iter().find(|v| v.preview).map(|v| self.docs[v.doc].path.clone());
+        open(self, cx);
+        let g = self.focused_group;
+        let Some(new_path) = self.groups[g].views.get(self.groups[g].active).map(|v| self.docs[v.doc].path.clone()) else { return };
+        if before.iter().any(|p| same_path(p, &new_path)) {
             return;
         }
-        let Some(new_vi) = self.groups[g].views.iter().position(|v| same_path(&self.docs[v.doc].path, path)) else { return };
+        let Some(new_vi) = self.groups[g].views.iter().position(|v| same_path(&self.docs[v.doc].path, &new_path)) else { return };
         self.groups[g].views[new_vi].preview = true;
-        if let Some(old) = old_doc {
-            if let Some(vi) = self.groups[g].views.iter().position(|v| v.doc == old && v.preview) {
-                if !self.docs[old].dirty {
-                    self.close_view(g, vi, cx);
-                    // Closing a tab to the left shifts the one just opened.
-                    if let Some(vi) = self.groups[g].views.iter().position(|v| same_path(&self.docs[v.doc].path, path)) {
-                        self.groups[g].active = vi;
-                    }
+        let Some(old_path) = old.filter(|p| !same_path(p, &new_path)) else { return };
+        if let Some(vi) = self.groups[g].views.iter().position(|v| v.preview && same_path(&self.docs[v.doc].path, &old_path)) {
+            if !self.docs[self.groups[g].views[vi].doc].dirty {
+                self.close_view(g, vi, cx);
+                // Closing a tab to the left shifts the one just opened.
+                if let Some(vi) = self.groups[g].views.iter().position(|v| same_path(&self.docs[v.doc].path, &new_path)) {
+                    self.groups[g].active = vi;
                 }
             }
         }
+    }
+
+    /// Move the tab at `(from_g, from_vi)` to group `to_g`: into the place of tab `to_vi`, or last when `None`.
+    /// Pinned tabs stay together at the left. A group left with no tabs is closed.
+    pub fn move_tab(&mut self, from_g: usize, from_vi: usize, to_g: usize, to_vi: Option<usize>, cx: &mut Context<Self>) {
+        if from_g >= self.groups.len() || to_g >= self.groups.len() || from_vi >= self.groups[from_g].views.len() {
+            return;
+        }
+        if from_g == to_g && to_vi == Some(from_vi) {
+            return;
+        }
+        self.auto_save_on_focus_change();
+        let view = self.groups[from_g].views.remove(from_vi);
+        let pinned = view.pinned;
+        let target = &mut self.groups[to_g];
+        let pinned_count = target.views.iter().filter(|v| v.pinned).count();
+        let mut at = to_vi.unwrap_or(target.views.len()).min(target.views.len());
+        at = if pinned { at.min(pinned_count) } else { at.max(pinned_count) };
+        target.views.insert(at, view);
+        target.active = at;
+        let mut focus = to_g;
+        if from_g != to_g {
+            let source = &mut self.groups[from_g];
+            if source.active > from_vi || source.active >= source.views.len() {
+                source.active = source.active.saturating_sub(1).min(source.views.len().saturating_sub(1));
+            }
+            if source.views.is_empty() && self.groups.len() > 1 {
+                self.groups.remove(from_g);
+                if to_g > from_g {
+                    focus -= 1;
+                }
+            }
+        }
+        self.focused_group = focus;
+        self.focus = Focus::Editor;
+        self.completion = None;
+        cx.notify();
     }
 
     /// Make a replaceable tab permanent.
@@ -1425,6 +1543,19 @@ impl Workspace {
     /// A new empty `Untitled-<n>` tab (Ctrl+N), with nothing asked until it is saved.
     pub fn new_untitled(&mut self, cx: &mut Context<Self>) {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.untitled && d.title.as_deref() == Some(format!("Untitled-{n}").as_str()))).unwrap_or(1);
+        self.open_untitled(n, cx);
+    }
+
+    /// The untitled tab called `name` (`Untitled-3`) again, as it was when Forge closed; a new number if taken.
+    pub fn new_untitled_named(&mut self, name: &str, cx: &mut Context<Self>) {
+        let wanted = name.strip_prefix("Untitled-").and_then(|n| n.parse::<usize>().ok());
+        match wanted.filter(|n| !self.docs.iter().any(|d| d.untitled && d.title.as_deref() == Some(format!("Untitled-{n}").as_str()))) {
+            Some(n) => self.open_untitled(n, cx),
+            None => self.new_untitled(cx),
+        }
+    }
+
+    fn open_untitled(&mut self, n: usize, cx: &mut Context<Self>) {
         self.auto_save_on_focus_change();
         self.mark_jump();
         self.image_page = None;
@@ -1754,6 +1885,7 @@ impl Workspace {
     /// Update everything that depends on a document's text after `edits`.
     pub fn after_edits(&mut self, doc_ix: usize, origin: Option<(usize, usize)>, edits: &[TextEdit]) {
         self.docs[doc_ix].dirty = true;
+        self.docs[doc_ix].note_edits(edits);
         for view in self.groups.iter_mut().flat_map(|g| g.views.iter_mut()).filter(|v| v.doc == doc_ix) {
             view.preview = false;
         }
@@ -1936,7 +2068,9 @@ impl Workspace {
         changed |= self.poll_background();
         changed |= self.debug_tick(cx);
         self.save_session(false);
+        self.save_backups(false);
         changed |= self.refresh_outline();
+        changed |= self.refresh_lsp_extras();
         // The editor scrolls during layout, after render has run, so the preview is kept in step here.
         if self.preview_open {
             if let Some((g, vi)) = self.active_ix().filter(|(g, _)| self.is_markdown(*g)) {
@@ -2026,6 +2160,10 @@ impl Workspace {
                     doc.set_lsp_diagnostics(Vec::new());
                 }
             }
+            Event::RefreshExtras => {
+                self.extras_key = None;
+                self.extras_retry_at = Some(Instant::now() + Duration::from_millis(1000));
+            }
             Event::Response { tag, result } => self.handle_response(tag, result, cx),
         }
     }
@@ -2098,6 +2236,8 @@ impl Workspace {
                 self.symbols = parse_document_symbols(&result);
                 self.refresh_overlay();
             }
+            RequestTag::SemanticTokens => self.apply_semantic_tokens(result),
+            RequestTag::InlayHints => self.apply_inlay_hints(result),
             RequestTag::Outline => {
                 let symbols = parse_document_symbols(&result);
                 // Only while the file it was asked for is still the one in front.

@@ -32,6 +32,10 @@ pub enum RequestTag {
     /// Format the document; save afterwards when set (format on save).
     Format { then_save: bool },
     Symbols,
+    /// `textDocument/semanticTokens/full` for the open file.
+    SemanticTokens,
+    /// `textDocument/inlayHint` for the open file.
+    InlayHints,
     /// The symbols for the Outline view (no picker is waiting for them).
     Outline,
     /// Format only the selected range.
@@ -44,6 +48,8 @@ pub enum Event {
     Ready { key: String },
     Diagnostics { path: PathBuf, diagnostics: Vec<Diagnostic> },
     Progress { title: String, text: Option<String> },
+    /// The server says what it knows about the open files changed (it finished loading): ask for semantic tokens and inlay hints again.
+    RefreshExtras,
     Response { tag: RequestTag, result: Value },
     Failed { key: String, title: String, message: String },
 }
@@ -59,6 +65,9 @@ struct Server {
     title: String,
     /// Active `$/progress` tokens and their latest text (e.g. indexing).
     progress: HashMap<String, String>,
+    /// The names of the semantic token types the server uses, when it offers semantic tokens.
+    legend: Option<Vec<String>>,
+    inlay_hints: bool,
 }
 
 pub struct LspManager {
@@ -91,6 +100,16 @@ impl LspManager {
     /// The server key that handles `language`, if any is configured.
     pub fn key_for(&self, language: Language) -> Option<String> {
         self.spec(language).map(|s| s.key)
+    }
+
+    /// The semantic token type names of the ready server for `language`, if it offers semantic tokens.
+    pub fn semantic_legend(&self, language: Language) -> Option<Vec<String>> {
+        let key = self.key_for(language)?;
+        self.servers.get(&key).filter(|s| matches!(s.state, State::Ready)).and_then(|s| s.legend.clone())
+    }
+
+    pub fn supports_inlay_hints(&self, language: Language) -> bool {
+        self.key_for(language).and_then(|k| self.servers.get(&k)).is_some_and(|s| matches!(s.state, State::Ready) && s.inlay_hints)
     }
 
     /// Whether the server for `language` has been launched but has not finished starting.
@@ -164,7 +183,7 @@ impl LspManager {
         let init = client.begin_initialize_with(root_uri.as_deref(), servers::init_options(spec)).map_err(|e| format!("{e:#}"))?;
         self.servers.insert(
             spec.key.clone(),
-            Server { client, state: State::Initializing(init), title: spec.title.clone(), progress: HashMap::new() },
+            Server { client, state: State::Initializing(init), title: spec.title.clone(), progress: HashMap::new(), legend: None, inlay_hints: false },
         );
         Ok(())
     }
@@ -227,7 +246,9 @@ impl LspManager {
             }
             if let State::Initializing(response) = &server.state {
                 match response.try_recv() {
-                    Ok(Ok(_)) => {
+                    Ok(Ok(init)) => {
+                        server.legend = forge_lsp::supports_full_semantic_tokens(&init).then(|| forge_lsp::semantic_legend(&init)).flatten();
+                        server.inlay_hints = forge_lsp::supports_inlay_hints(&init);
                         if server.client.initialized().is_ok() {
                             eprintln!("[lsp] {} ready", server.title);
                             server.state = State::Ready;
@@ -247,6 +268,9 @@ impl LspManager {
             for message in server.client.poll() {
                 match message {
                     ServerMessage::Request { id, method, params } => {
+                        if method == "workspace/inlayHint/refresh" || method == "workspace/semanticTokens/refresh" {
+                            events.push(Event::RefreshExtras);
+                        }
                         let _ = server.client.respond(id, answer_server_request(&method, &params));
                     }
                     ServerMessage::Notification { method, params } => match method.as_str() {
@@ -295,6 +319,10 @@ impl LspManager {
             // An error reply (e.g. "content modified") just means no answer this time.
             Ok(Err(error)) => {
                 eprintln!("[lsp] {tag:?} failed: {error}");
+                // A server still loading cancels these ("content modified"): ask again shortly.
+                if matches!(tag, RequestTag::InlayHints | RequestTag::SemanticTokens) {
+                    events.push(Event::RefreshExtras);
+                }
                 if *tag == RequestTag::Definition {
                     // Null parses to no locations, so the status bar says "No definition found".
                     events.push(Event::Response { tag: *tag, result: Value::Null });

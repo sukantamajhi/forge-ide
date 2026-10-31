@@ -35,10 +35,35 @@ pub(crate) enum MenuAction {
     PasteEntry,
     CloseOthers,
     CloseAll,
+    /// A choice from the right-click menu of a change in the Source Control list.
+    Scm(ScmOp),
+    /// A choice from the right-click menu of a commit in the graph: the operation and the commit's hash.
+    Graph(GraphOp, String),
     /// A title hidden behind the title bar's "...": open its menu.
     BarMenu(usize),
     /// A choice from the menu of one particular tab: group `g`, tab `vi`.
     Tab { op: TabOp, g: usize, vi: usize },
+}
+
+/// What the right-click menu of a commit in the graph can do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GraphOp {
+    ShowChanges,
+    Checkout,
+    CherryPick,
+    Branch,
+    Revert,
+    CopyHash,
+}
+
+/// What the right-click menu of a change in the Source Control list can do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScmOp {
+    OpenChanges,
+    OpenFile,
+    Stage,
+    Unstage,
+    Discard,
 }
 
 /// What a tab's right-click menu can do to that tab.
@@ -109,6 +134,103 @@ impl Workspace {
     }
 
     /// The Git view's "more actions" menu, opened from the Commit button's arrow or the ... icon.
+    /// The menu of a change in the Source Control list: open it, stage, unstage or discard it (or all picked).
+    pub fn open_scm_change_menu(&mut self, position: Point<Pixels>, rel: String, staged: bool, cx: &mut Context<Self>) {
+        // Right-clicking outside the picked changes picks just that one.
+        if !self.scm_selected.iter().any(|(r, s)| *r == rel && *s == staged) {
+            self.scm_selected = vec![(rel.clone(), staged)];
+            self.scm_anchor = Some((rel.clone(), staged));
+        }
+        let count = self.scm_targets(&rel, staged).len();
+        let many = if count > 1 { format!(" ({count} files)") } else { String::new() };
+        let conflicted = self.git.as_ref().is_some_and(|g| g.status.changes.iter().any(|c| c.path == rel && c.conflicted));
+        let mut entries = vec![
+            self.menu_item(if conflicted { "Resolve Conflict" } else { "Open Changes" }, MenuAction::Scm(ScmOp::OpenChanges), None, true),
+            self.menu_item("Open File", MenuAction::Scm(ScmOp::OpenFile), None, true),
+            MenuEntry::Separator,
+        ];
+        if staged {
+            entries.push(self.menu_item(&format!("Unstage Changes{many}"), MenuAction::Scm(ScmOp::Unstage), None, true));
+        } else {
+            entries.push(self.menu_item(&format!("Stage Changes{many}"), MenuAction::Scm(ScmOp::Stage), None, true));
+            entries.push(self.menu_item(&format!("Discard Changes{many}"), MenuAction::Scm(ScmOp::Discard), None, true));
+        }
+        self.context_menu = Some(ContextMenu { position, entries, target: Some((PathBuf::from(rel), staged)), bar: None });
+        cx.notify();
+    }
+
+    fn scm_menu_op(&mut self, op: ScmOp, target: Option<(PathBuf, bool)>, cx: &mut Context<Self>) {
+        let Some((rel, staged)) = target.map(|(p, s)| (p.to_string_lossy().replace('\\', "/"), s)) else { return };
+        let targets = self.scm_targets(&rel, staged);
+        match op {
+            ScmOp::OpenChanges => {
+                let change = self.git.as_ref().and_then(|g| g.status.changes.iter().find(|c| c.path == rel)).map(|c| (c.conflicted, c.untracked));
+                match change {
+                    Some((true, _)) => self.open_conflict_page(rel),
+                    Some((false, untracked)) => self.git_open_diff(rel, staged, untracked),
+                    None => self.git_open_diff(rel, staged, false),
+                }
+            }
+            ScmOp::OpenFile => {
+                if let Some(path) = self.git.as_ref().map(|g| g.root.join(&rel)) {
+                    if path.is_file() {
+                        self.open_file(&path, None, cx);
+                    } else {
+                        self.set_status(format!("{rel} does not exist in the working tree"));
+                    }
+                }
+            }
+            ScmOp::Stage => self.scm_stage_many(targets),
+            ScmOp::Unstage => self.scm_unstage_many(targets),
+            ScmOp::Discard => self.scm_confirm_discard_many(targets),
+        }
+    }
+
+    /// The menu of a commit in the graph: look at it, check it out, cherry-pick or revert it, branch from it.
+    pub fn open_graph_menu(&mut self, position: Point<Pixels>, hash: String, cx: &mut Context<Self>) {
+        let item = |label: &str, op: GraphOp| self.menu_item(label, MenuAction::Graph(op, hash.clone()), None, true);
+        let entries = vec![
+            item("Show Changes", GraphOp::ShowChanges),
+            MenuEntry::Separator,
+            item("Checkout (Detached)", GraphOp::Checkout),
+            item("Create Branch from Here...", GraphOp::Branch),
+            MenuEntry::Separator,
+            item("Cherry-pick", GraphOp::CherryPick),
+            item("Revert", GraphOp::Revert),
+            MenuEntry::Separator,
+            item("Copy Commit Hash", GraphOp::CopyHash),
+        ];
+        self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
+        cx.notify();
+    }
+
+    fn graph_menu_op(&mut self, op: GraphOp, hash: String, cx: &mut Context<Self>) {
+        let short: String = hash.chars().take(8).collect();
+        match op {
+            GraphOp::ShowChanges => {
+                let subject = self.graph.iter().find(|c| c.hash == hash).map(|c| c.subject.clone()).unwrap_or_default();
+                self.git_show_hash(hash, subject, None);
+            }
+            GraphOp::Checkout => {
+                let h = hash.clone();
+                self.git_job("checkout", move |r| forge_core::git::checkout_commit(r, &h));
+            }
+            GraphOp::Branch => self.open_overlay(OverlayKind::GitBranchAt(hash), ""),
+            GraphOp::CherryPick => {
+                let h = hash.clone();
+                self.git_job("cherry-pick", move |r| forge_core::git::cherry_pick(r, &h));
+            }
+            GraphOp::Revert => {
+                let h = hash.clone();
+                self.git_job("revert", move |r| forge_core::git::revert(r, &h));
+            }
+            GraphOp::CopyHash => {
+                cx.write_to_clipboard(ClipboardItem::new_string(hash));
+                self.set_status(format!("Copied {short}"));
+            }
+        }
+    }
+
     pub fn open_scm_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let staged = self.git.as_ref().is_some_and(|g| g.status.staged().next().is_some());
         let entries = vec![
@@ -515,6 +637,8 @@ impl Workspace {
     fn run_menu_action(&mut self, action: MenuAction, target: Option<(PathBuf, bool)>, cx: &mut Context<Self>) {
         match action {
             MenuAction::BarMenu(_) => {}
+            MenuAction::Scm(op) => self.scm_menu_op(op, target, cx),
+            MenuAction::Graph(op, hash) => self.graph_menu_op(op, hash, cx),
             MenuAction::Command(command) => {
                 self.focus = Focus::Editor;
                 self.run_command(command, false, cx);

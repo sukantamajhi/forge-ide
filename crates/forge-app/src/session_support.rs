@@ -76,6 +76,7 @@ impl Workspace {
                 self.set_status(format!("Restored {opened} open file{}", if opened == 1 { "" } else { "s" }));
             }
         }
+        self.restore_backups(cx);
         if let Some(file) = also {
             self.open_file(file, None, cx);
         }

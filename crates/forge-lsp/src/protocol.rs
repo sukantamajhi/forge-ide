@@ -356,6 +356,105 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
     out
 }
 
+/// One token of `textDocument/semanticTokens/full`: where it is (UTF-16 units), what it is and its modifiers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SemanticToken {
+    pub line: usize,
+    pub start: usize,
+    pub length: usize,
+    /// The token type's name from the server's legend (`function`, `variable`, ...).
+    pub kind: String,
+    /// Bit set over the legend's modifiers.
+    pub modifiers: u32,
+}
+
+/// The token type names of a server's `semanticTokensProvider.legend`, from its `initialize` result.
+pub fn semantic_legend(initialize_result: &Value) -> Option<Vec<String>> {
+    let legend = initialize_result.get("capabilities")?.get("semanticTokensProvider")?.get("legend")?;
+    let types = legend.get("tokenTypes")?.as_array()?;
+    Some(types.iter().filter_map(|t| t.as_str().map(str::to_owned)).collect())
+}
+
+/// Whether a server offers `textDocument/semanticTokens/full`.
+pub fn supports_full_semantic_tokens(initialize_result: &Value) -> bool {
+    let Some(provider) = initialize_result.get("capabilities").and_then(|c| c.get("semanticTokensProvider")) else { return false };
+    match provider.get("full") {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Object(_)) => true,
+        _ => false,
+    }
+}
+
+pub fn supports_inlay_hints(initialize_result: &Value) -> bool {
+    match initialize_result.get("capabilities").and_then(|c| c.get("inlayHintProvider")) {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Object(_)) => true,
+        _ => false,
+    }
+}
+
+/// Decode the relative `data` array of a semantic tokens reply into absolute tokens.
+pub fn parse_semantic_tokens(result: &Value, legend: &[String]) -> Vec<SemanticToken> {
+    let Some(data) = result.get("data").and_then(Value::as_array) else { return Vec::new() };
+    let numbers: Vec<u64> = data.iter().filter_map(Value::as_u64).collect();
+    let (mut line, mut start) = (0usize, 0usize);
+    let mut out = Vec::with_capacity(numbers.len() / 5);
+    for chunk in numbers.chunks_exact(5) {
+        let (delta_line, delta_start, length, kind, modifiers) = (chunk[0] as usize, chunk[1] as usize, chunk[2] as usize, chunk[3] as usize, chunk[4] as u32);
+        line += delta_line;
+        start = if delta_line == 0 { start + delta_start } else { delta_start };
+        if let Some(kind) = legend.get(kind) {
+            out.push(SemanticToken { line, start, length, kind: kind.clone(), modifiers });
+        }
+    }
+    out
+}
+
+/// One inlay hint: text a server wants shown inside a line without being part of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlayHint {
+    pub line: usize,
+    /// UTF-16 column the hint sits before.
+    pub character: usize,
+    /// The label, with its padding already added as spaces.
+    pub label: String,
+    /// 1 for a type, 2 for a parameter name.
+    pub kind: u8,
+}
+
+/// `textDocument/inlayHint` params for the whole file; `end` is the `(line, UTF-16 column)` where the text ends.
+pub fn inlay_hint_params(uri: &str, end: (usize, usize)) -> Value {
+    json!({ "textDocument": { "uri": uri }, "range": { "start": { "line": 0, "character": 0 }, "end": { "line": end.0, "character": end.1 } } })
+}
+
+pub fn parse_inlay_hints(result: &Value) -> Vec<InlayHint> {
+    let Some(items) = result.as_array() else { return Vec::new() };
+    let mut hints: Vec<InlayHint> = items
+        .iter()
+        .filter_map(|item| {
+            let position = item.get("position")?;
+            let label = match item.get("label")? {
+                Value::String(s) => s.clone(),
+                Value::Array(parts) => parts.iter().filter_map(|p| p.get("value").and_then(Value::as_str)).collect::<String>(),
+                _ => return None,
+            };
+            if label.is_empty() || label.contains('\n') {
+                return None;
+            }
+            let left = if item.get("paddingLeft").and_then(Value::as_bool).unwrap_or(false) { " " } else { "" };
+            let right = if item.get("paddingRight").and_then(Value::as_bool).unwrap_or(false) { " " } else { "" };
+            Some(InlayHint {
+                line: position.get("line")?.as_u64()? as usize,
+                character: position.get("character")?.as_u64()? as usize,
+                label: format!("{left}{label}{right}"),
+                kind: item.get("kind").and_then(Value::as_u64).unwrap_or(0) as u8,
+            })
+        })
+        .collect();
+    hints.sort_by_key(|h| (h.line, h.character));
+    hints
+}
+
 pub fn parse_code_actions(result: &Value) -> Vec<CodeAction> {
     let Some(items) = result.as_array() else { return Vec::new() };
     items
@@ -615,5 +714,52 @@ mod tests {
         let p = code_action_params("file:///a", Range::default(), &[d]);
         assert_eq!(p["context"]["diagnostics"][0]["severity"], 2);
         assert_eq!(formatting_params("file:///a", 2, false)["options"]["insertSpaces"], false);
+    }
+}
+
+#[cfg(test)]
+mod extras_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn semantic_tokens_are_decoded_from_relative_numbers() {
+        let legend = vec!["variable".to_owned(), "function".to_owned()];
+        // (line 0, col 4, len 3, variable) then (same line, +6, len 2, function) then (line 2, col 1, len 5, variable, modifier 1)
+        let result = json!({ "data": [0, 4, 3, 0, 0, 0, 6, 2, 1, 0, 2, 1, 5, 0, 1] });
+        let tokens = parse_semantic_tokens(&result, &legend);
+        assert_eq!(
+            tokens,
+            vec![
+                SemanticToken { line: 0, start: 4, length: 3, kind: "variable".into(), modifiers: 0 },
+                SemanticToken { line: 0, start: 10, length: 2, kind: "function".into(), modifiers: 0 },
+                SemanticToken { line: 2, start: 1, length: 5, kind: "variable".into(), modifiers: 1 },
+            ]
+        );
+        assert!(parse_semantic_tokens(&json!(null), &legend).is_empty());
+    }
+
+    #[test]
+    fn the_legend_and_capabilities_are_read_from_the_initialize_result() {
+        let init = json!({ "capabilities": { "semanticTokensProvider": { "legend": { "tokenTypes": ["a", "b"], "tokenModifiers": [] }, "full": { "delta": true } }, "inlayHintProvider": { "resolveProvider": true } } });
+        assert_eq!(semantic_legend(&init), Some(vec!["a".to_owned(), "b".to_owned()]));
+        assert!(supports_full_semantic_tokens(&init) && supports_inlay_hints(&init));
+        let none = json!({ "capabilities": {} });
+        assert!(semantic_legend(&none).is_none() && !supports_full_semantic_tokens(&none) && !supports_inlay_hints(&none));
+        assert!(!supports_full_semantic_tokens(&json!({ "capabilities": { "semanticTokensProvider": { "legend": { "tokenTypes": [] }, "range": true } } })));
+    }
+
+    #[test]
+    fn inlay_hints_join_label_parts_and_padding_and_come_out_in_order() {
+        let result = json!([
+            { "position": { "line": 3, "character": 9 }, "label": [{ "value": ": " }, { "value": "Vec<i32>" }], "kind": 1 },
+            { "position": { "line": 1, "character": 4 }, "label": "count:", "kind": 2, "paddingRight": true },
+            { "position": { "line": 1, "character": 0 }, "label": "multi\nline" },
+            { "position": { "line": 2, "character": 0 }, "label": "" }
+        ]);
+        let hints = parse_inlay_hints(&result);
+        assert_eq!(hints.len(), 2);
+        assert_eq!((hints[0].line, hints[0].character, hints[0].label.as_str(), hints[0].kind), (1, 4, "count: ", 2));
+        assert_eq!((hints[1].line, hints[1].label.as_str()), (3, ": Vec<i32>"));
     }
 }

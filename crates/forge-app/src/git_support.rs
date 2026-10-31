@@ -248,7 +248,17 @@ impl Workspace {
                 self.file_index = None;
             }
             GitMsg::Diff { key, title, result } => match result {
-                Ok(text) => self.open_virtual(&key, &title, &text, true, cx),
+                Ok(text) => {
+                    if self.diff_preview.take().is_some_and(|k| k == key) {
+                        self.as_preview(cx, move |this, cx| this.open_virtual(&key, &title, &text, true, cx));
+                    } else {
+                        self.open_virtual(&key, &title, &text, true, cx);
+                        // Opened on purpose (a double-click, a menu, a command): the tab stays.
+                        if let Some((g, vi)) = self.active_ix() {
+                            self.keep_open(g, vi);
+                        }
+                    }
+                }
                 Err(error) => self.set_status(format!("Git: {error}")),
             },
             GitMsg::DiffRefresh { key, title, result } => {
@@ -467,11 +477,112 @@ impl Workspace {
     }
 
     pub fn git_open_diff(&mut self, rel: String, staged: bool, untracked: bool) {
+        self.open_diff(rel, staged, untracked, false);
+    }
+
+    /// As [`Self::git_open_diff`], but in a replaceable tab (a single click on a change).
+    pub fn git_open_diff_preview(&mut self, rel: String, staged: bool, untracked: bool) {
+        self.open_diff(rel, staged, untracked, self.settings.enable_preview);
+    }
+
+    fn open_diff(&mut self, rel: String, staged: bool, untracked: bool, preview: bool) {
         let name = rel.rsplit('/').next().unwrap_or(&rel).to_owned();
         let state = if staged { "Staged" } else if untracked { "New" } else { "Working Tree" };
         let key = format!("diff:{state}:{rel}");
         let title = format!("{name} ({state})");
+        if preview {
+            self.diff_preview = Some(key.clone());
+        }
         self.git_background(move |root| git::diff_text(root, &rel, staged, untracked), move |result| GitMsg::Diff { key, title, result });
+    }
+
+    /// The changes in the order the list shows them (staged first), as (path, staged).
+    pub fn scm_file_rows(&self) -> Vec<(String, bool)> {
+        let Some(git) = self.git.as_ref() else { return Vec::new() };
+        let mut rows = Vec::new();
+        if self.scm_staged_open {
+            rows.extend(git.status.staged().map(|c| (c.path.clone(), true)));
+        }
+        if self.scm_changes_open {
+            rows.extend(git.status.unstaged().map(|c| (c.path.clone(), false)));
+        }
+        rows
+    }
+
+    /// What an action on the row `(rel, staged)` applies to: every picked change of the same kind when the row is
+    /// one of several picked, else just the row.
+    pub fn scm_targets(&self, rel: &str, staged: bool) -> Vec<String> {
+        let present = self.scm_file_rows();
+        let picked: Vec<String> = self.scm_selected.iter().filter(|(r, s)| *s == staged && present.contains(&(r.clone(), *s))).map(|(r, _)| r.clone()).collect();
+        if picked.len() > 1 && picked.iter().any(|r| r == rel) {
+            picked
+        } else {
+            vec![rel.to_owned()]
+        }
+    }
+
+    pub fn scm_stage_many(&mut self, rels: Vec<String>) {
+        let n = rels.len();
+        self.git_job("stage", move |r| git::stage(r, &rels).map(|_| if n == 1 { "Staged".to_owned() } else { format!("Staged {n} files") }));
+    }
+
+    pub fn scm_unstage_many(&mut self, rels: Vec<String>) {
+        let n = rels.len();
+        self.git_job("unstage", move |r| git::unstage(r, &rels).map(|_| if n == 1 { "Unstaged".to_owned() } else { format!("Unstaged {n} files") }));
+    }
+
+    /// Ask before discarding the changes of one or several files.
+    pub fn scm_confirm_discard_many(&mut self, rels: Vec<String>) {
+        let files: Vec<(String, bool)> = rels
+            .into_iter()
+            .map(|rel| {
+                let untracked = self.git.as_ref().is_some_and(|g| g.status.changes.iter().any(|c| c.path == rel && c.untracked));
+                (rel, untracked)
+            })
+            .collect();
+        match files.len() {
+            0 => {}
+            1 => self.scm_confirm_discard(files[0].0.clone(), files[0].1),
+            _ => self.open_overlay(OverlayKind::ConfirmDiscardMany { files }, ""),
+        }
+    }
+
+    /// Discard Changes on everything that is not staged.
+    pub fn scm_discard_all(&mut self) {
+        let rels: Vec<String> = self.git.as_ref().map(|g| g.status.unstaged().map(|c| c.path.clone()).collect()).unwrap_or_default();
+        if rels.is_empty() {
+            self.set_status("There are no changes to discard");
+        } else {
+            self.scm_confirm_discard_many(rels);
+        }
+    }
+
+    pub fn finish_discard_many(&mut self, files: &[(String, bool)]) {
+        let Some(root) = self.git.as_ref().map(|g| g.root.clone()) else { return };
+        // Untracked files cannot be restored by git, so they go to the Recycle Bin.
+        let mut trashed = 0;
+        for (rel, _) in files.iter().filter(|(_, untracked)| *untracked) {
+            match fileops::move_to_trash(&root.join(rel)) {
+                Ok(()) => trashed += 1,
+                Err(e) => {
+                    self.set_status(e);
+                    return;
+                }
+            }
+        }
+        let tracked: Vec<String> = files.iter().filter(|(_, untracked)| !*untracked).map(|(r, _)| r.clone()).collect();
+        let total = files.len();
+        if tracked.is_empty() {
+            self.git_request_refresh();
+            self.tree.refresh();
+            self.set_status(format!("Moved {trashed} untracked file{} to the Recycle Bin", if trashed == 1 { "" } else { "s" }));
+        } else {
+            if trashed > 0 {
+                self.tree.refresh();
+            }
+            self.git_job("discard", move |r| git::discard(r, &tracked).map(|_| format!("Discarded changes in {total} files")));
+        }
+        self.scm_selected.clear();
     }
 
     pub fn active_rel(&self) -> Option<String> {
@@ -630,6 +741,7 @@ impl Workspace {
                     });
                 }
             }
+            GitDiscardAll => self.scm_discard_all(),
             GitStageAll => self.git_job("stage", |r| git::stage(r, &[".".to_owned()]).map(|_| "Staged all changes".to_owned())),
             GitUnstageAll => self.git_job("unstage", |r| git::unstage(r, &[".".to_owned()]).map(|_| "Unstaged all changes".to_owned())),
             GitStageFile | GitUnstageFile | GitDiscardFile | GitOpenChanges | GitFileHistory | GitBlame => {

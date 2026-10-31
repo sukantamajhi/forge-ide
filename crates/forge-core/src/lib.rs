@@ -2,6 +2,7 @@
 //! text input, fuzzy matching, folding, project search and the terminal session.
 
 pub mod ai;
+pub mod backup;
 pub mod cargo_build;
 pub mod commands;
 pub mod debug_install;
