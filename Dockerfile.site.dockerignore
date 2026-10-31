@@ -1,0 +1,7 @@
+# Only the landing page goes into the site image.
+*
+!site
+site/Dockerfile
+site/.dockerignore
+site/railway.toml
+site/*.md

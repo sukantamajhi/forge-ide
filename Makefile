@@ -125,8 +125,8 @@ site: ## Serve the landing page on port 8099 (SITE_PORT=...)
 SITE_IMAGE ?= forge-site
 SITE_DOCKER_PORT ?= 8080
 
-site-docker-build: ## Build the landing page image (site/Dockerfile)
-	docker build -t $(SITE_IMAGE) site
+site-docker-build: ## Build the landing page image (Dockerfile.site)
+	docker build -f Dockerfile.site -t $(SITE_IMAGE) .
 
 site-docker-run: site-docker-build ## Run the landing page image at http://localhost:$(SITE_DOCKER_PORT)
 	docker run --rm -p $(SITE_DOCKER_PORT):8080 $(SITE_IMAGE)

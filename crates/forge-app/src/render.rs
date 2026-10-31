@@ -25,7 +25,10 @@ use crate::workspace::{
 
 /// Horizontal padding of the Git view, and of the text inside the commit message box.
 const SCM_PAD: f32 = 10.0;
-const INPUT_PAD: f32 = 6.0;
+const INPUT_PAD: f32 = 10.0;
+/// Height and corner radius of the one-line text boxes.
+const INPUT_HEIGHT: f32 = 28.0;
+const INPUT_RADIUS: f32 = 6.0;
 
 /// Per-frame values every visible line needs.
 struct LineCtx {
@@ -125,18 +128,65 @@ impl Workspace {
     }
 
     pub(crate) fn render_input(&self, input: &LineInput, placeholder: &str, focused: bool) -> Div {
+        self.render_input_with(input, placeholder, focused, Vec::new())
+    }
+
+    /// The one-line text box every panel uses: roomy, rounded, a clear ring when it has the keyboard, a dim
+    /// placeholder, and `trailing` buttons (match case, whole word, regex...) inside its right edge.
+    pub(crate) fn render_input_with(&self, input: &LineInput, placeholder: &str, focused: bool, trailing: Vec<AnyElement>) -> Div {
         let t = &self.theme;
         let text = input.text();
         let split = text.char_indices().nth(input.cursor()).map_or(text.len(), |(b, _)| b);
         let (before, after) = text.split_at(split);
-        let row = div().flex().flex_row().items_center().h(rems(1.375)).px_2().cursor_text().bg(rgb(t.bg)).border_1().border_color(rgb(if focused { t.info } else { t.border })).rounded_sm().overflow_hidden().whitespace_nowrap();
-        if text.is_empty() {
-            return row.child(div().w(px(1.0)).h(rems(0.875)).bg(rgb(if focused { t.caret } else { t.bg }))).child(div().text_color(rgb(t.dim)).child(placeholder.to_owned()));
-        }
-        let selected = input.is_all_selected();
-        row.child(div().when(selected, |d| d.bg(rgb(t.selection))).child(before.to_owned()))
-            .child(div().w(px(1.0)).h(rems(0.875)).bg(rgb(if focused && !selected { t.caret } else { t.bg })))
-            .child(div().when(selected, |d| d.bg(rgb(t.selection))).child(after.to_owned()))
+        let caret = |on: bool| div().w(px(1.5)).h(rems(1.0)).flex_none().rounded_full().bg(if on { rgb(t.caret).into() } else { gpui::transparent_black() });
+        let content = if text.is_empty() {
+            div().flex().flex_row().items_center().child(caret(focused)).child(div().text_color(rgb(t.dim)).opacity(0.8).child(placeholder.to_owned()))
+        } else {
+            let selected = input.is_all_selected();
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .child(div().when(selected, |d| d.bg(rgb(t.selection))).child(before.to_owned()))
+                .child(caret(focused && !selected))
+                .child(div().when(selected, |d| d.bg(rgb(t.selection))).child(after.to_owned()))
+        };
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .h(px(INPUT_HEIGHT))
+            .pl(px(INPUT_PAD))
+            .pr(px(if trailing.is_empty() { INPUT_PAD } else { 4.0 }))
+            .cursor_text()
+            .bg(rgb(t.bg))
+            .border_1()
+            .border_color(rgb(if focused { t.info } else { t.border }))
+            .rounded(px(INPUT_RADIUS))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .child(content.flex_1().min_w_0().overflow_hidden())
+            .children(trailing)
+    }
+
+    /// A small toggle button for inside a text box (match case, whole word, regex): lit when on.
+    fn input_toggle(&self, id: (&'static str, usize), icon: char, tip: &'static str, on: bool) -> gpui::Stateful<Div> {
+        let t = &self.theme;
+        div()
+            .id(id)
+            .w(px(22.0))
+            .h(px(22.0))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.0))
+            .cursor_pointer()
+            .when(on, |d| d.bg(rgb(t.selection)))
+            .when(!on, |d| d.hover(|s| s.bg(rgb(t.border))))
+            .tooltip(self.tooltip(tip, None))
+            .child(crate::icons::glyph(icon, 0.9375, if on { t.text } else { t.dim }))
     }
 
     // ---- tabs and groups ----
@@ -853,18 +903,7 @@ impl Workspace {
         let t = &self.theme;
         let f = &self.find;
         let toggle = |icon: char, tip: &'static str, on: bool, which: u8, cx: &mut Context<Self>| {
-            div()
-                .id(("find-toggle", which as usize))
-                .min_w(rems(1.75))
-                .h(rems(1.625))
-                .flex()
-                .items_center()
-                .justify_center()
-                .px_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .bg(rgb(if on { t.selection } else { t.popup }))
-                .tooltip(self.tooltip(tip, None))
+            self.input_toggle(("find-toggle", which as usize), icon, tip, on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     match which {
                         0 => this.find.options.case_sensitive = !this.find.options.case_sensitive,
@@ -874,7 +913,6 @@ impl Workspace {
                     this.refresh_find();
                     cx.notify();
                 }))
-                .child(crate::icons::glyph(icon, 1.0, if on { t.text } else { t.dim }))
         };
         let step = |icon: char, forward: bool, cx: &mut Context<Self>| {
             div()
@@ -918,10 +956,16 @@ impl Workspace {
                     .flex_row()
                     .items_center()
                     .gap_1()
-                    .child(div().flex_1().min_w_0().child(self.render_input(&f.query, "Find", self.focus == Focus::Find && !f.focus_replace)))
-                    .child(toggle(crate::codicons::CASE_SENSITIVE, "Match Case (Alt+C)", f.options.case_sensitive, 0, cx))
-                    .child(toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", f.options.whole_word, 1, cx))
-                    .child(toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", f.options.regex, 2, cx))
+                    .child(div().flex_1().min_w_0().child(self.render_input_with(
+                        &f.query,
+                        "Find",
+                        self.focus == Focus::Find && !f.focus_replace,
+                        vec![
+                            toggle(crate::codicons::CASE_SENSITIVE, "Match Case (Alt+C)", f.options.case_sensitive, 0, cx).into_any_element(),
+                            toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", f.options.whole_word, 1, cx).into_any_element(),
+                            toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", f.options.regex, 2, cx).into_any_element(),
+                        ],
+                    )))
                     .child(div().w(rems(4.375)).text_xs().text_color(rgb(if error { t.error } else { t.dim })).child(status))
                     .child(step(crate::codicons::ARROW_UP, false, cx))
                     .child(step(crate::codicons::ARROW_DOWN, true, cx))
@@ -1211,18 +1255,7 @@ impl Workspace {
         let t = &self.theme;
         let s = &self.search;
         let toggle = |icon: char, tip: &'static str, on: bool, which: usize, cx: &mut Context<Self>| {
-            div()
-                .id(("search-toggle", which))
-                .min_w(rems(1.75))
-                .h(rems(1.625))
-                .flex()
-                .items_center()
-                .justify_center()
-                .px_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .bg(rgb(if on { t.selection } else { t.sidebar }))
-                .tooltip(self.tooltip(tip, None))
+            self.input_toggle(("search-toggle", which), icon, tip, on)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     match which {
                         0 => this.search.options.case_sensitive = !this.search.options.case_sensitive,
@@ -1232,7 +1265,6 @@ impl Workspace {
                     this.start_search();
                     cx.notify();
                 }))
-                .child(crate::icons::glyph(icon, 1.0, if on { t.text } else { t.dim }))
         };
         let files = s.hits.iter().map(|h| &h.path).collect::<std::collections::BTreeSet<_>>().len();
         let status = if let Some(e) = &s.error {
@@ -1290,10 +1322,16 @@ impl Workspace {
                         this.focus = Focus::Search;
                         cx.stop_propagation();
                         cx.notify();
-                    })).child(self.render_input(&s.query, "Search", self.focus == Focus::Search && !s.replace_focused)))
-                    .child(toggle(crate::codicons::CASE_SENSITIVE, "Match Case (Alt+C)", s.options.case_sensitive, 0, cx))
-                    .child(toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", s.options.whole_word, 1, cx))
-                    .child(toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", s.options.regex, 2, cx)),
+                    })).child(self.render_input_with(
+                        &s.query,
+                        "Search",
+                        self.focus == Focus::Search && !s.replace_focused,
+                        vec![
+                            toggle(crate::codicons::CASE_SENSITIVE, "Match Case (Alt+C)", s.options.case_sensitive, 0, cx).into_any_element(),
+                            toggle(crate::codicons::WHOLE_WORD, "Match Whole Word (Alt+W)", s.options.whole_word, 1, cx).into_any_element(),
+                            toggle(crate::codicons::REGEX, "Use Regular Expression (Alt+R)", s.options.regex, 2, cx).into_any_element(),
+                        ],
+                    ))),
             )
             .children(s.replace_open.then(|| {
                 div()
@@ -1513,14 +1551,14 @@ impl Workspace {
         let ai_button = div()
             .id("git-ai")
             .absolute()
-            .top(px(2.0))
-            .right(px(2.0))
-            .w(rems(1.5))
-            .h(rems(1.5))
+            .top(px(3.0))
+            .right(px(4.0))
+            .w(px(22.0))
+            .h(px(22.0))
             .flex()
             .items_center()
             .justify_center()
-            .rounded_sm()
+            .rounded(px(4.0))
             .tooltip(self.tooltip(ai_tip, Some(Command::GitGenerateMessage)))
             .when(can_ai, |d| d.cursor_pointer().hover(|s| s.bg(rgb(t.tab_active))))
             .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
@@ -1536,11 +1574,11 @@ impl Workspace {
             .w_full()
             .pl(px(INPUT_PAD))
             .pr(px(INPUT_PAD + self.ai_button_reserve()))
-            .py(rems(0.25))
+            .py(px(5.0))
             .bg(rgb(t.bg))
             .border_1()
             .border_color(rgb(if focused { t.info } else { t.border }))
-            .rounded_sm()
+            .rounded(px(INPUT_RADIUS))
             .overflow_hidden()
             .flex()
             .flex_col()
