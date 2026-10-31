@@ -5,13 +5,46 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Forge: a native code editor written in Rust</title>
-    <meta name="description"
-        content="Forge is a GPU-rendered code editor written in Rust on GPUI. VS Code habits, Open VSX extensions, built-in Git and debugging. Free and open source (MIT). Windows for now.">
+    <meta name="description" content="Forge is a GPU-rendered code editor written in Rust. VS Code habits, Open VSX extensions, built-in Git and debugging. Free and open source (MIT), for Windows.">
+    <meta name="robots" content="index, follow, max-image-preview:large">
+    <link rel="canonical" href="__SITE_URL__/">
     <meta name="theme-color" content="#0b0e14">
-    <meta property="og:title" content="Forge: a native code editor written in Rust">
-    <meta property="og:description"
-        content="GPU-rendered, written in Rust on GPUI. Installs VS Code extensions from Open VSX. Free and open source.">
+
+    <meta property="og:site_name" content="Forge">
     <meta property="og:type" content="website">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:url" content="__SITE_URL__/">
+    <meta property="og:title" content="Forge: a native code editor written in Rust">
+    <meta property="og:description" content="GPU-rendered, written in Rust on GPUI. Installs VS Code extensions from Open VSX. Free and open source.">
+    <meta property="og:image" content="__SITE_URL__/assets/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Forge, a native code editor, showing an extension's page open in an editor tab.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Forge: a native code editor written in Rust">
+    <meta name="twitter:description" content="GPU-rendered, written in Rust on GPUI. Installs VS Code extensions from Open VSX. Free and open source.">
+    <meta name="twitter:image" content="__SITE_URL__/assets/og-image.png">
+    <meta name="twitter:image:alt" content="Forge, a native code editor, showing an extension's page open in an editor tab.">
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Forge",
+      "description": "Forge is a GPU-rendered code editor written in Rust. VS Code habits, Open VSX extensions, built-in Git and debugging. Free and open source (MIT), for Windows.",
+      "url": "__SITE_URL__/",
+      "image": "__SITE_URL__/assets/og-image.png",
+      "screenshot": "__SITE_URL__/assets/forge-extensions.webp",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Windows 10, Windows 11",
+      "softwareVersion": "0.1.0",
+      "isAccessibleForFree": true,
+      "license": "https://opensource.org/licenses/MIT",
+      "downloadUrl": "https://github.com/sukantamajhi/forge-ide/releases/latest",
+      "sameAs": ["https://github.com/sukantamajhi/forge-ide"],
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+    }
+    </script>
     <link rel="icon" href="assets/forge-logo.svg" type="image/svg+xml">
     <link rel="icon" href="assets/favicon.ico" sizes="any">
     <link rel="preload" href="assets/fonts/geist-600.ttf" as="font" type="font/ttf" crossorigin>
@@ -276,32 +309,32 @@
 
                 <div class="more">
                     <div>
-                        <h4>Language servers</h4>
+                        <h3>Language servers</h3>
                         <p>Diagnostics, completion, hover, definition, references, rename, quick fix and format. Forge
                             installs the servers it can into its own folder.</p>
                     </div>
                     <div>
-                        <h4>Debugging</h4>
+                        <h3>Debugging</h3>
                         <p>F5 starts Python, Node or Rust under a debugger with breakpoints, stepping, variables and a
                             call stack.</p>
                     </div>
                     <div>
-                        <h4>Terminal</h4>
+                        <h3>Terminal</h3>
                         <p>Several integrated terminals in the bottom panel, each with its own tab and 5000 lines of
                             scrollback.</p>
                     </div>
                     <div>
-                        <h4>Editing</h4>
+                        <h3>Editing</h3>
                         <p>Multi-cursor, move and copy lines, auto-closing brackets, expand selection by syntax, cursor
                             undo, sort lines.</p>
                     </div>
                     <div>
-                        <h4>Markdown preview</h4>
+                        <h3>Markdown preview</h3>
                         <p>A live preview beside the editor that scrolls with it. Links open in your browser or in
                             Forge.</p>
                     </div>
                     <div>
-                        <h4>Themes and settings</h4>
+                        <h3>Themes and settings</h3>
                         <p>Forge Dark, Forge Light and Forge High Contrast, a Settings page that edits
                             <code>settings.json</code> in place, and a session that reopens where you left off.
                         </p>

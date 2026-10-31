@@ -9,7 +9,13 @@ server {
     gzip_comp_level 6;
     gzip_min_length 512;
     gzip_vary on;
-    gzip_types text/css application/javascript image/svg+xml font/ttf application/json;
+    gzip_types text/css text/plain application/javascript image/svg+xml font/ttf application/json application/xml;
+
+    error_page 404 /404.html;
+    location = /404.html {
+        internal;
+        include /etc/nginx/snippets/security-headers.conf;
+    }
 
     location = /healthz {
         access_log off;
@@ -21,6 +27,11 @@ server {
     location = /index.html {
         include /etc/nginx/snippets/security-headers.conf;
         add_header Cache-Control "no-cache" always;
+    }
+
+    location ~ ^/(robots\.txt|sitemap\.xml)$ {
+        include /etc/nginx/snippets/security-headers.conf;
+        add_header Cache-Control "public, max-age=3600" always;
     }
 
     location /assets/fonts/ {
