@@ -589,7 +589,7 @@ h4,
   --w-line: rgba(255, 255, 255, 0.08);
   --w-text: #d8dee8;
   --w-dim: #8b96a8;
-  --w-gut: #4e5a6c;
+  --w-gut: #6c7a8a; /* was #4e5a6c (~3.1:1); #6c7a8a gives 4.83:1 on #0d1017 — passes WCAG AA */
   --w-on: #1a202c;
   --w-onText: #ffffff;
   --w-k: #ff8a5c;

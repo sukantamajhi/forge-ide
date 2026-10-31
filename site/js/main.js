@@ -1,6 +1,28 @@
 // Forge landing page: the editor illustration (typing, theme switch), a filterable command palette,
 // a commit-message demo, and the early-access form.
 
+// ---------------------------------------------------------------------------
+// Async CSS activation — CSP-safe replacement for the inline onload handler.
+// The <link id="css-preload"> in <head> preloads style.css at high priority.
+// Once the file is in cache this swaps rel="preload" → rel="stylesheet" so
+// the browser applies the styles. This keeps CSP: script-src 'self' happy
+// (no unsafe-inline needed) while still loading CSS asynchronously.
+// ---------------------------------------------------------------------------
+(function activateCss() {
+  const preload = document.getElementById("css-preload");
+  if (!preload) return;
+  const apply = () => {
+    preload.rel = "stylesheet";
+  };
+  if (preload.sheet) {
+    // Already loaded and parsed (cache hit).
+    apply();
+  } else {
+    preload.addEventListener("load", apply, { once: true });
+  }
+})();
+
+
 // Set this to the URL that accepts a POST of {"email": "..."} (Formspree, Basin, your own server).
 // While it is empty the form is switched off and says so, rather than pretending to save an address.
 const WAITLIST_ENDPOINT = "";

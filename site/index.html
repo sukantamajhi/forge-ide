@@ -62,10 +62,12 @@
     <link rel="preload" href="assets/fonts/geistmono-400.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="assets/fonts/geist-400.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="preload" href="assets/fonts/geist-600.ttf" as="font" type="font/ttf" crossorigin>
-    <!-- Load the stylesheet asynchronously to eliminate the render-blocking request.
-         The preload fetches the file at high priority; onload switches rel to stylesheet
-         once the file is ready. The <noscript> fallback handles JS-disabled browsers. -->
-    <link rel="preload" href="css/style.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <!-- CSS is preloaded at high priority so the browser fetches it in parallel with
+         fonts and other head resources. The stylesheet link below is the canonical
+         load; it is effectively non-blocking because the file is already in cache
+         when the parser reaches it. The rel swap to avoid render-blocking is handled
+         in main.js (no inline handlers needed, keeping CSP: script-src 'self' happy). -->
+    <link rel="preload" href="css/style.css" as="style" id="css-preload">
     <link rel="stylesheet" href="css/style.css">
 </head>
 
