@@ -203,38 +203,30 @@
                                         <li>12</li>
                                         <li>13</li>
                                         <li>14</li>
+                                        <li>15</li>
                                     </ol>
-                                    <pre class="src" fetchpriority="high"><span class="c">//! Shared scroll containers.
-                                            GPUI sizes a scroll
-                                            area from its direct children,</span>
-                                        <span class="c">//! so the children must be as tall as their content.</span>
+                                    <!-- prettier-ignore -->
+                                    <pre class="src" fetchpriority="high"><span class="c">//! Shared scroll containers. GPUI sizes a scroll area from its direct children,</span>
+<span class="c">//! so the children must be as tall as their content.</span>
 
-                                        <span class="k">use</span> gpui::{div, prelude::*, <span class="t">Div</span>,
-                                        <span class="t">ElementId</span>, <span class="t">Stateful</span>};
+<span class="k">use</span> gpui::{div, prelude::*, <span class="t">Div</span>, <span class="t">ElementId</span>, <span class="t">Stateful</span>};
 
-                                        <span class="c">/// A vertically scrolling page holding one centred content
-                                            column.</span>
-                                        <span class="k">pub fn</span> <span class="f">scroll_page</span>(id: <span
-                                            class="k">impl</span> <span class="t">Into</span>&lt;<span
-                                            class="t">ElementId</span>&gt;) -&gt; <span
-                                            class="t">Stateful</span>&lt;<span class="t">Div</span>&gt; {
-                                        <span class="f">div</span>()
-                                        .<span class="f">id</span>(id)
-                                        .<span class="f">overflow_y_scroll</span>()
-                                        .<span class="f">flex</span>()
-                                        .<span class="f">justify_center</span>()
-                                        <span class="c">// A flex row stretches its child to the page height: nothing to
-                                            scroll.</span>
-                                        .<span id="typed"><span class="f">items_start</span>()</span><b
-                                            class="caret"></b>
-                                        }
-                                    </pre>
+<span class="c">/// A vertically scrolling page holding one centred content column.</span>
+<span class="k">pub fn</span> <span class="f">scroll_page</span>(id: <span class="k">impl</span> <span class="t">Into</span>&lt;<span class="t">ElementId</span>&gt;) -&gt; <span class="t">Stateful</span>&lt;<span class="t">Div</span>&gt; {
+    <span class="f">div</span>()
+        .<span class="f">id</span>(id)
+        .<span class="f">overflow_y_scroll</span>()
+        .<span class="f">flex</span>()
+        .<span class="f">justify_center</span>()
+        <span class="c">// A flex row stretches its child to the page height: nothing to scroll.</span>
+        .<span id="typed"><span class="f">items_start</span>()</span><b class="caret"></b>
+}</pre>
                                     <div class="mini" aria-hidden="true"><i style="width:62%"></i><i
                                             style="width:80%"></i><i style="width:0"></i><i style="width:70%"></i><i
                                             style="width:0"></i><i style="width:45%"></i><i style="width:90%"></i><i
                                             style="width:55%"></i><i style="width:40%"></i><i style="width:35%"></i><i
                                             style="width:38%"></i><i style="width:60%"></i><i style="width:76%"></i><i
-                                            style="width:10%"></i></div>
+                                            style="width:40%"></i><i style="width:10%"></i></div>
                                 </div>
                             </div>
                         </div>
