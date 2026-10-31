@@ -80,28 +80,43 @@ const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").match
   let selected = 0;
   let shown = [];
 
-  const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const render = () => {
     const q = input.value.trim().toLowerCase();
     shown = commands.filter(([name]) => name.toLowerCase().includes(q));
     selected = Math.min(selected, Math.max(shown.length - 1, 0));
-    list.innerHTML = shown.map(([name, key], i) => {
+
+    // Build list items with DOM APIs - no innerHTML / string evaluation.
+    // textContent and createTextNode are safe-by-default; no escaping needed.
+    // This keeps CSP: script-src 'self' satisfied (no unsafe-eval required).
+    const frag = document.createDocumentFragment();
+    shown.forEach(([name, key], i) => {
+      const li = document.createElement("li");
+      if (i === selected) li.className = "sel";
+
+      const span = document.createElement("span");
       const at = q ? name.toLowerCase().indexOf(q) : -1;
-      const label = at < 0 ? escapeHtml(name) : escapeHtml(name.slice(0, at)) + "<mark>" + escapeHtml(name.slice(at, at + q.length)) + "</mark>" + escapeHtml(name.slice(at + q.length));
-      return `<li class="${i === selected ? "sel" : ""}"><span>${label}</span>${key ? `<kbd>${escapeHtml(key)}</kbd>` : ""}</li>`;
-    }).join("");
+      if (q && at >= 0) {
+        if (at > 0) span.appendChild(document.createTextNode(name.slice(0, at)));
+        const mark = document.createElement("mark");
+        mark.textContent = name.slice(at, at + q.length);
+        span.appendChild(mark);
+        if (at + q.length < name.length) span.appendChild(document.createTextNode(name.slice(at + q.length)));
+      } else {
+        span.textContent = name;
+      }
+      li.appendChild(span);
+
+      if (key) {
+        const kbd = document.createElement("kbd");
+        kbd.textContent = key;
+        li.appendChild(kbd);
+      }
+      frag.appendChild(li);
+    });
+
+    list.replaceChildren(frag);
     empty.hidden = shown.length > 0;
   };
-  input.addEventListener("input", () => { selected = 0; render(); });
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!shown.length) return;
-      selected = (selected + (event.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length;
-      render();
-      list.children[selected]?.scrollIntoView({ block: "nearest" });
-    }
-  });
   render();
 })();
 

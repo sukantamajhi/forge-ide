@@ -1231,6 +1231,7 @@ kbd {
 
 .shot img {
   width: 100%;
+  aspect-ratio: 2000 / 1089; /* matches forge-extensions.webp intrinsic size; reserves space before lazy-load */
   border-radius: var(--radius-lg);
   border: 1px solid var(--line-light);
   box-shadow: var(--shadow-window);
