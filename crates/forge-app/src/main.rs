@@ -54,6 +54,35 @@ use gpui::{
 
 use workspace::Workspace;
 
+/// On Unix, when the program was started from a terminal, start a copy of itself in its own session with no
+/// terminal attached and exit, so the shell prompt returns at once. If that fails, carry on in the foreground.
+#[cfg(unix)]
+fn detach_from_terminal(args: &[String], foreground: bool) {
+    use std::io::IsTerminal;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    if foreground || std::env::var_os("FORGE_FOREGROUND").is_some() || !(std::io::stdin().is_terminal() || std::io::stdout().is_terminal()) {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else { return };
+    // Relative paths mean the same thing to the copy, which keeps this working directory.
+    let spawned = Command::new(exe)
+        .args(&args[1..])
+        .env("FORGE_FOREGROUND", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+    if spawned.is_ok() {
+        std::process::exit(0);
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_from_terminal(_args: &[String], _foreground: bool) {}
+
 fn main() {
     prof::mark("process started");
     // Git runs this program to ask for a password or passphrase (see `forge_core::askpass`).
@@ -65,8 +94,14 @@ fn main() {
     if let Some(code) = forge_core::gpg_wrap::run_as_gpg(&args) {
         std::process::exit(code);
     }
-    let target = std::env::args()
-        .nth(1)
+    // Started from a terminal (`forge .`), hand the window to a detached copy and give the prompt back, like
+    // `code .`. `--wait` / `-w` / `--foreground` keeps it attached (for git's editor, for instance).
+    let foreground = args.iter().skip(1).any(|a| matches!(a.as_str(), "--wait" | "-w" | "--foreground"));
+    detach_from_terminal(&args, foreground);
+    let target = args
+        .iter()
+        .skip(1)
+        .find(|a| !a.starts_with('-'))
         .map(PathBuf::from)
         // With no argument, reopen the folder that was open last time (like VS Code), if it still exists.
         .or_else(|| forge_core::session::SessionStore::load().last_folder.filter(|p| p.is_dir()))
