@@ -1444,13 +1444,37 @@ kbd {
     padding-right: 0;
 }
 
+.linux-install {
+    margin-top: clamp(2rem, 3.5vw, 3rem);
+    padding-top: clamp(1.5rem, 2.5vw, 2rem);
+    border-top: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1.25rem 2.5rem;
+}
+
+.linux-install > div {
+    flex: 1 1 22rem;
+    min-width: 0;
+}
+
+.linux-install h3 {
+    color: #ffffff;
+    margin-bottom: 0.5rem;
+}
+
 .install-cmd {
-    display: block;
-    max-width: 100%;
-    padding: 0.625rem 0.875rem;
+    flex: 1 1 26rem;
+    min-width: 0;
+    padding: 0.875rem 1.125rem;
+    font-size: 0.9375rem;
+    border-radius: 0.5rem;
+    white-space: pre-wrap;
     overflow-wrap: anywhere;
     user-select: all;
 }
+
 
 .way h3 {
     color: #ffffff;
