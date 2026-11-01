@@ -250,7 +250,7 @@ highlighting covers Rust, JSON, JavaScript, Python and TOML.
 ## Installer
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\build.ps1     # writes dist\Forge-Setup-0.1.0.exe
+powershell -ExecutionPolicy Bypass -File installer\build.ps1     # writes dist\Forge-Setup-0.2.0.exe
 ```
 
 Needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The setup installs for the

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/forge-text", "crates/forge-core", "crates/forge-syntax", "crates/forge-lsp", "crates/forge-ext-host", "crates/forge-app"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 
