@@ -5,6 +5,8 @@
 #   make release-windows   Windows build (run it on Windows)
 #   make release-linux     Linux build (run it on Linux; on Windows it goes through WSL2)
 #   make release-all       both, from a Windows machine with WSL2, or one at a time on each system
+#   make package-linux     dist/forge-<version>-linux-x86_64.tar.gz (for site/install.sh)
+#   make package-deb       dist/forge_<version>_amd64.deb
 #   make package-all       dist/Forge-Setup-<version>.exe and dist/forge-<version>-linux-x86_64.tar.gz
 
 CARGO  ?= cargo
@@ -36,7 +38,7 @@ LINUX_DEPS := build-essential pkg-config clang cmake libfontconfig-dev libwaylan
 
 .DEFAULT_GOAL := help
 .PHONY: help run build release release-windows release-linux release-all test check fmt fmt-check lint clean \
-        installer package-windows package-linux package-all linux-deps site site-docker-build site-docker-run
+        installer package-windows package-linux package-deb package-all linux-deps site site-docker-build site-docker-run
 
 help: ## List the available tasks
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-16s %s\n", $$1, $$2}'
@@ -117,6 +119,10 @@ endif
 	cd dist && sha256sum "$(LINUX_NAME).tar.gz" > "$(LINUX_NAME).tar.gz.sha256"
 	rm -rf "$(LINUX_STAGE)"
 	@echo "Built dist/$(LINUX_NAME).tar.gz (and .sha256: upload both to the release; site/install.sh checks it)"
+
+package-deb: release-linux ## Build dist/forge_<version>_amd64.deb for Debian/Ubuntu (needs a Linux build and dpkg-deb)
+	sh installer/linux/build-deb.sh "$(VERSION)" target/release/forge dist
+	cd dist && sha256sum forge_$(VERSION)_*.deb > forge_$(VERSION).deb.sha256
 
 package-all: package-windows package-linux ## Windows installer and Linux archive (Windows with WSL2)
 
