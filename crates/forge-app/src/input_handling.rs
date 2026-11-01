@@ -1521,6 +1521,7 @@ impl Workspace {
         changed |= self.poll_install();
         changed |= self.poll_ext();
         changed |= self.poll_ext_detail();
+        changed |= self.poll_ext_icons();
         // A shell that exited closes its terminal.
         let before = self.terminals.len();
         self.terminals.retain_mut(|t| t.is_alive() || t.keep_when_dead);

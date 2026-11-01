@@ -24,6 +24,24 @@ pub(crate) enum ExtEvent {
     Installed(Result<String, String>),
 }
 
+/// Where downloaded extension icons are kept between runs.
+pub fn icons_dir() -> PathBuf {
+    config_dir().join("cache").join("ext-icons")
+}
+
+/// An installed extension's own icon (the `icon` of its manifest), if it is an image file inside its folder.
+fn local_icon(e: &Extension) -> Option<PathBuf> {
+    let rel = e.manifest_json.get("icon")?.as_str()?;
+    let path = e.root.join(rel);
+    let kind = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !matches!(kind.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") {
+        return None;
+    }
+    // An `icon` of "../../x" must not reach outside the extension.
+    let inside = path.canonicalize().ok()?.starts_with(e.root.canonicalize().ok()?);
+    (inside && path.is_file()).then_some(path)
+}
+
 pub fn extensions_dir() -> PathBuf {
     config_dir().join("extensions")
 }
@@ -354,6 +372,62 @@ impl Workspace {
         });
         self.ext_rx = Some(rx);
         self.set_status("Installing extension...");
+    }
+
+    /// Find icons for what the Extensions view shows, and pick up the ones that have been downloaded.
+    /// Installed extensions use the icon file they came with; Open VSX results get theirs from open-vsx.org,
+    /// once, on one background thread, and keep it in the cache folder.
+    pub fn poll_ext_icons(&mut self) -> bool {
+        let mut changed = false;
+        for e in &self.extensions {
+            let id = e.id();
+            if self.ext_icons.contains_key(&id) || !self.ext_icon_asked.insert(format!("local:{id}")) {
+                continue;
+            }
+            if let Some(path) = local_icon(e) {
+                self.ext_icons.insert(id, path);
+                changed = true;
+            }
+        }
+        let wanted: Vec<(String, String, PathBuf)> = self
+            .ext_panel
+            .results
+            .iter()
+            .filter(|l| !self.ext_icons.contains_key(&l.id()) && !self.ext_icon_asked.contains(&l.id()))
+            .filter_map(|l| Some((l.id(), l.icon_url.clone()?, icons_dir().join(l.icon_file_name()?))))
+            .collect();
+        for (id, url, dest) in wanted {
+            self.ext_icon_asked.insert(id.clone());
+            if dest.is_file() {
+                self.ext_icons.insert(id, dest);
+                changed = true;
+                continue;
+            }
+            if self.ext_icon_jobs.is_none() {
+                let (job_tx, job_rx) = mpsc::channel::<(String, String, PathBuf)>();
+                let (done_tx, done_rx) = mpsc::channel();
+                std::thread::spawn(move || {
+                    for (id, url, dest) in job_rx {
+                        let ok = openvsx::fetch_icon(&url, &dest).is_ok();
+                        let _ = done_tx.send((id, ok.then_some(dest)));
+                    }
+                });
+                self.ext_icon_jobs = Some(job_tx);
+                self.ext_icon_done = Some(done_rx);
+            }
+            if let Some(jobs) = &self.ext_icon_jobs {
+                let _ = jobs.send((id, url, dest));
+            }
+        }
+        if let Some(done) = &self.ext_icon_done {
+            while let Ok((id, path)) = done.try_recv() {
+                if let Some(path) = path {
+                    self.ext_icons.insert(id, path);
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     /// Pick up a finished search or install.
