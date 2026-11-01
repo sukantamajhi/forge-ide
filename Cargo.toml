@@ -13,6 +13,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 
+# xattr 0.2.3 (a GPUI dependency) needs libc::ENOATTR, which current libc no longer has on Linux, so a fresh
+# Linux build fails. vendor/xattr is that crate with the one-line fix (see vendor/xattr/FORGE-PATCH.md).
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
+
 [profile.release]
 opt-level = 3
 lto = "thin"
