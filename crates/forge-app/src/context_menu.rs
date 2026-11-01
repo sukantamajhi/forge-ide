@@ -347,6 +347,7 @@ impl Workspace {
             self.command_item("Write Commit Message with AI", Command::GitGenerateMessage, staged && !self.ai_pending),
             MenuEntry::Separator,
             self.command_item("Pull", Command::GitPull, true),
+            self.command_item("Pull from...", Command::GitPullFrom, true),
             self.command_item("Push", Command::GitPush, true),
             self.command_item("Sync Changes", Command::GitSync, true),
             self.command_item("Fetch", Command::GitFetch, true),

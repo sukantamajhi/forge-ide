@@ -547,6 +547,36 @@ pub fn pull(root: &Path) -> Result<String, String> {
     run(root, &["pull", "--no-edit"]).map(|out| out.lines().last().unwrap_or("Pulled").trim().to_owned())
 }
 
+/// The names of the configured remotes (`origin`, `upstream`...).
+pub fn remote_names(root: &Path) -> Result<Vec<String>, String> {
+    run(root, &["remote"]).map(|out| out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect())
+}
+
+/// Split a remote-tracking branch like `origin/feature/x` into `("origin", "feature/x")`, going by the
+/// configured remotes (the longest match wins, so a remote may itself contain a slash).
+pub fn split_remote_ref<'a>(remotes: &[String], full: &'a str) -> Option<(&'a str, &'a str)> {
+    remotes
+        .iter()
+        .filter_map(|r| full.strip_prefix(r.as_str()).and_then(|rest| rest.strip_prefix('/')).map(|branch| (&full[..r.len()], branch)))
+        .filter(|(_, branch)| !branch.is_empty())
+        .max_by_key(|(remote, _)| remote.len())
+}
+
+/// "Pull from...": merge a branch of a remote (`origin/feature`) into the current branch, like VS Code's
+/// `git.pullFrom`. Stops with conflicts to resolve, the way Merge does.
+pub fn pull_from(root: &Path, remote_branch: &str) -> Result<String, String> {
+    let remotes = remote_names(root)?;
+    let Some((remote, branch)) = split_remote_ref(&remotes, remote_branch) else {
+        return Err(format!("{remote_branch} is not a branch of a configured remote"));
+    };
+    // A name starting with '-' would be read as an option.
+    if branch.starts_with('-') {
+        return Err(format!("Invalid branch name {branch}"));
+    }
+    let result = run(root, &["pull", "--no-edit", "--no-rebase", remote, branch]);
+    stopped(root, result, format!("Pulled {remote}/{branch}"))
+}
+
 /// Pull what others pushed, then push what is local: "Sync Changes". Pulling is skipped for a
 /// branch with no upstream (nothing to pull yet), which makes this a first publish.
 pub fn sync(root: &Path) -> Result<String, String> {
@@ -1269,6 +1299,50 @@ hint: something
 
     fn by_path<'a>(s: &'a Status, p: &str) -> &'a Change {
         s.changes.iter().find(|c| c.path == p).unwrap_or_else(|| panic!("no {p} in {:?}", s.changes))
+    }
+
+    #[test]
+    fn remote_refs_split_on_the_longest_configured_remote() {
+        let remotes = vec!["origin".to_owned(), "origin/fork".to_owned()];
+        assert_eq!(split_remote_ref(&remotes, "origin/feature/x"), Some(("origin", "feature/x")));
+        assert_eq!(split_remote_ref(&remotes, "origin/fork/main"), Some(("origin/fork", "main")));
+        assert_eq!(split_remote_ref(&remotes, "origin/"), None);
+        assert_eq!(split_remote_ref(&remotes, "other/main"), None);
+        assert_eq!(split_remote_ref(&remotes, "originx/main"), None);
+    }
+
+    #[test]
+    fn pull_from_merges_another_remote_branch_into_the_current_one() {
+        let Some(origin) = repo("pullfrom-origin") else { return };
+        write(&origin, "a.txt", "a\n");
+        commit_all(&origin, "first");
+        git_ok(&origin, &["switch", "-q", "-c", "feature"]);
+        write(&origin, "feature.txt", "from feature\n");
+        commit_all(&origin, "feature work");
+        git_ok(&origin, &["switch", "-q", "main"]);
+
+        let clone = std::env::temp_dir().join(format!("forge-git-pullfrom-clone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&clone);
+        let out = Command::new("git").arg("clone").arg("-q").arg(&origin).arg(&clone).output().expect("git runs");
+        assert!(out.status.success(), "clone failed: {}", String::from_utf8_lossy(&out.stderr));
+        for (k, v) in [("user.name", "Forge Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false"), ("core.autocrlf", "false")] {
+            git_ok(&clone, &["config", k, v]);
+        }
+        // The clone is on main, which does not have feature.txt; diverge it so the pull must merge.
+        write(&clone, "local.txt", "local\n");
+        commit_all(&clone, "local work");
+        assert!(!clone.join("feature.txt").exists());
+
+        let message = pull_from(&clone, "origin/feature").expect("pulls");
+        assert_eq!(message, "Pulled origin/feature");
+        assert!(clone.join("feature.txt").exists(), "the other branch's file arrived");
+        assert!(clone.join("local.txt").exists(), "local work is kept");
+        assert_eq!(repo_state(&clone), RepoState::Clean);
+
+        assert!(pull_from(&clone, "nowhere/main").unwrap_err().contains("not a branch of a configured remote"));
+        assert!(pull_from(&clone, "origin/--upload-pack=evil").is_err());
+        let _ = std::fs::remove_dir_all(&origin);
+        let _ = std::fs::remove_dir_all(&clone);
     }
 
     #[test]

@@ -515,6 +515,8 @@ pub(crate) enum OverlayKind {
     GitCheckout,
     GitRebase,
     GitMerge,
+    /// Pick a branch of a remote to pull into the current branch ("Pull from...").
+    GitPullFrom,
     /// Pick the commit an interactive rebase starts after.
     GitRebaseFrom,
     GitCherryPick,
@@ -568,6 +570,8 @@ pub(crate) enum ItemAction {
     GitBranch(usize),
     GitRebaseOnto(usize),
     GitMergeBranch(usize),
+    /// Pull this remote branch (an index into the branch list) into the current branch.
+    GitPullFromBranch(usize),
     GitRebaseFrom(usize),
     GitCherryPickCommit(usize),
     GitRevertCommit(usize),

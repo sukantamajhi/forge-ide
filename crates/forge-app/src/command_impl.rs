@@ -318,7 +318,7 @@ impl Workspace {
 
             // ---- source control ----
             ShowGit | GitRefresh | GitInit | GitStageAll | GitUnstageAll | GitStageFile | GitUnstageFile | GitDiscardFile | GitDiscardAll | GitOpenChanges
-            | GitCommit | GitCommitAll | GitGenerateMessage | GitCheckout | GitCreateBranch | GitPull | GitPush | GitSync | GitFetch | GitStash | GitStashPop
+            | GitCommit | GitCommitAll | GitGenerateMessage | GitCheckout | GitCreateBranch | GitPull | GitPullFrom | GitPush | GitSync | GitFetch | GitStash | GitStashPop
             | GitFileHistory | GitLog | GitBlame | GitRebase | GitRebaseContinue | GitRebaseSkip | GitRebaseAbort | GitMerge | GitMergeContinue | GitMergeAbort
             | GitResolveConflicts | GitCancel | GitInteractiveRebase | GitCherryPick | GitCherryPickContinue | GitCherryPickSkip | GitCherryPickAbort | GitRevert
             | GitRevertContinue | GitRevertSkip | GitRevertAbort | GitSubmodules | GitSubmoduleUpdate | GitWorktrees | GitWorktreeAdd | GitWorktreeRemove | ShowGitGraph

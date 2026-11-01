@@ -851,6 +851,11 @@ impl Workspace {
             },
             GitCreateBranch => self.open_overlay(OverlayKind::GitCreateBranch, ""),
             GitPull => self.git_job("pull", git::pull),
+            GitPullFrom => {
+                self.branches.clear();
+                self.open_overlay(OverlayKind::GitPullFrom, "");
+                self.git_request_branches();
+            }
             GitPush => {
                 let (publish, branch, ahead) = self.git.as_ref().map_or((false, String::new(), 0), |g| (g.status.upstream.is_none(), g.status.branch.clone().unwrap_or_default(), g.status.ahead));
                 if publish {

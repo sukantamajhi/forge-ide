@@ -561,6 +561,7 @@ impl Workspace {
             OverlayKind::GitCheckout => "Select a branch to switch to",
             OverlayKind::GitRebase => "Select the branch to rebase the current branch onto",
             OverlayKind::GitMerge => "Select a branch to merge into the current branch",
+            OverlayKind::GitPullFrom => "Pick a branch to pull from",
             OverlayKind::GitRebaseFrom => "Select the commit to rebase after (the ones above it can be edited)",
             OverlayKind::GitCherryPick => "Select a commit from any branch to apply here",
             OverlayKind::GitRevert => "Select a commit to undo with a new commit",
@@ -933,6 +934,23 @@ impl Workspace {
                     })
                     .collect()
             }
+            OverlayKind::GitPullFrom => {
+                // Only branches of remotes: the ones another copy of the repository has (fetch to see new ones).
+                let remote: Vec<usize> = (0..self.branches.len()).filter(|i| self.branches[*i].remote).collect();
+                if self.branches.is_empty() {
+                    overlay.note = Some("Loading branches...".to_owned());
+                } else if remote.is_empty() {
+                    overlay.note = Some("Your repository has no remote branches to pull from. Add a remote and fetch first.".to_owned());
+                }
+                let names: Vec<&str> = remote.iter().map(|i| self.branches[*i].name.as_str()).collect();
+                rank(&text, &names, 60)
+                    .into_iter()
+                    .map(|(n, m)| {
+                        let i = remote[n];
+                        Item { label: self.branches[i].name.clone(), detail: "remote".to_owned(), positions: m.positions, action: ItemAction::GitPullFromBranch(i) }
+                    })
+                    .collect()
+            }
             OverlayKind::GitCredential(prompt) => {
                 overlay.note = Some(format!("{}  Sent only to git for the running command. Enter to confirm, Escape to cancel it.", prompt.trim()));
                 Vec::new()
@@ -1197,6 +1215,11 @@ impl Workspace {
             ItemAction::GitRebaseOnto(i) => {
                 if let Some(name) = self.branches.get(i).map(|b| b.name.clone()) {
                     self.git_job("rebase", move |r| git::rebase(r, &name));
+                }
+            }
+            ItemAction::GitPullFromBranch(i) => {
+                if let Some(name) = self.branches.get(i).map(|b| b.name.clone()) {
+                    self.git_job("pull", move |r| git::pull_from(r, &name));
                 }
             }
             ItemAction::GitMergeBranch(i) => {

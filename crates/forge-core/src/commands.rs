@@ -213,6 +213,7 @@ commands! {
     GitCheckout, "git.checkout", "Git: Checkout to...", [];
     GitCreateBranch, "git.branch", "Git: Create Branch...", [];
     GitPull, "git.pull", "Git: Pull", [];
+    GitPullFrom, "git.pullFrom", "Git: Pull from...", [];
     GitPush, "git.push", "Git: Push", [];
     GitSync, "git.sync", "Git: Sync Changes (Pull, then Push)", [];
     GitFetch, "git.fetch", "Git: Fetch", [];

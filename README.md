@@ -76,6 +76,10 @@ Not done for Linux: the OpenAI / Gemini key cannot be saved yet (it is encrypted
     conflicts) the Source Control view shows a banner ("Rebase in progress (2/5)", "Merge in progress", "Cherry-pick in
     progress", "Revert in progress") with **Continue**, **Skip** and **Abort** (`Git: Continue Rebase`, `Git: Skip This Commit
     in the Rebase`, `Git: Abort Rebase`, `Git: Commit the Merge`, `Git: Abort Merge`, and the same for cherry-pick and revert).
+  - **Pull from another branch.** `Git: Pull from...` (also in the Source Control "more actions" menu, next to Pull) lists
+    the branches of your remotes, like VS Code's *Pull from...*. Picking `origin/feature` merges that branch into the
+    current one (`git pull --no-rebase origin feature`). Run `Git: Fetch` first to see branches others just pushed. If the
+    merge stops for conflicts it shows the same "Merge in progress" banner as `Git: Merge Branch...`.
   - **Interactive rebase.** `Git: Interactive Rebase...` asks for the commit to rebase after, then opens a page listing the
     commits above it, oldest first. Each can be **pick**ed, **reword**ed (type the new message in its row), **squash**ed or
     **fixup**ed into the commit above, or **drop**ped, and moved with the arrows. **Start Rebase** gives git the list through
