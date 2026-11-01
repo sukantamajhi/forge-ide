@@ -376,7 +376,7 @@ impl Workspace {
             .children(more)
             .child(self.title_centre(&lay, cx))
             .child(self.title_tools(&lay, cx))
-            .child(self.window_buttons(window))
+            .child(self.window_buttons(window, cx))
     }
 
     /// A square icon button for the title bar. It takes the pointer itself, so the drag area under it does not.
@@ -461,7 +461,23 @@ impl Workspace {
             .h_full()
             .min_w_0()
             .overflow_hidden()
-            .child(div().window_control_area(WindowControlArea::Drag).absolute().top_0().left_0().size_full())
+            .child(
+                div()
+                    .window_control_area(WindowControlArea::Drag)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .when(!cfg!(windows), |d| {
+                        d.on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
+                            if e.click_count >= 2 {
+                                window.titlebar_double_click();
+                            } else {
+                                window.start_window_move();
+                            }
+                        })
+                    }),
+            )
             .children(group)
     }
 
@@ -483,10 +499,41 @@ impl Workspace {
             .children(lay.gear.then(|| self.title_button("tool-settings", crate::codicons::SETTINGS_GEAR, t.dim, "Settings", Command::OpenSettings, cx)))
     }
 
-    /// Minimise, maximise (or restore) and close. Windows handles the clicks itself from the control areas.
-    fn window_buttons(&self, window: &Window) -> impl IntoElement {
+    /// Minimise, maximise (or restore) and close. Windows handles the clicks itself from the control areas;
+    /// elsewhere the control areas do nothing, so the buttons draw Codicons and act on click.
+    fn window_buttons(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
         let maximized = window.is_maximized();
+        if !cfg!(windows) {
+            let button = |id: &'static str, icon: char, hover: u32, hover_text: u32, on_click: fn(&mut Window)| {
+                div()
+                    .id(id)
+                    .occlude()
+                    .w(px(46.0))
+                    .h_full()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_color(rgb(t.text))
+                    .hover(move |s| s.bg(rgb(hover)).text_color(rgb(hover_text)))
+                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        on_click(window);
+                        cx.notify();
+                    }))
+                    .child(crate::icons::glyph(icon, 0.75, t.text))
+            };
+            return div()
+                .flex()
+                .flex_row()
+                .flex_none()
+                .h_full()
+                .child(button("win-min", crate::codicons::CHROME_MINIMIZE, t.border, t.text, |w| w.minimize_window()))
+                .child(button("win-max", if maximized { crate::codicons::CHROME_RESTORE } else { crate::codicons::CHROME_MAXIMIZE }, t.border, t.text, |w| w.zoom_window()))
+                .child(button("win-close", crate::codicons::CHROME_CLOSE, 0xE81123, 0xFFFFFF, |w| w.remove_window()));
+        }
         let button = |area: WindowControlArea, glyph: char, hover: u32, hover_text: u32| {
             div()
                 .window_control_area(area)

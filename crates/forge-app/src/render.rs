@@ -117,8 +117,12 @@ impl Workspace {
                 let first = std::iter::once(wanted).filter(|w| !w.is_empty()).chain(fallbacks.iter().copied()).find(|n| have(n));
                 SharedString::from(first.unwrap_or(keep).to_owned())
             };
-            self.code_font = pick(&self.settings.font_family, &["Cascadia Mono", "Cascadia Code", "Consolas"], FONT);
-            self.ui_font = pick(&self.settings.ui_font_family, &["Segoe UI Variable Text", "Segoe UI", "Arial"], "Segoe UI");
+            // Windows fonts first, then the usual Linux/macOS ones: a family that is not installed would be
+            // replaced by whatever the system picks, with other metrics, which breaks alignment and spacing.
+            const CODE: &[&str] = &["Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono", "Menlo", "Courier New"];
+            const UI: &[&str] = &["Segoe UI Variable Text", "Segoe UI", "Inter", "Noto Sans", "Ubuntu", "Cantarell", "DejaVu Sans", "Liberation Sans", "Helvetica Neue", "Arial"];
+            self.code_font = pick(&self.settings.font_family, CODE, FONT);
+            self.ui_font = pick(&self.settings.ui_font_family, UI, "Segoe UI");
             let id = system.resolve_font(&font(self.code_font.clone()));
             if let Ok(size) = system.advance(id, px(self.settings.font_size), 'm') {
                 self.char_width = size.width;
