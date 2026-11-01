@@ -29,6 +29,7 @@ install -m 644 "$here/forge-logo.svg" "$icons/forge.svg"
 install -m 644 "$here/forge.desktop" "$apps/forge.desktop"
 # Point the launcher at the installed copy, so it works even if ~/.local/bin is not on the PATH.
 sed -i "s|^Exec=forge|Exec=$bin/forge|" "$apps/forge.desktop"
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f "${HOME}/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1 || true
 
 echo "Forge installed to $bin/forge."
