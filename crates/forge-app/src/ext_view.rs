@@ -39,10 +39,12 @@ impl Workspace {
     }
 
     /// The square with an extension's first letter, standing in for its icon.
-    fn ext_tile(&self, name: &str) -> gpui::Div {
+    /// The square with an extension's icon, or its first letter until the icon is there (or if it has none).
+    fn ext_tile(&self, name: &str, icon: Option<&PathBuf>) -> gpui::Div {
         let t = &self.theme;
         let letter = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "?".to_owned());
         div()
+            .overflow_hidden()
             .flex_none()
             .w(rems(2.5))
             .h(rems(2.5))
@@ -54,7 +56,10 @@ impl Workspace {
             .text_color(rgb(t.info))
             .text_size(rems(1.25))
             .font_weight(FontWeight::BOLD)
-            .child(letter)
+            .map(|tile| match icon {
+                Some(path) => tile.child(gpui::img(path.clone()).size_full().object_fit(gpui::ObjectFit::Contain)),
+                None => tile.child(letter),
+            })
     }
 
     fn ext_heading(&self, text: String) -> AnyElement {
@@ -111,7 +116,7 @@ impl Workspace {
                     .py_1()
                     .items_center()
                     .hover(|s| s.bg(rgb(t.tab_active)))
-                    .child(self.ext_tile(&name))
+                    .child(self.ext_tile(&name, self.ext_icons.get(&e.id())))
                     .child(
                         div()
                             .flex()
@@ -225,7 +230,7 @@ impl Workspace {
             .px_3()
             .py_1()
             .hover(|s| s.bg(rgb(t.tab_active)))
-            .child(self.ext_tile(&listing.display_name))
+            .child(self.ext_tile(&listing.display_name, self.ext_icons.get(&listing.id())))
             .child(
                 div()
                     .flex()
@@ -509,7 +514,7 @@ impl Workspace {
                     .flex()
                     .flex_row()
                     .gap_4()
-                    .child(self.ext_tile(&d.name).w(rems(5.0)).h(rems(5.0)).text_size(rems(2.5)))
+                    .child(self.ext_tile(&d.name, self.ext_icons.get(&d.id)).w(rems(5.0)).h(rems(5.0)).text_size(rems(2.5)))
                     .child(
                         div()
                             .flex()

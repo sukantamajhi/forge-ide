@@ -23,11 +23,22 @@ pub struct Listing {
     pub downloads: u64,
     pub download_url: String,
     pub sha256_url: Option<String>,
+    /// The extension's icon on open-vsx.org, when it has one.
+    pub icon_url: Option<String>,
 }
 
 impl Listing {
     pub fn id(&self) -> String {
         format!("{}.{}", self.namespace, self.name)
+    }
+
+    /// The file name its icon is cached under: id and version (so an update fetches the new icon), with the
+    /// image type taken from the URL. None when the extension has no icon.
+    pub fn icon_file_name(&self) -> Option<String> {
+        let url = self.icon_url.as_deref()?;
+        let kind = url.rsplit('.').next().filter(|k| matches!(*k, "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")).unwrap_or("png");
+        let stem: String = format!("{}-{}", self.id(), self.version).chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+        Some(format!("{stem}.{kind}"))
     }
 }
 
@@ -89,6 +100,7 @@ fn parse_listing(item: &Value) -> Option<Listing> {
     if !is_trusted_url(&download_url) {
         return None;
     }
+    let icon_url = files.get("icon").and_then(Value::as_str).filter(|u| is_trusted_url(u)).map(str::to_owned);
     let sha256_url = files.get("sha256").and_then(Value::as_str).filter(|u| is_trusted_url(u)).map(str::to_owned);
     let name = text("name")?;
     Some(Listing {
@@ -100,7 +112,38 @@ fn parse_listing(item: &Value) -> Option<Listing> {
         downloads: item.get("downloadCount").and_then(Value::as_u64).unwrap_or(0),
         download_url,
         sha256_url,
+        icon_url,
     })
+}
+
+/// Whether `bytes` start like an image a picture widget can show (PNG, JPEG, GIF, WebP or SVG).
+pub fn looks_like_image(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+        || bytes.starts_with(b"GIF8")
+        || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
+        || String::from_utf8_lossy(&bytes[..bytes.len().min(1024)]).contains("<svg")
+}
+
+/// Download an extension's icon from open-vsx.org to `destination`. Only the Open VSX host is contacted, the
+/// size is capped, and a reply that is not an image is thrown away. Blocks; run on a background thread.
+pub fn fetch_icon(url: &str, destination: &Path) -> Result<(), String> {
+    if !is_trusted_url(url) {
+        return Err("refusing to download an icon from outside open-vsx.org".to_owned());
+    }
+    let mut command = Command::new("curl");
+    command.args(["-sS", "-L", "-f", "-m", "30", "--max-filesize", "2000000", "--proto", "=https", "--proto-redir", "=https", "-A", "forge-editor"]).arg(url);
+    let bytes = run(command)?;
+    if !looks_like_image(&bytes) {
+        return Err("the icon is not an image".to_owned());
+    }
+    if let Some(dir) = destination.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    // Written beside the target and renamed, so a half-written file is never shown.
+    let part = destination.with_extension("part");
+    std::fs::write(&part, &bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&part, destination).map_err(|e| e.to_string())
 }
 
 pub fn search(query: &str, limit: usize) -> Result<Vec<Listing>, String> {
@@ -264,5 +307,37 @@ mod tests {
         assert_eq!(parse_digest(&format!("{}  file.vsix\n", known.to_uppercase())).as_deref(), Some(known.as_str()));
         assert_eq!(parse_digest("not a digest"), None);
         assert_eq!(percent_encode("dark theme+c#"), "dark%20theme%2Bc%23");
+    }
+
+    #[test]
+    fn icons_are_kept_only_from_open_vsx_and_named_per_version() {
+        let json = r#"{ "extensions": [
+            { "name": "mat", "namespace": "PKief", "version": "5.40.0",
+              "files": { "download": "https://open-vsx.org/api/PKief/mat/5.40.0/file/d.vsix", "icon": "https://open-vsx.org/api/PKief/mat/5.40.0/file/icon.png" } },
+            { "name": "bad", "namespace": "x", "version": "1",
+              "files": { "download": "https://open-vsx.org/api/x/bad/file/d.vsix", "icon": "https://evil.example/icon.png" } },
+            { "name": "none", "namespace": "x", "version": "1", "files": { "download": "https://open-vsx.org/api/x/none/file/d.vsix" } }
+        ] }"#;
+        let listings = parse_listings(json).unwrap();
+        assert_eq!(listings[0].icon_url.as_deref(), Some("https://open-vsx.org/api/PKief/mat/5.40.0/file/icon.png"));
+        assert_eq!(listings[0].icon_file_name().as_deref(), Some("PKief.mat-5.40.0.png"));
+        assert_eq!(listings[1].icon_url, None, "an icon on another host is dropped");
+        assert_eq!(listings[2].icon_file_name(), None);
+        let svg = Listing { icon_url: Some("https://open-vsx.org/api/a/b/1/file/logo.svg".into()), ..listings[0].clone() };
+        assert_eq!(svg.icon_file_name().as_deref(), Some("PKief.mat-5.40.0.svg"));
+        let odd = Listing { icon_url: Some("https://open-vsx.org/api/a/b/1/file/icon".into()), namespace: "a/../b".into(), ..listings[0].clone() };
+        assert_eq!(odd.icon_file_name().as_deref(), Some("a_.._b.mat-5.40.0.png"), "no path separators in the cache name");
+    }
+
+    #[test]
+    fn only_real_images_are_accepted_as_icons() {
+        assert!(looks_like_image(b"\x89PNG\r\n\x1a\n\0\0"));
+        assert!(looks_like_image(&[0xFF, 0xD8, 0xFF, 0xE0]));
+        assert!(looks_like_image(b"GIF89a.."));
+        assert!(looks_like_image(b"RIFF\x10\0\0\0WEBPVP8 "));
+        assert!(looks_like_image(b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
+        assert!(!looks_like_image(b"<html><body>Not found</body></html>"));
+        assert!(!looks_like_image(b""));
+        assert!(fetch_icon("https://evil.example/icon.png", Path::new("/nonexistent/x.png")).is_err());
     }
 }

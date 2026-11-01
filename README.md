@@ -250,7 +250,7 @@ highlighting covers Rust, JSON, JavaScript, Python and TOML.
 ## Installer
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File installer\build.ps1     # writes dist\Forge-Setup-0.1.0.exe
+powershell -ExecutionPolicy Bypass -File installer\build.ps1     # writes dist\Forge-Setup-0.2.0.exe
 ```
 
 Needs [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The setup installs for the
@@ -348,7 +348,7 @@ Forge installs VS Code extensions from **Open VSX** (open-vsx.org, the registry 
 Microsoft's products) or from a `.vsix` file. It uses what they *declare* (themes, grammars, snippets, languages)
 and, if Node.js is on `PATH`, **runs their code** in an extension host: a separate Node process with Forge's own
 implementation of the `vscode` API. Running extension code is new and only a part of that API exists (see below);
-an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". The **Extensions** tab beside Source Control (Ctrl+Shift+X) searches Open VSX as you press Enter, lists what is installed, and has Install and Uninstall buttons. Clicking an extension opens its page in an editor tab (README, license, links, Install or Uninstall); close it like any tab (the x, or Ctrl+W). Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
+an extension that needs more installs and activates but the missing parts throw "not supported by Forge yet". The **Extensions** tab beside Source Control (Ctrl+Shift+X) searches Open VSX as you press Enter, lists what is installed, and has Install and Uninstall buttons. Extension icons come from open-vsx.org (downloaded once, in the background, into `cache/ext-icons` in the config folder; installed extensions use the icon file they shipped with), with the first letter shown until an icon is there. Clicking an extension opens its page in an editor tab (README, license, links, Install or Uninstall); close it like any tab (the x, or Ctrl+W). Commands (Ctrl+Shift+P): **Extensions: Install from Open VSX...** (search text or an exact `publisher.name`),
 **Extensions: Install from VSIX...** (a file path), **Extensions: Manage Installed...** (Enter uninstalls),
 **Preferences: Color Theme**, **Insert Snippet...**. Extensions live in `%APPDATA%\Forge\extensions`
 (`FORGE_CONFIG_DIR` moves everything, which is how the tests stay out of your real settings).

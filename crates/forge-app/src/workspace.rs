@@ -1011,6 +1011,13 @@ pub(crate) struct Workspace {
     pub ext_installing: Option<String>,
     /// Background fetches of the README and facts for extension pages that are open.
     pub ext_detail_rx: Vec<Receiver<(String, Result<forge_ext_host::openvsx::Details, String>)>>,
+    /// Extension icons by extension id: the image file, once there is one.
+    pub ext_icons: HashMap<String, PathBuf>,
+    /// Icons already asked for (or that failed), so none is fetched twice.
+    pub ext_icon_asked: HashSet<String>,
+    /// The one background thread that downloads icons from Open VSX, and what it has finished.
+    pub ext_icon_jobs: Option<Sender<(String, String, PathBuf)>>,
+    pub ext_icon_done: Option<Receiver<(String, Option<PathBuf>)>>,
     /// Questions git asked while a command ran, and the one on screen now.
     pub askpass_rx: Option<Receiver<forge_core::askpass::Request>>,
     pub askpass_pending: Option<std::sync::mpsc::Sender<Option<String>>>,
@@ -1235,6 +1242,10 @@ impl Workspace {
             ext_panel: ExtPanel { query: LineInput::default(), results: Vec::new(), searched: false, waiting: false, error: None, shown_query: String::new() },
             ext_installing: None,
             ext_detail_rx: Vec::new(),
+            ext_icons: HashMap::new(),
+            ext_icon_asked: HashSet::new(),
+            ext_icon_jobs: None,
+            ext_icon_done: None,
             askpass_rx: None,
             askpass_pending: None,
             diff_scroll: UniformListScrollHandle::new(),
