@@ -9,12 +9,14 @@ bin="${HOME}/.local/bin"
 apps="${HOME}/.local/share/applications"
 icons="${HOME}/.local/share/icons/hicolor/scalable/apps"
 fish_conf="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/forge.fish"
+# Every startup file a shell may read: each one that exists gets the PATH line.
+rcfiles="$HOME/.bashrc $HOME/.bash_profile $HOME/.zshrc $HOME/.zprofile $HOME/.profile"
 begin="# >>> forge >>>"
 end="# <<< forge <<<"
 
 if [ "${1:-}" = "--uninstall" ]; then
   rm -f "$bin/forge" "$apps/forge.desktop" "$icons/forge.svg" "$fish_conf"
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+  for rc in $rcfiles; do
     [ -f "$rc" ] && grep -qF "$begin" "$rc" && sed -i "/^$begin\$/,/^$end\$/d" "$rc"
   done
   echo "Forge removed. Your settings in ~/.config/forge (or \$XDG_CONFIG_HOME/forge) were left alone."
@@ -36,7 +38,7 @@ case ":$PATH:" in
     # Add it to the PATH of future shells (once: the marked block is skipped if it is already there).
     added=""
     have=""
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    for rc in $rcfiles; do
       [ -f "$rc" ] || continue
       have=1
       if ! grep -qF "$begin" "$rc"; then
@@ -44,12 +46,10 @@ case ":$PATH:" in
         added="$added $rc"
       fi
     done
-    # Login shells and other POSIX shells read ~/.profile; create it when there is nothing else to extend.
-    if [ -f "$HOME/.profile" ] || [ -z "$have" ]; then
-      if ! grep -qsF "$begin" "$HOME/.profile"; then
-        printf '\n%s\nexport PATH="$HOME/.local/bin:$PATH"\n%s\n' "$begin" "$end" >> "$HOME/.profile"
-        added="$added $HOME/.profile"
-      fi
+    # With none of them present, create ~/.profile so at least login shells pick it up.
+    if [ -z "$have" ]; then
+      printf '\n%s\nexport PATH="$HOME/.local/bin:$PATH"\n%s\n' "$begin" "$end" >> "$HOME/.profile"
+      added="$added $HOME/.profile"
     fi
     if [ -d "$(dirname "$fish_conf")" ] || command -v fish >/dev/null 2>&1; then
       mkdir -p "$(dirname "$fish_conf")"
