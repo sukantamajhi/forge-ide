@@ -67,8 +67,8 @@
          load; it is effectively non-blocking because the file is already in cache
          when the parser reaches it. The rel swap to avoid render-blocking is handled
          in main.js (no inline handlers needed, keeping CSP: script-src 'self' happy). -->
-    <link rel="preload" href="css/style.css" as="style" id="css-preload">
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="preload" href="css/style.css?v=3" as="style" id="css-preload">
+    <link rel="stylesheet" href="css/style.css?v=3">
 </head>
 
 <body>
@@ -441,9 +441,6 @@
                                 href="https://github.com/sukantamajhi/forge-ide/releases/download/v0.1.0/Forge-Setup-0.1.0.exe"
                                 rel="noopener">Download for Windows</a>
                             <p class="small">Forge-Setup-0.1.0. Uninstall from Settings, Apps.</p>
-                            <p><strong>Linux</strong>: run this in a terminal. It picks the right files for your
-                                distribution and adds <code>forge</code> to your <code>PATH</code>.</p>
-                            <code class="install-cmd">curl -fsSL __SITE_URL__/install.sh | sh</code>
                         </div>
                         <div class="way">
                             <h3>Read the source</h3>
@@ -466,6 +463,14 @@
                                 <p id="waitlist-status" class="small" role="status" aria-live="polite"></p>
                             </form>
                         </div>
+                    </div>
+                    <div class="linux-install">
+                        <div>
+                            <h3>Linux</h3>
+                            <p>Run this in a terminal. It picks the right files for your distribution and puts
+                                <code>forge</code> on your <code>PATH</code>.</p>
+                        </div>
+                        <code class="install-cmd">curl -fsSL __SITE_URL__/install.sh | sh</code>
                     </div>
                 </div>
             </div>
