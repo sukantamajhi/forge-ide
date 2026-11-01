@@ -128,6 +128,9 @@ fn main() {
             // Always start maximized; the size below is what the window restores to.
             window_bounds: Some(WindowBounds::Maximized(bounds)),
             titlebar: Some(TitlebarOptions { title: Some("Forge".into()), appears_transparent: true, ..Default::default() }),
+            // On Linux the dock and taskbar find the icon by this name: it must match forge.desktop (its file name
+            // and StartupWMClass) or the window gets a generic icon.
+            app_id: Some("forge".into()),
             ..Default::default()
         };
         cx.open_window(options, move |window, cx| {

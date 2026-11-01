@@ -114,8 +114,9 @@ endif
 	cp installer/linux/forge.desktop installer/linux/install.sh assets/forge-logo.svg README.md "$(LINUX_STAGE)/"
 	chmod +x "$(LINUX_STAGE)/forge" "$(LINUX_STAGE)/install.sh"
 	tar -C dist -czf "dist/$(LINUX_NAME).tar.gz" "$(LINUX_NAME)"
+	cd dist && sha256sum "$(LINUX_NAME).tar.gz" > "$(LINUX_NAME).tar.gz.sha256"
 	rm -rf "$(LINUX_STAGE)"
-	@echo "Built dist/$(LINUX_NAME).tar.gz"
+	@echo "Built dist/$(LINUX_NAME).tar.gz (and .sha256: upload both to the release; site/install.sh checks it)"
 
 package-all: package-windows package-linux ## Windows installer and Linux archive (Windows with WSL2)
 

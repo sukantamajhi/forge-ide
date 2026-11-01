@@ -401,8 +401,8 @@
                 <h2 class="section-title">Early, and honest about it.</h2>
                 <dl class="facts">
                     <div>
-                        <dt>Windows only</dt>
-                        <dd>There is no macOS or Linux build yet.</dd>
+                        <dt>Windows and Linux</dt>
+                        <dd>There is no macOS build yet. Linux installs with the script above.</dd>
                     </div>
                     <div>
                         <dt>Unsigned installer</dt>
@@ -441,6 +441,9 @@
                                 href="https://github.com/sukantamajhi/forge-ide/releases/download/v0.1.0/Forge-Setup-0.1.0.exe"
                                 rel="noopener">Download for Windows</a>
                             <p class="small">Forge-Setup-0.1.0. Uninstall from Settings, Apps.</p>
+                            <p><strong>Linux</strong>: run this in a terminal. It picks the right files for your
+                                distribution and adds <code>forge</code> to your <code>PATH</code>.</p>
+                            <code class="install-cmd">curl -fsSL __SITE_URL__/install.sh | sh</code>
                         </div>
                         <div class="way">
                             <h3>Read the source</h3>

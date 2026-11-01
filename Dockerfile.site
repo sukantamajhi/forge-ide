@@ -17,7 +17,7 @@ ENV PORT=8080 \
 COPY site/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY site/security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY --chown=nginx:nginx --chmod=755 site/site-url.sh /docker-entrypoint.d/40-site-url.sh
-COPY --chown=nginx:nginx site/index.html site/robots.txt site/sitemap.xml site/404.html /usr/share/nginx/html/
+COPY --chown=nginx:nginx site/index.html site/install.sh site/robots.txt site/sitemap.xml site/404.html /usr/share/nginx/html/
 COPY site/css /usr/share/nginx/html/css
 COPY site/js /usr/share/nginx/html/js
 COPY site/assets /usr/share/nginx/html/assets
