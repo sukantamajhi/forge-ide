@@ -45,6 +45,12 @@ pub(crate) enum MenuAction {
     Tab { op: TabOp, g: usize, vi: usize },
     /// A choice from the right-click menu of a text box.
     Input(InputOp, InputTarget),
+    /// The model the Claude chat asks for (a `--model` value; empty for Claude Code's own choice).
+    ClaudeModel(String),
+    /// How hard Claude thinks (an `--effort` value; empty for Claude Code's own choice).
+    ClaudeEffort(String),
+    /// Show or hide Claude's thinking in the chat.
+    ClaudeShowThinking,
 }
 
 /// What a text box's right-click menu can do, as in any native text field.
@@ -845,6 +851,9 @@ impl Workspace {
             }
             MenuAction::Tab { op, g, vi } => self.tab_op(op, g, vi, cx),
             MenuAction::Input(op, target) => self.input_op(op, target, cx),
+            MenuAction::ClaudeModel(value) => self.claude_set_model(&value),
+            MenuAction::ClaudeEffort(value) => self.claude_set_effort(&value),
+            MenuAction::ClaudeShowThinking => self.claude_toggle_thinking(),
             MenuAction::RevealEntry => {
                 if let Some((path, _)) = target {
                     match reveal_in_file_manager(&path) {

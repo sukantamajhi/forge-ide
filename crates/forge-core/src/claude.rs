@@ -57,6 +57,28 @@ impl PermissionMode {
     }
 }
 
+/// The models offered in the chat: the value of `--model` (an alias for the latest model of that kind) and its name.
+/// An empty value leaves the choice to Claude Code.
+pub const MODELS: &[(&str, &str)] = &[("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")];
+
+/// How hard Claude thinks, the values of `--effort`: more effort is slower and costs more. Empty is Claude Code's own choice.
+pub const EFFORTS: &[(&str, &str)] = &[("", "Default"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"), ("max", "Max")];
+
+/// The name to show for a `--model` value: the alias's name, or the value itself for a full model name.
+pub fn model_label(value: &str) -> String {
+    MODELS.iter().find(|(v, _)| v.eq_ignore_ascii_case(value.trim())).map_or_else(|| value.trim().to_owned(), |(_, l)| (*l).to_owned())
+}
+
+/// The name to show for an `--effort` value.
+pub fn effort_label(value: &str) -> String {
+    EFFORTS.iter().find(|(v, _)| v.eq_ignore_ascii_case(value.trim())).map_or_else(|| value.trim().to_owned(), |(_, l)| (*l).to_owned())
+}
+
+/// Whether `value` is one of the effort levels `--effort` takes (or empty).
+pub fn is_effort(value: &str) -> bool {
+    EFFORTS.iter().any(|(v, _)| v.eq_ignore_ascii_case(value.trim()))
+}
+
 // ---- events ----
 
 /// One thing the program reported.
@@ -68,6 +90,10 @@ pub enum Event {
     TextDelta(String),
     /// A whole block of the answer, once it is complete.
     Text(String),
+    /// A piece of Claude's thinking, as it is written (a summary: see [`Options::show_thinking`]).
+    ThinkingDelta(String),
+    /// A whole block of thinking, once it is complete.
+    Thinking(String),
     /// Claude is using a tool.
     ToolUse { id: String, name: String, input: Value },
     /// What the tool returned.
@@ -148,6 +174,12 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                     return vec![Event::TextDelta(text.to_owned())];
                 }
             }
+            // Without a summary requested the thinking arrives empty, with only a signature: nothing to show.
+            if event["type"] == "content_block_delta" && delta["type"] == "thinking_delta" {
+                if let Some(text) = delta["thinking"].as_str().filter(|t| !t.is_empty()) {
+                    return vec![Event::ThinkingDelta(text.to_owned())];
+                }
+            }
             Vec::new()
         }
         Some("assistant") => {
@@ -156,6 +188,7 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                 .iter()
                 .filter_map(|b| match b["type"].as_str()? {
                     "text" => Some(Event::Text(str_of(b, "text"))),
+                    "thinking" if !str_of(b, "thinking").is_empty() => Some(Event::Thinking(str_of(b, "thinking"))),
                     "tool_use" => Some(Event::ToolUse { id: str_of(b, "id"), name: str_of(b, "name"), input: b["input"].clone() }),
                     _ => None,
                 })
@@ -219,7 +252,7 @@ pub fn parse_transcript_line(line: &str) -> Vec<Event> {
         };
     }
     // A saved turn has no partial text; only the finished blocks.
-    parse_line(line).into_iter().filter(|e| matches!(e, Event::Text(_) | Event::ToolUse { .. } | Event::ToolResult { .. })).collect()
+    parse_line(line).into_iter().filter(|e| matches!(e, Event::Text(_) | Event::Thinking(_) | Event::ToolUse { .. } | Event::ToolResult { .. })).collect()
 }
 
 /// A tool result is a string, or a list of `{type: text, text}` blocks.
@@ -239,6 +272,8 @@ pub enum Entry {
     User(String),
     /// Claude's words. `streaming` while they are still being written.
     Assistant { text: String, streaming: bool },
+    /// Claude's thinking, as a summary. `streaming` while it is still being written.
+    Thinking { text: String, streaming: bool },
     /// A tool Claude used: what it did in a few words, the file it touched, and what came back.
     Tool { id: String, name: String, summary: String, path: Option<String>, input: Value, result: Option<String>, failed: bool },
     /// Something the editor says (a refusal, an error).
@@ -274,6 +309,12 @@ impl Conversation {
 
     /// Fold one event into the chat.
     pub fn apply(&mut self, event: Event) {
+        // Anything but more thinking means the thinking that was being streamed is complete.
+        if !matches!(event, Event::ThinkingDelta(_) | Event::Thinking(_)) {
+            if let Some(Entry::Thinking { streaming, .. }) = self.entries.last_mut() {
+                *streaming = false;
+            }
+        }
         match event {
             Event::Init { session_id, model } => {
                 if !session_id.is_empty() {
@@ -283,6 +324,19 @@ impl Conversation {
                     self.model = Some(model);
                 }
             }
+            Event::ThinkingDelta(piece) => match self.entries.last_mut() {
+                Some(Entry::Thinking { text, streaming: true }) => text.push_str(&piece),
+                _ => self.entries.push(Entry::Thinking { text: piece, streaming: true }),
+            },
+            Event::Thinking(full) => match self.entries.last_mut() {
+                // The finished block replaces what was streamed of it.
+                Some(Entry::Thinking { text, streaming }) if *streaming => {
+                    *text = full;
+                    *streaming = false;
+                }
+                _ if full.trim().is_empty() => {}
+                _ => self.entries.push(Entry::Thinking { text: full, streaming: false }),
+            },
             Event::TextDelta(piece) => match self.entries.last_mut() {
                 Some(Entry::Assistant { text, streaming: true }) => text.push_str(&piece),
                 _ => self.entries.push(Entry::Assistant { text: piece, streaming: true }),
@@ -398,6 +452,10 @@ pub struct Options {
     pub cwd: PathBuf,
     pub mode: PermissionMode,
     pub model: String,
+    /// How hard Claude thinks (`low` .. `max`); empty is the program's own choice.
+    pub effort: String,
+    /// Ask for summaries of the thinking, so there is something to show. (Without it the text of the thinking is left out.)
+    pub show_thinking: bool,
     /// The session to continue, when the chat has already begun.
     pub resume: Option<String>,
 }
@@ -410,6 +468,12 @@ pub fn build_args(opts: &Options) -> Vec<String> {
         .to_vec();
     if !opts.model.trim().is_empty() {
         args.extend(["--model".to_owned(), opts.model.trim().to_owned()]);
+    }
+    if opts.show_thinking {
+        args.extend(["--thinking-display".to_owned(), "summarized".to_owned()]);
+    }
+    if !opts.effort.trim().is_empty() {
+        args.extend(["--effort".to_owned(), opts.effort.trim().to_owned()]);
     }
     if let Some(id) = opts.resume.as_ref().filter(|s| !s.is_empty()) {
         args.extend(["--resume".to_owned(), id.clone()]);
@@ -856,15 +920,53 @@ mod tests {
 
     #[test]
     fn arguments_continue_the_session_and_set_the_mode() {
-        let mut o = Options { binary: "claude".into(), cwd: ".".into(), mode: PermissionMode::AcceptEdits, model: String::new(), resume: None };
+        let mut o = Options { binary: "claude".into(), cwd: ".".into(), mode: PermissionMode::AcceptEdits, model: String::new(), effort: String::new(), show_thinking: false, resume: None };
         let a = build_args(&o);
         assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]) && a.windows(2).any(|w| w == ["--input-format", "stream-json"]));
         assert!(a.contains(&"--include-partial-messages".to_owned()) && !a.contains(&"--resume".to_owned()) && !a.contains(&"--model".to_owned()));
         o.resume = Some("abc".into());
         o.model = " sonnet ".into();
+        o.effort = "high".into();
+        o.show_thinking = true;
         let a = build_args(&o);
-        assert!(a.windows(2).any(|w| w == ["--resume", "abc"]) && a.windows(2).any(|w| w == ["--model", "sonnet"]));
+        assert!(a.windows(2).any(|w| w == ["--thinking-display", "summarized"]));
+        o.show_thinking = false;
+        let a = build_args(&o);
+        assert!(!a.contains(&"--thinking-display".to_owned()));
+        assert!(a.windows(2).any(|w| w == ["--resume", "abc"]) && a.windows(2).any(|w| w == ["--model", "sonnet"]) && a.windows(2).any(|w| w == ["--effort", "high"]));
+    }
+
+    #[test]
+    fn thinking_streams_in_place_and_ends_when_the_answer_starts() {
+        let delta = |t: &str| format!(r#"{{"type":"stream_event","event":{{"type":"content_block_delta","index":0,"delta":{{"type":"thinking_delta","thinking":{t:?}}}}}}}"#);
+        let done_block = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Counting multiples.","signature":"x"}]}}"#;
+        let mut c = Conversation::default();
+        feed(&mut c, &[&delta("Counting"), &delta(" multiples.")]);
+        assert_eq!(c.entries, vec![Entry::Thinking { text: "Counting multiples.".into(), streaming: true }]);
+        feed(&mut c, &[done_block]);
+        assert_eq!(c.entries, vec![Entry::Thinking { text: "Counting multiples.".into(), streaming: false }]);
+        // The answer after it is a separate entry, and a second thought after a tool is a second block.
+        feed(&mut c, &[&delta("More"), DELTA1]);
+        assert!(matches!(c.entries.as_slice(), [Entry::Thinking { streaming: false, .. }, Entry::Thinking { streaming: false, .. }, Entry::Assistant { streaming: true, .. }]), "{:?}", c.entries);
+        // Thinking that came back empty (no summary asked for) shows nothing.
+        let mut e = Conversation::default();
+        feed(&mut e, &[&delta(""), r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"","signature":"abc"}]}}"#]);
+        assert!(e.entries.is_empty(), "{:?}", e.entries);
+        // A saved conversation keeps its thinking.
+        let mut saved = Conversation::default();
+        for ev in parse_transcript_line(done_block) {
+            saved.apply(ev);
+        }
+        assert_eq!(saved.entries, vec![Entry::Thinking { text: "Counting multiples.".into(), streaming: false }]);
+    }
+
+    #[test]
+    fn models_and_effort_levels_have_names() {
+        assert_eq!((model_label(""), model_label("opus"), model_label("claude-opus-4-1")), ("Default".to_owned(), "Opus".to_owned(), "claude-opus-4-1".to_owned()));
+        assert_eq!((effort_label(""), effort_label("xhigh"), effort_label("odd")), ("Default".to_owned(), "Extra high".to_owned(), "odd".to_owned()));
+        assert!(is_effort("") && is_effort("max") && is_effort("LOW") && !is_effort("extreme"));
+        assert_eq!(MODELS[0].0, "", "the first choice leaves it to Claude Code");
     }
 
     #[test]
@@ -901,7 +1003,7 @@ mod tests {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), resume: None };
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), show_thinking: false, resume: None };
         let mut run = start(&opts, "hello there").unwrap();
         let mut convo = Conversation::default();
         convo.ask("hello there");
@@ -1062,7 +1164,7 @@ mod tests {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), resume: None };
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), show_thinking: false, resume: None };
         let mut run = start(&opts, "write it").unwrap();
         let mut convo = Conversation::default();
         convo.ask("write it");

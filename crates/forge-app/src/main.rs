@@ -64,7 +64,10 @@ fn detach_from_terminal(args: &[String], foreground: bool) {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    if foreground || std::env::var_os("FORGE_FOREGROUND").is_some() || !(std::io::stdin().is_terminal() || std::io::stdout().is_terminal()) {
+    // The marker is for this process only: terminals and windows started from Forge get to decide for themselves.
+    let marked = std::env::var_os("FORGE_FOREGROUND").is_some();
+    std::env::remove_var("FORGE_FOREGROUND");
+    if foreground || marked || !(std::io::stdin().is_terminal() || std::io::stdout().is_terminal()) {
         return;
     }
     let Ok(exe) = std::env::current_exe() else { return };

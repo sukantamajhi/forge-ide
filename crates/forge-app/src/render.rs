@@ -2728,10 +2728,17 @@ impl Workspace {
                 .cursor_pointer()
                 .whitespace_nowrap()
                 .bg(rgb(if selected { t.selection } else { t.popup }))
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
                     if let Some(o) = this.overlay.as_mut() {
                         o.selected = ix;
+                    }
+                    // Ctrl+click on a recent folder opens it in a new window, like Ctrl+Enter.
+                    let picked = this.overlay.as_ref().filter(|o| o.kind == OverlayKind::OpenRecent && ev.modifiers.control).and_then(|o| o.items.get(ix)).map(|i| i.action.clone());
+                    if let Some(crate::workspace::ItemAction::OpenRecent(path)) = picked {
+                        this.overlay = None;
+                        this.open_in_new_window(&path);
+                        return;
                     }
                     this.accept_overlay(cx);
                 }))

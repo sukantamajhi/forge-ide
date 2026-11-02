@@ -11,6 +11,7 @@ use forge_core::input::Outcome;
 use forge_core::textarea::TextArea;
 use gpui::{div, point, prelude::*, px, rems, rgb, AnyElement, Context, FontWeight, Keystroke, MouseButton, MouseDownEvent, ScrollHandle};
 
+use crate::context_menu::{ContextMenu, MenuAction, MenuEntry};
 use crate::resize::{Edge, Resize};
 use crate::workspace::{AreaId, Focus, Workspace};
 
@@ -44,6 +45,12 @@ pub(crate) struct ClaudeState {
     pub show_history: bool,
     /// The options picked so far for the questions Claude asks: `question text -> labels`.
     pub answers: HashMap<String, Vec<String>>,
+    /// The thinking blocks (by entry) the reader opened after they were done.
+    pub open_thoughts: HashSet<usize>,
+    /// The turn that is running, to run it again if the program does not know a flag.
+    pub last_turn: Option<(Options, String)>,
+    /// This Claude Code does not know `--thinking-display`: leave it out.
+    pub no_thinking_flag: bool,
 }
 
 impl Default for ClaudeState {
@@ -65,6 +72,9 @@ impl Default for ClaudeState {
             history: Vec::new(),
             show_history: false,
             answers: HashMap::new(),
+            open_thoughts: HashSet::new(),
+            last_turn: None,
+            no_thinking_flag: false,
         }
     }
 }
@@ -104,6 +114,7 @@ impl Workspace {
         c.previews.clear();
         c.expanded.clear();
         c.answers.clear();
+        c.open_thoughts.clear();
     }
 
     /// The `claude` program, looked up until it is found (so installing it needs no restart).
@@ -130,6 +141,57 @@ impl Workspace {
             self.claude.convo.notice("Stopped.");
             self.claude_after_turn();
         }
+    }
+
+    /// The model menu, at the pointer: Claude Code's own choice, the aliases, and a full name set in settings.json.
+    pub(crate) fn open_claude_model_menu(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let current = self.settings.claude_model.trim().to_owned();
+        let mark = |on: bool| if on { Some("\u{2713}".to_owned()) } else { None };
+        let mut entries: Vec<MenuEntry> = claude::MODELS.iter().map(|(value, label)| self.menu_item(label, MenuAction::ClaudeModel((*value).to_owned()), mark(current.eq_ignore_ascii_case(value)), true)).collect();
+        if !claude::MODELS.iter().any(|(v, _)| v.eq_ignore_ascii_case(&current)) {
+            entries.push(self.menu_item(&current, MenuAction::ClaudeModel(current.clone()), mark(true), true));
+        }
+        self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
+        cx.notify();
+    }
+
+    /// The thinking menu, at the pointer.
+    pub(crate) fn open_claude_effort_menu(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        let current = self.settings.claude_effort.clone();
+        let mut entries: Vec<MenuEntry> = claude::EFFORTS
+            .iter()
+            .map(|(value, label)| self.menu_item(label, MenuAction::ClaudeEffort((*value).to_owned()), if current.eq_ignore_ascii_case(value) { Some("\u{2713}".to_owned()) } else { None }, true))
+            .collect();
+        entries.push(MenuEntry::Separator);
+        entries.push(self.menu_item("Show Claude's thinking", MenuAction::ClaudeShowThinking, if self.settings.claude_show_thinking { Some("\u{2713}".to_owned()) } else { None }, true));
+        self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
+        cx.notify();
+    }
+
+    /// Show or hide Claude's thinking in the chat, from the next question on; the choice is kept in settings.json.
+    pub(crate) fn claude_toggle_thinking(&mut self) {
+        let on = !self.settings.claude_show_thinking;
+        self.set_setting("claude.showThinking", if on { "true" } else { "false" });
+        self.set_status(if on { "Claude's thinking is shown" } else { "Claude's thinking is hidden" });
+    }
+
+    /// Open or close a block of thinking.
+    pub(crate) fn claude_toggle_thought(&mut self, ix: usize) {
+        if !self.claude.open_thoughts.remove(&ix) {
+            self.claude.open_thoughts.insert(ix);
+        }
+    }
+
+    /// Use this model from the next question on, and keep the choice in settings.json.
+    pub(crate) fn claude_set_model(&mut self, value: &str) {
+        self.set_setting("claude.model", &serde_json::Value::String(value.to_owned()).to_string());
+        self.set_status(format!("Claude model: {}", claude::model_label(value)));
+    }
+
+    /// Think this hard from the next question on, and keep the choice in settings.json.
+    pub(crate) fn claude_set_effort(&mut self, value: &str) {
+        self.set_setting("claude.effort", &serde_json::Value::String(value.to_owned()).to_string());
+        self.set_status(format!("Claude thinking: {}", claude::effort_label(value)));
     }
 
     pub fn claude_cycle_mode(&mut self) {
@@ -179,12 +241,15 @@ impl Workspace {
         };
         let context = self.claude.use_context.then(|| self.claude_context());
         let prompt = claude::compose_prompt(&question, context.as_ref());
-        let opts = Options { binary, cwd: self.root().to_path_buf(), mode: self.claude.mode, model: self.settings.claude_model.clone(), resume: self.claude.convo.session_id.clone() };
+        let opts = Options { binary, cwd: self.root().to_path_buf(), mode: self.claude.mode, model: self.settings.claude_model.clone(), effort: self.settings.claude_effort.clone(), show_thinking: self.settings.claude_show_thinking && !self.claude.no_thinking_flag, resume: self.claude.convo.session_id.clone() };
         self.claude.convo.ask(&question);
         self.claude.input.set_text("");
         self.claude.stderr.clear();
         match claude::start(&opts, &prompt) {
-            Ok(run) => self.claude.run = Some(run),
+            Ok(run) => {
+                self.claude.run = Some(run);
+                self.claude.last_turn = Some((opts, prompt));
+            }
             Err(error) => {
                 self.claude.convo.busy = false;
                 self.claude.convo.notice(error);
@@ -223,6 +288,21 @@ impl Workspace {
         }
         if ended {
             self.claude.run = None;
+            // An older Claude Code does not know the flag that asks for thinking summaries: run the turn again without it.
+            let unknown_flag = self.claude.convo.busy && self.claude.stderr.iter().any(|l| l.contains("thinking-display"));
+            if let (true, Some((mut opts, prompt))) = (unknown_flag, self.claude.last_turn.take()) {
+                self.claude.no_thinking_flag = true;
+                opts.show_thinking = false;
+                self.claude.stderr.clear();
+                match claude::start(&opts, &prompt) {
+                    Ok(run) => {
+                        self.claude.run = Some(run);
+                        self.claude.last_turn = Some((opts, prompt));
+                        return true;
+                    }
+                    Err(error) => self.claude.convo.notice(error),
+                }
+            }
             if self.claude.convo.busy {
                 // It ended without saying it was done: it could not start, or it was killed.
                 self.claude.convo.busy = false;
@@ -623,6 +703,28 @@ impl Workspace {
                 cx.notify();
             }))
             .child(c.mode.label());
+        // The model and how hard it thinks: each opens a menu where the chip is.
+        let picker = |id: &'static str, text: String, open: fn(&mut Workspace, gpui::Point<gpui::Pixels>, &mut Context<Workspace>), cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .flex_none()
+                .px_2()
+                .py(px(1.0))
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(t.border))
+                .text_xs()
+                .text_color(rgb(t.dim))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(t.border)))
+                .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    open(this, ev.position, cx);
+                }))
+                .child(text)
+        };
+        let model_chip = picker("claude-model", format!("Model: {}", claude::model_label(&self.settings.claude_model)), Workspace::open_claude_model_menu, cx);
+        let effort_chip = picker("claude-effort", format!("Thinking: {}", claude::effort_label(&self.settings.claude_effort)), Workspace::open_claude_effort_menu, cx);
         let context_chip = (!context_label.is_empty()).then(|| {
             div()
                 .id("claude-context")
@@ -669,7 +771,7 @@ impl Workspace {
             .child(crate::icons::glyph(crate::codicons::SEND, 1.0, if send_enabled { t.text } else { t.dim }));
         let input = self.render_text_area(AreaId::Claude, Focus::Claude, "claude-input", "Ask Claude...", vec![send.into_any_element()], 26.0, cx);
 
-        self.claude_frame_with_input(header, list, chip, context_chip, input)
+        self.claude_frame_with_input(header, list, vec![chip.into_any_element(), model_chip.into_any_element(), effort_chip.into_any_element()], context_chip, input)
     }
 
     /// The panel with only a list in it (no question box): the past conversations.
@@ -677,7 +779,7 @@ impl Workspace {
         div().flex().flex_col().flex_1().min_h_0().child(header).child(list).into_any_element()
     }
 
-    fn claude_frame_with_input(&self, header: impl IntoElement, list: impl IntoElement, chip: impl IntoElement, context_chip: Option<impl IntoElement>, input: impl IntoElement) -> AnyElement {
+    fn claude_frame_with_input(&self, header: impl IntoElement, list: impl IntoElement, chips: Vec<AnyElement>, context_chip: Option<impl IntoElement>, input: impl IntoElement) -> AnyElement {
         let t = &self.theme;
         div()
             .flex()
@@ -693,7 +795,7 @@ impl Workspace {
                     .flex_none()
                     .gap_1()
                     .p(px(10.0))
-                    .child(div().flex().flex_row().items_center().gap_1().child(chip).children(context_chip))
+                    .child(div().flex().flex_row().flex_wrap().items_center().gap_1().children(chips).children(context_chip))
                     .child(input)
                     .child(div().text_xs().text_color(rgb(t.dim)).child("Enter to send, Shift+Enter for a new line")),
             )
@@ -759,6 +861,7 @@ impl Workspace {
                     .into_any_element()
             }
             Entry::Tool { .. } => self.render_claude_tool(ix, entry, cx),
+            Entry::Thinking { text, streaming } => self.render_claude_thinking(ix, text, *streaming, cx),
             Entry::Notice(text) => div().w_full().text_xs().text_color(rgb(t.warning)).child(text.clone()).into_any_element(),
         }
     }
