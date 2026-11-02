@@ -172,7 +172,14 @@ impl Extension {
 
     /// A manifest path made absolute. `None` if it would escape the extension's folder.
     pub fn resolve(&self, relative: &str) -> Option<PathBuf> {
-        let path = Path::new(relative);
+        // Extensions are written for every system: read `\` as a separator and refuse a drive (`C:`) on all of them,
+        // not only where the operating system itself would.
+        let relative = relative.replace('\\', "/");
+        let b = relative.as_bytes();
+        if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return None;
+        }
+        let path = Path::new(&relative);
         let confined = path.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
         confined.then(|| self.root.join(path))
     }
@@ -346,6 +353,8 @@ mod tests {
         assert!(ext.resolve("themes/../../b").is_none());
         assert!(ext.resolve("/etc/passwd").is_none());
         assert!(ext.resolve("C:/Windows/win.ini").is_none());
+        assert!(ext.resolve("..\\b\\secret.json").is_none());
+        assert!(ext.resolve("themes\\a.json").is_some());
     }
 
     #[test]
