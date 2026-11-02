@@ -75,6 +75,51 @@ impl Workspace {
             .children((more > 0).then(|| div().px_1().text_color(rgb(t.dim)).child(format!("... {more} more lines"))))
     }
 
+    /// Claude's thinking: open while it is being written, then folded into one line that opens on a click.
+    pub(crate) fn render_claude_thinking(&self, ix: usize, text: &str, streaming: bool, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme.clone();
+        let open = streaming || self.claude.open_thoughts.contains(&ix);
+        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim().to_owned();
+        let title = if streaming { "Thinking...".to_owned() } else { "Thought".to_owned() };
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .w_full()
+            .child(
+                div()
+                    .id(("claude-thought", ix))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(rgb(t.dim))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(t.text)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.claude_toggle_thought(ix);
+                        cx.notify();
+                    }))
+                    .child(crate::icons::glyph(if open { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 0.75, t.dim))
+                    .child(div().flex_none().italic().child(title))
+                    .children((!open).then(|| div().min_w_0().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().child(first))),
+            )
+            .children(open.then(|| {
+                div()
+                    .ml(px(5.0))
+                    .pl_2()
+                    .border_l_1()
+                    .border_color(rgb(t.border))
+                    .text_xs()
+                    .italic()
+                    .text_color(rgb(t.dim))
+                    .whitespace_normal()
+                    .child(text.trim_end().to_owned())
+            }))
+            .into_any_element()
+    }
+
     /// A tool call: what it did, in a line; for an edit, what it changed (click to see it).
     pub(crate) fn render_claude_tool(&self, ix: usize, entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme.clone();

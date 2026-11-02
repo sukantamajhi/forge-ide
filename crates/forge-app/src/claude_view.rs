@@ -45,6 +45,12 @@ pub(crate) struct ClaudeState {
     pub show_history: bool,
     /// The options picked so far for the questions Claude asks: `question text -> labels`.
     pub answers: HashMap<String, Vec<String>>,
+    /// The thinking blocks (by entry) the reader opened after they were done.
+    pub open_thoughts: HashSet<usize>,
+    /// The turn that is running, to run it again if the program does not know a flag.
+    pub last_turn: Option<(Options, String)>,
+    /// This Claude Code does not know `--thinking-display`: leave it out.
+    pub no_thinking_flag: bool,
 }
 
 impl Default for ClaudeState {
@@ -66,6 +72,9 @@ impl Default for ClaudeState {
             history: Vec::new(),
             show_history: false,
             answers: HashMap::new(),
+            open_thoughts: HashSet::new(),
+            last_turn: None,
+            no_thinking_flag: false,
         }
     }
 }
@@ -105,6 +114,7 @@ impl Workspace {
         c.previews.clear();
         c.expanded.clear();
         c.answers.clear();
+        c.open_thoughts.clear();
     }
 
     /// The `claude` program, looked up until it is found (so installing it needs no restart).
@@ -148,12 +158,28 @@ impl Workspace {
     /// The thinking menu, at the pointer.
     pub(crate) fn open_claude_effort_menu(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
         let current = self.settings.claude_effort.clone();
-        let entries: Vec<MenuEntry> = claude::EFFORTS
+        let mut entries: Vec<MenuEntry> = claude::EFFORTS
             .iter()
             .map(|(value, label)| self.menu_item(label, MenuAction::ClaudeEffort((*value).to_owned()), if current.eq_ignore_ascii_case(value) { Some("\u{2713}".to_owned()) } else { None }, true))
             .collect();
+        entries.push(MenuEntry::Separator);
+        entries.push(self.menu_item("Show Claude's thinking", MenuAction::ClaudeShowThinking, if self.settings.claude_show_thinking { Some("\u{2713}".to_owned()) } else { None }, true));
         self.context_menu = Some(ContextMenu { position, entries, target: None, bar: None });
         cx.notify();
+    }
+
+    /// Show or hide Claude's thinking in the chat, from the next question on; the choice is kept in settings.json.
+    pub(crate) fn claude_toggle_thinking(&mut self) {
+        let on = !self.settings.claude_show_thinking;
+        self.set_setting("claude.showThinking", if on { "true" } else { "false" });
+        self.set_status(if on { "Claude's thinking is shown" } else { "Claude's thinking is hidden" });
+    }
+
+    /// Open or close a block of thinking.
+    pub(crate) fn claude_toggle_thought(&mut self, ix: usize) {
+        if !self.claude.open_thoughts.remove(&ix) {
+            self.claude.open_thoughts.insert(ix);
+        }
     }
 
     /// Use this model from the next question on, and keep the choice in settings.json.
@@ -215,12 +241,15 @@ impl Workspace {
         };
         let context = self.claude.use_context.then(|| self.claude_context());
         let prompt = claude::compose_prompt(&question, context.as_ref());
-        let opts = Options { binary, cwd: self.root().to_path_buf(), mode: self.claude.mode, model: self.settings.claude_model.clone(), effort: self.settings.claude_effort.clone(), resume: self.claude.convo.session_id.clone() };
+        let opts = Options { binary, cwd: self.root().to_path_buf(), mode: self.claude.mode, model: self.settings.claude_model.clone(), effort: self.settings.claude_effort.clone(), show_thinking: self.settings.claude_show_thinking && !self.claude.no_thinking_flag, resume: self.claude.convo.session_id.clone() };
         self.claude.convo.ask(&question);
         self.claude.input.set_text("");
         self.claude.stderr.clear();
         match claude::start(&opts, &prompt) {
-            Ok(run) => self.claude.run = Some(run),
+            Ok(run) => {
+                self.claude.run = Some(run);
+                self.claude.last_turn = Some((opts, prompt));
+            }
             Err(error) => {
                 self.claude.convo.busy = false;
                 self.claude.convo.notice(error);
@@ -259,6 +288,21 @@ impl Workspace {
         }
         if ended {
             self.claude.run = None;
+            // An older Claude Code does not know the flag that asks for thinking summaries: run the turn again without it.
+            let unknown_flag = self.claude.convo.busy && self.claude.stderr.iter().any(|l| l.contains("thinking-display"));
+            if let (true, Some((mut opts, prompt))) = (unknown_flag, self.claude.last_turn.take()) {
+                self.claude.no_thinking_flag = true;
+                opts.show_thinking = false;
+                self.claude.stderr.clear();
+                match claude::start(&opts, &prompt) {
+                    Ok(run) => {
+                        self.claude.run = Some(run);
+                        self.claude.last_turn = Some((opts, prompt));
+                        return true;
+                    }
+                    Err(error) => self.claude.convo.notice(error),
+                }
+            }
             if self.claude.convo.busy {
                 // It ended without saying it was done: it could not start, or it was killed.
                 self.claude.convo.busy = false;
@@ -817,6 +861,7 @@ impl Workspace {
                     .into_any_element()
             }
             Entry::Tool { .. } => self.render_claude_tool(ix, entry, cx),
+            Entry::Thinking { text, streaming } => self.render_claude_thinking(ix, text, *streaming, cx),
             Entry::Notice(text) => div().w_full().text_xs().text_color(rgb(t.warning)).child(text.clone()).into_any_element(),
         }
     }

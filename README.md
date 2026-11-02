@@ -335,8 +335,9 @@ The Claude chat opens in a panel on the right of the editor (**Ctrl+Alt+C**, the
 - **Modes** (the chip above the question box): **Ask before edits** (the default), **Edit automatically** (edits go through; commands are still asked about) and **Plan mode** (Claude looks and proposes a plan, and changes nothing until you approve it).
 
 - **Model and thinking** (the two chips above the question box): click one for a menu. The model is **Default** (Claude Code's own choice), **Opus**, **Sonnet**, **Haiku** or **Fable**. Thinking is how hard Claude thinks before it answers: **Low**, **Medium**, **High**, **Extra high** or **Max** (more thinking is slower and costs more); **Default** leaves it to Claude Code. The choice applies from the next question on and is kept in `settings.json`.
+- **Claude's thinking** is shown as a folded "Thought ..." line above the answer (a summary of its reasoning, written live while it thinks); click it to read it. The thinking menu has a **Show Claude's thinking** switch, `claude.showThinking` in `settings.json`. Needs a Claude Code that knows `--thinking-display`; with an older one the chat quietly runs without it.
 
-Settings (`settings.json`): `claude.permissionMode` (`default` asks before edits, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name such as `claude-sonnet-4-5`; empty is Claude Code's own choice), `claude.effort` (`low`, `medium`, `high`, `xhigh`, `max`; empty is Claude Code's own choice) and `claude.path` (the program, when it is not on the PATH).
+Settings (`settings.json`): `claude.permissionMode` (`default` asks before edits, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name such as `claude-sonnet-4-5`; empty is Claude Code's own choice), `claude.effort` (`low`, `medium`, `high`, `xhigh`, `max`; empty is Claude Code's own choice), `claude.showThinking` (`true` by default) and `claude.path` (the program, when it is not on the PATH).
 
 ## Icons
 

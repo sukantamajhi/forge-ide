@@ -49,6 +49,8 @@ pub(crate) enum MenuAction {
     ClaudeModel(String),
     /// How hard Claude thinks (an `--effort` value; empty for Claude Code's own choice).
     ClaudeEffort(String),
+    /// Show or hide Claude's thinking in the chat.
+    ClaudeShowThinking,
 }
 
 /// What a text box's right-click menu can do, as in any native text field.
@@ -851,6 +853,7 @@ impl Workspace {
             MenuAction::Input(op, target) => self.input_op(op, target, cx),
             MenuAction::ClaudeModel(value) => self.claude_set_model(&value),
             MenuAction::ClaudeEffort(value) => self.claude_set_effort(&value),
+            MenuAction::ClaudeShowThinking => self.claude_toggle_thinking(),
             MenuAction::RevealEntry => {
                 if let Some((path, _)) = target {
                     match reveal_in_file_manager(&path) {
