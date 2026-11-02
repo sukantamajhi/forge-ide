@@ -130,6 +130,7 @@ docker-package-linux: ## Build the Linux .tar.gz and .deb in a clean Ubuntu 22.0
 	HOST_UID=$$(id -u) HOST_GID=$$(id -g) docker compose run --rm package-linux
 
 docker-package-windows: ## Build the Windows installer in a Windows container (Windows host, Windows containers mode)
+	@test "$$(docker info --format '{{.OSType}}')" = windows || { echo "Docker is in Linux containers mode. Switch to Windows containers first (Docker Desktop tray icon, 'Switch to Windows containers...')."; false; }
 	docker compose --profile windows run --rm package-windows
 
 docker-site: ## Run the landing page in Docker at http://localhost:8080

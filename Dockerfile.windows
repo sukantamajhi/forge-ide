@@ -2,20 +2,22 @@
 # Builds the Windows installer (dist\Forge-Setup-<version>.exe) inside a Windows container.
 #
 # This needs a Windows machine running Docker in WINDOWS containers mode: a Linux container cannot build Forge for
-# Windows (GPUI compiles its shaders with the Windows SDK, and Inno Setup is a Windows program).
+# Windows (GPUI compiles its shaders with the Windows SDK, and Inno Setup is a Windows program). In Docker Desktop:
+# right-click the whale in the tray, "Switch to Windows containers...". Check with:  docker info --format "{{.OSType}}"
+# (it must print "windows"). Under Linux containers the build fails with  runc run failed ... "powershell" not found.
 #
 #   docker compose --profile windows run --rm package-windows
 #
 # NOTE: not tested by the author (it needs a Windows host). The image is large (about 10 GB) and the first build is slow.
 FROM mcr.microsoft.com/windows/servercore:ltsc2022
 
-SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
+SHELL ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
 
 # Visual Studio Build Tools: the MSVC compiler and linker and the Windows SDK (exit code 3010 only asks for a restart).
 RUN Invoke-WebRequest https://aka.ms/vs/17/release/vs_buildtools.exe -OutFile C:\vs_buildtools.exe; `
     $p = Start-Process C:\vs_buildtools.exe -Wait -PassThru -ArgumentList '--quiet','--wait','--norestart','--nocache', `
         '--add','Microsoft.VisualStudio.Workload.VCTools','--add','Microsoft.VisualStudio.Component.Windows11SDK.22621','--includeRecommended'; `
-    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw \"Build Tools failed: $($p.ExitCode)\" }; `
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw ('Build Tools failed with exit code ' + $p.ExitCode) }; `
     Remove-Item C:\vs_buildtools.exe
 
 # Rust, for the MSVC target.
@@ -31,4 +33,4 @@ RUN Invoke-WebRequest https://jrsoftware.org/download.php/is.exe -OutFile C:\is.
 ENV PATH="C:\Users\ContainerAdministrator\.cargo\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0"
 
 WORKDIR C:\work
-CMD ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "installer\\build.ps1"]
+CMD ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "installer\\build.ps1"]
