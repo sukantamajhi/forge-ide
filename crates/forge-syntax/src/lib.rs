@@ -244,15 +244,7 @@ impl Syntax {
         loop {
             let node = cursor.node();
             if descend && node.is_named() {
-                let (mut first, last) = (node.start_position().row, node.end_position().row);
-                // An indented body (Python, Lua) is a `block` that begins on the line after its header, and
-                // the fold arrow belongs on the header: `with x:`, `if y:`, `def f():`.
-                if node.kind() == "block" {
-                    if let Some(parent) = node.parent() {
-                        first = first.min(parent.start_position().row);
-                    }
-                }
-                if last > first && is_foldable(node.kind()) {
+                if let Some((first, last)) = fold_range(&node) {
                     let entry = by_start.entry(first).or_insert(last);
                     *entry = (*entry).max(last);
                 }
@@ -350,6 +342,54 @@ fn collect_captures(rope: &Rope, tree: &Tree, engine: &Engine, bytes: Range<usiz
     }
 }
 
+/// The lines `(first, last)` a foldable node folds over, with the arrow on the line that introduces it, or `None`
+/// when the node does not fold. A region never includes the line of whatever follows it.
+fn fold_range(node: &tree_sitter::Node) -> Option<(usize, usize)> {
+    let kind = node.kind();
+    if !is_foldable(kind) {
+        return None;
+    }
+    let mut first = node.start_position().row;
+    let mut last = node.end_position().row;
+    // A node that ends at the start of a line (a Markdown section or fenced block, a TOML table, a YAML mapping)
+    // stops on the line before.
+    if node.end_position().column == 0 && last > first {
+        last -= 1;
+    }
+    // A TOML table's own end runs on to the next table; its last child is where its content stops.
+    if matches!(kind, "table" | "table_array_element") {
+        if let Some(child) = node.named_child((node.named_child_count().saturating_sub(1)) as u32) {
+            last = child.end_position().row.max(first);
+        }
+    }
+    // Go's statement list is the body's inside, not a block: the `{` before it carries the fold.
+    if kind == "statement_list" {
+        return None;
+    }
+    let parent = node.parent();
+    let brace_first = node.child(0).is_some_and(|c| c.kind() == "{");
+    match kind {
+        // A YAML mapping or sequence is folded from the `key:` or `- ` that owns it; the top-level one has no
+        // owner and is not a fold of its own.
+        "block_mapping" | "block_sequence" => {
+            let owner = parent.and_then(|p| p.parent()).filter(|o| matches!(o.kind(), "block_mapping_pair" | "block_sequence_item"))?;
+            first = first.min(owner.start_position().row);
+        }
+        _ => {
+            // An indented body (Python, Lua) is a `block` that begins on the line after its header, and a brace
+            // on a line of its own (C#, Allman style C and Java) does too: the arrow belongs on the header.
+            let indented_body = kind == "block" && !brace_first;
+            let own_line_brace = brace_first && node.prev_sibling().is_some_and(|p| p.end_position().row < node.start_position().row);
+            if indented_body || own_line_brace {
+                if let Some(parent) = parent {
+                    first = first.min(parent.start_position().row);
+                }
+            }
+        }
+    }
+    (last > first).then_some((first, last))
+}
+
 fn is_foldable(kind: &str) -> bool {
     matches!(
         kind,
@@ -362,6 +402,7 @@ fn is_foldable(kind: &str) -> bool {
         || kind.ends_with("_list")
         || kind == "match_block"
         || kind == "arguments"
+        || kind == "compound_statement"
 }
 
 #[derive(Clone, Copy)]
