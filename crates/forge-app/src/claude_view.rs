@@ -11,7 +11,8 @@ use forge_core::input::Outcome;
 use forge_core::textarea::TextArea;
 use gpui::{div, point, prelude::*, px, rems, rgb, AnyElement, Context, FontWeight, Keystroke, MouseButton, MouseDownEvent, ScrollHandle};
 
-use crate::workspace::{AreaId, Focus, SidebarView, Workspace};
+use crate::resize::{Edge, Resize};
+use crate::workspace::{AreaId, Focus, Workspace};
 
 /// Where to send someone who does not have the program.
 const INSTALL_HINT: &str = "Claude Code is not installed. Install it with:  npm install -g @anthropic-ai/claude-code  (see docs.claude.com/claude-code), sign in once by running `claude` in a terminal, then try again. If it is installed somewhere unusual, set \"claude.path\" in settings.json.";
@@ -71,14 +72,25 @@ impl Default for ClaudeState {
 impl Workspace {
     // ---- commands ----
 
-    /// Show the chat and put the caret in its question box.
+    /// Show the chat on the right and put the caret in its question box.
     pub fn open_claude(&mut self) {
-        self.sidebar_visible = true;
-        self.sidebar_view = SidebarView::Claude;
+        self.claude_visible = true;
         self.focus = Focus::Claude;
         let _ = self.claude_binary();
         if self.claude.convo.entries.is_empty() {
             self.claude.history = claude::list_sessions(self.root());
+        }
+    }
+
+    /// Show or hide the chat; hiding it while it has the keyboard hands the keyboard back to the editor.
+    pub fn toggle_claude(&mut self) {
+        if self.claude_visible {
+            self.claude_visible = false;
+            if self.focus == Focus::Claude {
+                self.focus = Focus::Editor;
+            }
+        } else {
+            self.open_claude();
         }
     }
 
@@ -426,7 +438,7 @@ impl Workspace {
 
     /// Characters that fit on a row of the question box.
     pub fn claude_wrap_cols(&self) -> usize {
-        let inner = self.sidebar_width() - 1.0 - 2.0 * 10.0 - 2.0 * (1.0 + 10.0);
+        let inner = self.claude_width() - 1.0 - 2.0 * 10.0 - 2.0 * (1.0 + 10.0);
         ((inner / f32::from(self.char_width).max(1.0)).floor() as usize).max(8)
     }
 
@@ -477,6 +489,25 @@ impl Workspace {
     }
 
     // ---- drawing ----
+
+    /// The chat as a column at the right of the editor, with a handle on its left edge to change its width.
+    pub(crate) fn render_claude_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let t = &self.theme;
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(self.claude_width()))
+            .h_full()
+            .relative()
+            .font_family(self.ui_font.clone())
+            .bg(rgb(t.sidebar))
+            .border_l_1()
+            .border_color(rgb(t.border))
+            .child(self.resize_handle(("resize", 7), Resize::Claude, Edge::Left, cx))
+            .child(self.render_claude(cx))
+            .into_any_element()
+    }
 
     pub(crate) fn render_claude(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme.clone();

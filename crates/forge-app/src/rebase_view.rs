@@ -208,7 +208,7 @@ impl Workspace {
             .collect();
 
         Some(
-            crate::scroll::overlay_page("rebase-page", left, t.bg, t.text)
+            crate::scroll::overlay_page("rebase-page", left, self.claude_width(), t.bg, t.text)
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     if let Some(p) = this.rebase_page.as_mut() {
                         p.focus = None;

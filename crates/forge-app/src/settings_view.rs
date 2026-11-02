@@ -269,7 +269,7 @@ impl Workspace {
                 .into_any_element()));
 
         Some(
-            crate::scroll::overlay_page("settings-page", left, t.bg, t.text)
+            crate::scroll::overlay_page("settings-page", left, self.claude_width(), t.bg, t.text)
                 .font_family(self.ui_font.clone())
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
                     this.settings_model_focus = false;

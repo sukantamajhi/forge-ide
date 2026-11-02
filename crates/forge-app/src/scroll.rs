@@ -24,8 +24,8 @@ pub fn scroll_page(id: impl Into<ElementId>) -> Stateful<Div> {
         .items_start()
 }
 
-/// A scrolling page drawn over the editor area (Settings): it covers everything right of the sidebar
+/// A scrolling page drawn over the editor area (Settings): it covers everything between the sidebar and the Claude chat
 /// down to the status bar and swallows mouse input.
-pub fn overlay_page(id: impl Into<ElementId>, left: f32, bg: u32, text: u32) -> Stateful<Div> {
-    scroll_page(id).absolute().top(px(crate::menu_bar::MENU_BAR_HEIGHT)).left(px(left)).right_0().bottom(rems(1.5)).bg(rgb(bg)).text_color(rgb(text)).occlude()
+pub fn overlay_page(id: impl Into<ElementId>, left: f32, right: f32, bg: u32, text: u32) -> Stateful<Div> {
+    scroll_page(id).absolute().top(px(crate::menu_bar::MENU_BAR_HEIGHT)).left(px(left)).right(px(right)).bottom(rems(1.5)).bg(rgb(bg)).text_color(rgb(text)).occlude()
 }

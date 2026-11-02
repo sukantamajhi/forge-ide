@@ -1984,7 +1984,7 @@ impl Workspace {
     /// Match the terminal grid to the panel size.
     pub fn sync_terminal_size(&mut self, viewport_width: Pixels) {
         let sidebar = if self.sidebar_visible { self.sidebar_width() } else { 0.0 };
-        let cols = (f32::from(viewport_width) - sidebar - 24.0) / f32::from(self.char_width).max(1.0);
+        let cols = (f32::from(viewport_width) - sidebar - self.claude_width() - 24.0) / f32::from(self.char_width).max(1.0);
         let rows = (self.panel_height - 34.0) / self.line_height();
         for terminal in &mut self.terminals {
             terminal.resize(rows.max(2.0) as u16, cols.max(10.0) as u16);

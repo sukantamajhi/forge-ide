@@ -478,7 +478,6 @@ pub(crate) enum SidebarView {
     Search,
     Git,
     Extensions,
-    Claude,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -900,6 +899,9 @@ pub(crate) struct Workspace {
     /// height, the preview's width (None = half), the shares of split editor groups and of the Debug
     /// panel's three columns, the window size last drawn, and the drag in progress.
     pub sidebar_base: f32,
+    /// The Claude chat on the right: whether it is open, and its width at the default zoom.
+    pub claude_visible: bool,
+    pub claude_base: f32,
     pub panel_height: f32,
     pub preview_px: Option<f32>,
     pub group_fractions: Vec<f32>,
@@ -1171,6 +1173,8 @@ impl Workspace {
             scm_dragging: false,
             minimap_dragging: false,
             sidebar_base: saved_layout.sidebar,
+            claude_visible: false,
+            claude_base: saved_layout.claude,
             panel_height: saved_layout.panel_height,
             preview_px: saved_layout.preview_width,
             group_fractions: Vec::new(),

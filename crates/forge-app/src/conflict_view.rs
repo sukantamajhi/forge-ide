@@ -195,7 +195,7 @@ impl Workspace {
         });
 
         Some(
-            crate::scroll::overlay_page("conflict-page", left, t.bg, t.text)
+            crate::scroll::overlay_page("conflict-page", left, self.claude_width(), t.bg, t.text)
                 .child(div().flex().flex_col().w_full().max_w(rems(70.0)).px(rems(2.0)).py(rems(1.5)).gap_3().child(header).children(base_note.filter(|_| !conflicts.is_empty()).map(|n| div().text_xs().text_color(rgb(t.dim)).child(n))).children(cards).children(footer)),
         )
     }

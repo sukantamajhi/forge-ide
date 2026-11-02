@@ -791,7 +791,7 @@ impl Workspace {
                 }))
                 .child(crate::icons::glyph(glyph, 1.25, if enabled { color } else { t.dim }))
         };
-        let left = self.sidebar_width() + ((window_width - self.sidebar_width()) / 2.0 - 112.0).max(0.0);
+        let left = self.sidebar_width() + ((window_width - self.sidebar_width() - self.claude_width()) / 2.0 - 112.0).max(0.0);
         Some(
             div()
                 .absolute()

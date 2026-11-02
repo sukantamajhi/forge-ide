@@ -10,6 +10,7 @@ use crate::workspace::Workspace;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Resize {
     Sidebar,
+    Claude,
     Panel,
     Preview,
     Groups(usize),
@@ -38,6 +39,7 @@ pub(crate) struct Drag {
 
 const MIN_SIDEBAR: f32 = 140.0;
 const MAX_SIDEBAR: f32 = 900.0;
+const MIN_CLAUDE: f32 = 260.0;
 const MIN_PANEL: f32 = 80.0;
 const MIN_PREVIEW: f32 = 160.0;
 /// The least share of the width a split group or a debug column may take.
@@ -61,9 +63,18 @@ impl Workspace {
         self.sidebar_base * (self.settings.font_size / 14.0).clamp(0.7, 3.0)
     }
 
+    /// The width the Claude chat is drawn at (0 while it is closed), scaled with the zoom like the sidebar.
+    pub fn claude_width(&self) -> f32 {
+        if self.claude_visible {
+            self.claude_base * (self.settings.font_size / 14.0).clamp(0.7, 3.0)
+        } else {
+            0.0
+        }
+    }
+
     /// Remember the panel sizes for the next session.
     pub(crate) fn save_ui_state(&mut self) {
-        let state = forge_core::ui_state::UiState { sidebar: self.sidebar_base, panel_height: self.panel_height, preview_width: self.preview_px, debug_columns: self.debug_cols };
+        let state = forge_core::ui_state::UiState { sidebar: self.sidebar_base, claude: self.claude_base, panel_height: self.panel_height, preview_width: self.preview_px, debug_columns: self.debug_cols };
         if let Err(error) = state.save() {
             self.set_status(error);
         }
@@ -79,7 +90,7 @@ impl Workspace {
     /// The width available to editors, the width the shares of groups and columns are taken of.
     fn area_width(&self) -> f32 {
         let sidebar = if self.sidebar_visible { self.sidebar_width() } else { 0.0 };
-        (self.viewport.0 - sidebar).max(200.0)
+        (self.viewport.0 - sidebar - self.claude_width()).max(200.0)
     }
 
     /// A thin strip on the edge of a panel that starts a resize when pressed.
@@ -107,6 +118,7 @@ impl Workspace {
         let (x, y) = (f32::from(at.x), f32::from(at.y));
         let drag = match which {
             Resize::Sidebar => Drag { which, start: x, value: self.sidebar_width(), other: 0.0 },
+            Resize::Claude => Drag { which, start: x, value: self.claude_width(), other: 0.0 },
             Resize::Panel => Drag { which, start: y, value: self.panel_height, other: 0.0 },
             Resize::Preview => Drag { which, start: x, value: self.preview_px.unwrap_or(self.area_width() / 2.0), other: 0.0 },
             Resize::Groups(i) => Drag { which, start: x, value: self.group_fractions.get(i).copied().unwrap_or(0.5), other: self.group_fractions.get(i + 1).copied().unwrap_or(0.5) },
@@ -125,6 +137,14 @@ impl Workspace {
                 let max = (self.viewport.0 - 200.0).clamp(MIN_SIDEBAR, MAX_SIDEBAR);
                 let width = (drag.value + (x - drag.start)).clamp(MIN_SIDEBAR, max);
                 self.sidebar_base = width / zoom;
+            }
+            Resize::Claude => {
+                // The handle is on the chat's left edge: dragging left makes it wider.
+                let zoom = (self.settings.font_size / 14.0).clamp(0.7, 3.0);
+                let sidebar = if self.sidebar_visible { self.sidebar_width() } else { 0.0 };
+                let max = (self.viewport.0 - sidebar - 200.0).clamp(MIN_CLAUDE, MAX_SIDEBAR);
+                let width = (drag.value - (x - drag.start)).clamp(MIN_CLAUDE, max);
+                self.claude_base = width / zoom;
             }
             Resize::Panel => {
                 let max = (self.viewport.1 - 160.0).max(MIN_PANEL);
