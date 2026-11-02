@@ -16,8 +16,10 @@ use serde_json::Value;
 /// What Claude may do without asking. Anything the mode does not cover is put to the user in the chat.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PermissionMode {
-    /// Read and search freely; ask before editing files or running commands.
+    /// Claude Code's own judgement: it goes ahead with what is safe and asks about what is not.
     #[default]
+    Auto,
+    /// Read and search freely; ask before editing files or running commands.
     Ask,
     /// Edit files without asking (commands are still asked about).
     AcceptEdits,
@@ -26,11 +28,12 @@ pub enum PermissionMode {
 }
 
 impl PermissionMode {
-    pub const ALL: [PermissionMode; 3] = [PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Plan];
+    pub const ALL: [PermissionMode; 4] = [PermissionMode::Auto, PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Plan];
 
     /// The value of `--permission-mode`, and of `claude.permissionMode` in settings.json.
     pub fn id(self) -> &'static str {
         match self {
+            PermissionMode::Auto => "auto",
             PermissionMode::Ask => "default",
             PermissionMode::AcceptEdits => "acceptEdits",
             PermissionMode::Plan => "plan",
@@ -39,6 +42,7 @@ impl PermissionMode {
 
     pub fn label(self) -> &'static str {
         match self {
+            PermissionMode::Auto => "Auto mode",
             PermissionMode::Ask => "Ask before edits",
             PermissionMode::AcceptEdits => "Edit automatically",
             PermissionMode::Plan => "Plan mode",
@@ -1169,7 +1173,8 @@ mod tests {
             assert_eq!(PermissionMode::from_id(m.id()), Some(m));
         }
         assert_eq!(PermissionMode::from_id("bogus"), None);
-        assert_eq!(PermissionMode::Ask.next().next().next(), PermissionMode::Ask);
+        assert_eq!(PermissionMode::Auto.next().next().next().next(), PermissionMode::Auto);
+        assert_eq!(PermissionMode::default(), PermissionMode::Auto);
     }
 
     #[test]

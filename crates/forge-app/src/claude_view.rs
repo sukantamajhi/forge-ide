@@ -903,7 +903,7 @@ impl Workspace {
             .border_1()
             .border_color(rgb(t.border))
             .text_xs()
-            .text_color(rgb(if c.mode == PermissionMode::Ask { t.dim } else { t.warning }))
+            .text_color(rgb(if matches!(c.mode, PermissionMode::Ask | PermissionMode::Auto) { t.dim } else { t.warning }))
             .cursor_pointer()
             .hover(|s| s.bg(rgb(t.border)))
             .tooltip(self.tooltip("Change what Claude may do without asking", Some(Command::ClaudeCycleMode)))

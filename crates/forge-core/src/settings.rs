@@ -120,7 +120,7 @@ pub struct Settings {
     pub claude_effort: String,
     /// `claude.showThinking`: show Claude's thinking (a summary) in the chat.
     pub claude_show_thinking: bool,
-    /// `claude.permissionMode`: what Claude may do without asking: `default` (read only), `acceptEdits` or `plan`.
+    /// `claude.permissionMode`: what Claude may do without asking: `auto` (the default), `default` (ask before edits), `acceptEdits` or `plan`.
     pub claude_mode: crate::claude::PermissionMode,
 }
 
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(Settings::parse(r#"{ "claude.effort": "extreme" }"#).claude_effort, "");
         assert!(Settings::default().claude_show_thinking && !Settings::parse(r#"{ "claude.showThinking": false }"#).claude_show_thinking);
         assert_eq!((claude.claude_path.as_str(), claude.claude_model.as_str(), claude.claude_mode), ("/opt/claude", "sonnet", crate::claude::PermissionMode::AcceptEdits));
-        assert_eq!(Settings::parse(r#"{ "claude.permissionMode": "bogus" }"#).claude_mode, crate::claude::PermissionMode::Ask);
+        assert_eq!(Settings::parse(r#"{ "claude.permissionMode": "bogus" }"#).claude_mode, crate::claude::PermissionMode::Auto);
         assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);
         assert!(Settings::parse(r#"{ "editor.snippetSuggestions": "top" }"#).snippet_suggestions);
         let f = Settings::parse(r#"{ "editor.fontFamily": " JetBrains Mono ", "workbench.fontFamily": "Inter" }"#);
