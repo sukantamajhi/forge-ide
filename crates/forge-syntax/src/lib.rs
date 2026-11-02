@@ -244,7 +244,14 @@ impl Syntax {
         loop {
             let node = cursor.node();
             if descend && node.is_named() {
-                let (first, last) = (node.start_position().row, node.end_position().row);
+                let (mut first, last) = (node.start_position().row, node.end_position().row);
+                // An indented body (Python, Lua) is a `block` that begins on the line after its header, and
+                // the fold arrow belongs on the header: `with x:`, `if y:`, `def f():`.
+                if node.kind() == "block" {
+                    if let Some(parent) = node.parent() {
+                        first = first.min(parent.start_position().row);
+                    }
+                }
                 if last > first && is_foldable(node.kind()) {
                     let entry = by_start.entry(first).or_insert(last);
                     *entry = (*entry).max(last);
@@ -634,6 +641,20 @@ mod tests {
         let mut js = Syntax::new(Language::Json).unwrap();
         js.parse(&json, &[]);
         assert!(js.fold_regions().contains(&(1, 4)));
+    }
+
+    #[test]
+    fn python_folds_start_on_the_header_line_not_the_first_body_line() {
+        let src = "import os\n\nwith st.sidebar:\n    st.header(1)\n    if st.button(2):\n        try:\n            r = 1\n            s = 2\n        except E as e:\n            st.error(e)\n            raise\n\nx = 1\n";
+        let rope = Rope::from_str(src);
+        let mut syntax = Syntax::new(Language::Python).unwrap();
+        syntax.parse(&rope, &[]);
+        let regions = syntax.fold_regions();
+        assert!(regions.contains(&(2, 10)), "with body folds from its header: {regions:?}");
+        assert!(regions.contains(&(4, 10)), "if body folds from its header: {regions:?}");
+        assert!(regions.contains(&(5, 7)), "try body folds from `try:`: {regions:?}");
+        assert!(regions.contains(&(8, 10)), "except body folds from `except`: {regions:?}");
+        assert!(!regions.iter().any(|r| r.0 == 3 || r.0 == 6), "no arrow on a body line: {regions:?}");
     }
 
     #[test]
