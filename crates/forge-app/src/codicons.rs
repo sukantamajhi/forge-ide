@@ -63,3 +63,5 @@ pub const EDIT: char = '\u{ea73}';
 pub const EYE: char = '\u{ea70}';
 pub const GLOBE: char = '\u{eb01}';
 pub const TOOLS: char = '\u{eb6d}';
+pub const HISTORY: char = '\u{ea82}';
+pub const DIFF: char = '\u{eae1}';

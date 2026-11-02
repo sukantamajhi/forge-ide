@@ -279,6 +279,10 @@ impl Workspace {
             ClaudeStop => self.claude_stop(),
             ClaudeAddSelection => self.claude_add_selection(),
             ClaudeCycleMode => self.claude_cycle_mode(),
+            ClaudeHistory => {
+                self.open_claude();
+                self.claude_toggle_history();
+            }
             CollapseExplorer => {
                 self.tree.collapse_all();
                 self.explorer_selected = None;

@@ -315,11 +315,12 @@ The Claude tab in the side bar (**Ctrl+Alt+C**, or View, Claude) is a chat with 
 
 - Answers stream in as Markdown. The tools Claude uses (Read, Edit, Bash...) show as rows; click one to open its file.
 - The open file and your selection go along with each question (click the chip under the chat to leave it out). **Alt+K** (Claude: Ask About Selection) adds an `@file#L1-9` reference to the question.
-- **Enter** sends, **Shift+Enter** adds a line, **Esc** stops a running answer, **Shift+Tab** changes the mode. A conversation continues until you start a new one (the + button).
-- Open files that Claude changed reload by themselves, and the Explorer and Source Control refresh when an answer ends.
-- The chat runs without a terminal, so Claude cannot stop and ask permission in the middle of an answer. The mode says what it may do: **Read only** (the default: read and search; edits and commands are refused), **Edit automatically** (also changes files; commands are still refused) or **Plan mode** (looks and proposes, changes nothing).
+- **Enter** sends, **Shift+Enter** adds a line, **Esc** stops a running answer, **Shift+Tab** changes the mode. The clock button lists the conversations Claude Code saved for this folder (the same ones `claude --resume` shows); click one to read it and carry on from it. The most recent ones are also listed when the chat is empty.
+- **Permissions.** Claude asks before it edits a file or runs a command, and the question appears in the chat: for an edit you see the lines it would change, for a command the command itself. **Allow**, **Deny**, or **Allow all edits this session**. When Claude has a plan it shows it for approval, and when it has a question it shows the choices as buttons.
+- **Diffs.** Each edit shows as a row with the lines added and removed (+3 -1); click it to see the change inline. The file button opens the file and the diff button opens the full diff in a tab. Open files that Claude changed reload by themselves, and the Explorer and Source Control refresh when an answer ends.
+- **Modes** (the chip above the question box): **Ask before edits** (the default), **Edit automatically** (edits go through; commands are still asked about) and **Plan mode** (Claude looks and proposes a plan, and changes nothing until you approve it).
 
-Settings (`settings.json`): `claude.permissionMode` (`default`, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name; empty is Claude Code's own choice) and `claude.path` (the program, when it is not on the PATH).
+Settings (`settings.json`): `claude.permissionMode` (`default` asks before edits, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name; empty is Claude Code's own choice) and `claude.path` (the program, when it is not on the PATH).
 
 ## Icons
 

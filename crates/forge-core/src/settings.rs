@@ -517,7 +517,7 @@ mod tests {
         assert!(!Settings::parse(r#"{ "workbench.editor.enablePreview": false }"#).enable_preview);
         let claude = Settings::parse(r#"{ "claude.path": " /opt/claude ", "claude.model": "sonnet", "claude.permissionMode": "acceptEdits" }"#);
         assert_eq!((claude.claude_path.as_str(), claude.claude_model.as_str(), claude.claude_mode), ("/opt/claude", "sonnet", crate::claude::PermissionMode::AcceptEdits));
-        assert_eq!(Settings::parse(r#"{ "claude.permissionMode": "bogus" }"#).claude_mode, crate::claude::PermissionMode::ReadOnly);
+        assert_eq!(Settings::parse(r#"{ "claude.permissionMode": "bogus" }"#).claude_mode, crate::claude::PermissionMode::Ask);
         assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);
         assert!(Settings::parse(r#"{ "editor.snippetSuggestions": "top" }"#).snippet_suggestions);
         let f = Settings::parse(r#"{ "editor.fontFamily": " JetBrains Mono ", "workbench.fontFamily": "Inter" }"#);

@@ -255,6 +255,7 @@ commands! {
     ClaudeStop, "forge.claude.stop", "Claude: Stop", [];
     ClaudeAddSelection, "forge.claude.addSelection", "Claude: Ask About Selection", ["alt+k"];
     ClaudeCycleMode, "forge.claude.cycleMode", "Claude: Change Permission Mode", [];
+    ClaudeHistory, "forge.claude.history", "Claude: Past Conversations", [];
     ExtensionsInstall, "forge.extensions.install", "Extensions: Install from Open VSX...", [];
     ExtensionsVsix, "forge.extensions.vsix", "Extensions: Install from VSIX...", [];
     ExtensionsManage, "forge.extensions.manage", "Extensions: Manage Installed...", [];

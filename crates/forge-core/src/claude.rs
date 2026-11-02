@@ -7,32 +7,31 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-/// What Claude may do without asking. The chat runs headless, so there is nobody to ask mid-turn: a tool that needs
-/// permission the mode does not give is refused, and Claude says so.
+/// What Claude may do without asking. Anything the mode does not cover is put to the user in the chat.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PermissionMode {
-    /// Read files and search; edits and commands are refused.
+    /// Read and search freely; ask before editing files or running commands.
     #[default]
-    ReadOnly,
-    /// Also edit files without asking (commands are still refused).
+    Ask,
+    /// Edit files without asking (commands are still asked about).
     AcceptEdits,
-    /// Look and propose a plan; change nothing.
+    /// Look and propose a plan; change nothing until the plan is approved.
     Plan,
 }
 
 impl PermissionMode {
-    pub const ALL: [PermissionMode; 3] = [PermissionMode::ReadOnly, PermissionMode::AcceptEdits, PermissionMode::Plan];
+    pub const ALL: [PermissionMode; 3] = [PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Plan];
 
     /// The value of `--permission-mode`, and of `claude.permissionMode` in settings.json.
     pub fn id(self) -> &'static str {
         match self {
-            PermissionMode::ReadOnly => "default",
+            PermissionMode::Ask => "default",
             PermissionMode::AcceptEdits => "acceptEdits",
             PermissionMode::Plan => "plan",
         }
@@ -40,7 +39,7 @@ impl PermissionMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            PermissionMode::ReadOnly => "Read only",
+            PermissionMode::Ask => "Ask before edits",
             PermissionMode::AcceptEdits => "Edit automatically",
             PermissionMode::Plan => "Plan mode",
         }
@@ -73,8 +72,64 @@ pub enum Event {
     ToolUse { id: String, name: String, input: Value },
     /// What the tool returned.
     ToolResult { id: String, text: String, is_error: bool },
+    /// Claude wants to use a tool and waits for a yes or no.
+    Permission(PermissionRequest),
+    /// The question with this request id is moot (the tool call was abandoned).
+    PermissionCancelled(String),
+    /// A request from the program this chat does not handle (it is answered with an error).
+    Unsupported { request_id: String },
+    /// A line the user typed, when a saved conversation is replayed.
+    UserText(String),
     /// The turn ended.
     Done { error: Option<String>, session_id: String, cost_usd: Option<f64>, duration_ms: Option<u64> },
+}
+
+/// A question the program puts to the user: may it use this tool, like this?
+#[derive(Clone, Debug, PartialEq)]
+pub struct PermissionRequest {
+    /// What the answer is addressed to.
+    pub id: String,
+    pub tool_name: String,
+    pub tool_use_id: String,
+    /// The program's own few words on it (a file name, a command).
+    pub description: String,
+    pub input: Value,
+    /// Rule changes the program offers with an "allow" (for instance: accept all edits this session).
+    pub suggestions: Vec<Value>,
+}
+
+/// The answer to a [`PermissionRequest`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Decision {
+    /// Go ahead, with `input` (the tool's input, possibly changed) and any rule changes to keep.
+    Allow { input: Value, permissions: Vec<Value> },
+    /// Do not; `message` is what Claude is told.
+    Deny { message: String },
+}
+
+/// The line that answers a request, in the program's control protocol.
+pub fn control_response(request_id: &str, decision: &Decision) -> String {
+    let response = match decision {
+        Decision::Allow { input, permissions } => {
+            let mut r = serde_json::json!({ "behavior": "allow", "updatedInput": input });
+            if !permissions.is_empty() {
+                r["updatedPermissions"] = Value::Array(permissions.clone());
+            }
+            r
+        }
+        Decision::Deny { message } => serde_json::json!({ "behavior": "deny", "message": message }),
+    };
+    serde_json::json!({ "type": "control_response", "response": { "subtype": "success", "request_id": request_id, "response": response } }).to_string()
+}
+
+/// The line that refuses a request this chat does not understand.
+pub fn control_error(request_id: &str, error: &str) -> String {
+    serde_json::json!({ "type": "control_response", "response": { "subtype": "error", "request_id": request_id, "error": error } }).to_string()
+}
+
+/// The message that starts a turn, in the program's streaming input format.
+pub fn user_message(prompt: &str) -> String {
+    serde_json::json!({ "type": "user", "message": { "role": "user", "content": prompt } }).to_string()
 }
 
 /// The events in one line of the program's output (none for lines Forge has no use for).
@@ -114,6 +169,22 @@ pub fn parse_line(line: &str) -> Vec<Event> {
                 .map(|b| Event::ToolResult { id: str_of(b, "tool_use_id"), text: tool_result_text(&b["content"]), is_error: b["is_error"].as_bool().unwrap_or(false) })
                 .collect()
         }
+        Some("control_request") => {
+            let request_id = str_of(&v, "request_id");
+            let r = &v["request"];
+            if r["subtype"] != "can_use_tool" {
+                return vec![Event::Unsupported { request_id }];
+            }
+            vec![Event::Permission(PermissionRequest {
+                id: request_id,
+                tool_name: str_of(r, "tool_name"),
+                tool_use_id: str_of(r, "tool_use_id"),
+                description: str_of(r, "description"),
+                input: r["input"].clone(),
+                suggestions: r["permission_suggestions"].as_array().cloned().unwrap_or_default(),
+            })]
+        }
+        Some("control_cancel_request") => vec![Event::PermissionCancelled(str_of(&v, "request_id"))],
         Some("result") => {
             let is_error = v["is_error"].as_bool().unwrap_or(false) || v.get("subtype").and_then(Value::as_str).is_some_and(|s| s != "success");
             let error = is_error.then(|| {
@@ -124,6 +195,31 @@ pub fn parse_line(line: &str) -> Vec<Event> {
         }
         _ => Vec::new(),
     }
+}
+
+/// The events in one line of a saved conversation (`~/.claude/projects/...jsonl`): what [`parse_line`] reads, plus what
+/// the user typed. Lines of side chats and of the program's own bookkeeping are left out.
+pub fn parse_transcript_line(line: &str) -> Vec<Event> {
+    let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { return Vec::new() };
+    if v["isSidechain"].as_bool().unwrap_or(false) || v["isMeta"].as_bool().unwrap_or(false) {
+        return Vec::new();
+    }
+    if v["type"] == "user" {
+        let content = &v["message"]["content"];
+        let typed = match content {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(blocks) if blocks.iter().all(|b| b["type"] == "text") && !blocks.is_empty() => Some(blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n")),
+            _ => None,
+        };
+        return match typed {
+            // Slash-command and hook bookkeeping is wrapped in tags and was never typed.
+            Some(text) if !text.trim_start().starts_with("<command-") && !text.trim_start().starts_with("<local-command") && !text.trim().is_empty() => vec![Event::UserText(text)],
+            Some(_) => Vec::new(),
+            None => parse_line(line),
+        };
+    }
+    // A saved turn has no partial text; only the finished blocks.
+    parse_line(line).into_iter().filter(|e| matches!(e, Event::Text(_) | Event::ToolUse { .. } | Event::ToolResult { .. })).collect()
 }
 
 /// A tool result is a string, or a list of `{type: text, text}` blocks.
@@ -144,7 +240,7 @@ pub enum Entry {
     /// Claude's words. `streaming` while they are still being written.
     Assistant { text: String, streaming: bool },
     /// A tool Claude used: what it did in a few words, the file it touched, and what came back.
-    Tool { id: String, name: String, summary: String, path: Option<String>, result: Option<String>, failed: bool },
+    Tool { id: String, name: String, summary: String, path: Option<String>, input: Value, result: Option<String>, failed: bool },
     /// Something the editor says (a refusal, an error).
     Notice(String),
 }
@@ -158,6 +254,8 @@ pub struct Conversation {
     /// A turn is running.
     pub busy: bool,
     pub cost_usd: f64,
+    /// Questions waiting for the user, oldest first.
+    pub pending: Vec<PermissionRequest>,
 }
 
 impl Conversation {
@@ -204,16 +302,22 @@ impl Conversation {
                     *streaming = false;
                 }
                 let (summary, path) = describe_tool(&name, &input);
-                self.entries.push(Entry::Tool { id, name, summary, path, result: None, failed: false });
+                self.entries.push(Entry::Tool { id, name, summary, path, input, result: None, failed: false });
             }
             Event::ToolResult { id, text, is_error } => {
                 if let Some(Entry::Tool { result, failed, .. }) = self.entries.iter_mut().rev().find(|e| matches!(e, Entry::Tool { id: i, .. } if *i == id)) {
-                    *result = Some(text);
+                    // A tool can return a whole file; the chat keeps the start of it.
+                    *result = Some(text.chars().take(MAX_RESULT_CHARS).collect());
                     *failed = is_error;
                 }
             }
+            Event::Permission(request) => self.pending.push(request),
+            Event::PermissionCancelled(id) => self.pending.retain(|r| r.id != id),
+            Event::Unsupported { .. } => {}
+            Event::UserText(text) => self.entries.push(Entry::User(strip_context(&text))),
             Event::Done { error, session_id, cost_usd, .. } => {
                 self.busy = false;
+                self.pending.clear();
                 if let Some(Entry::Assistant { streaming, .. }) = self.entries.last_mut() {
                     *streaming = false;
                 }
@@ -226,6 +330,17 @@ impl Conversation {
                 }
             }
         }
+    }
+}
+
+/// The longest tool result the chat keeps, in characters.
+const MAX_RESULT_CHARS: usize = 4000;
+
+/// A question as the user typed it: without the editor context [`compose_prompt`] put in front of it.
+pub fn strip_context(text: &str) -> String {
+    match text.strip_prefix("<editor_context>").and_then(|rest| rest.split_once("</editor_context>")) {
+        Some((_, question)) => question.trim_start().to_owned(),
+        None => text.to_owned(),
     }
 }
 
@@ -287,9 +402,12 @@ pub struct Options {
     pub resume: Option<String>,
 }
 
-/// The program's arguments for one turn. The question itself goes in on standard input.
+/// The program's arguments for one turn. The question itself goes in on standard input, as a JSON line.
 pub fn build_args(opts: &Options) -> Vec<String> {
-    let mut args: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", opts.mode.id()].map(String::from).to_vec();
+    // Streaming input, and the program asks this side (not a terminal) before it uses a tool the mode does not allow.
+    let mut args: Vec<String> = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio", "--permission-mode", opts.mode.id()]
+        .map(String::from)
+        .to_vec();
     if !opts.model.trim().is_empty() {
         args.extend(["--model".to_owned(), opts.model.trim().to_owned()]);
     }
@@ -312,6 +430,8 @@ pub enum Message {
 /// One running turn.
 pub struct Run {
     child: Arc<Mutex<Child>>,
+    /// Where answers to the program's questions go. Closed when the turn ends, which lets the program exit.
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
     rx: Receiver<Message>,
 }
 
@@ -327,13 +447,18 @@ pub fn start(opts: &Options, prompt: &str) -> Result<Run, String> {
         command.creation_flags(0x0800_0000);
     }
     let mut child = command.spawn().map_err(|e| format!("could not run {}: {e}", opts.binary.display()))?;
-    let mut stdin = child.stdin.take().ok_or("could not talk to Claude")?;
+    let stdin = child.stdin.take().ok_or("could not talk to Claude")?;
     let stdout = child.stdout.take().ok_or("could not read Claude's output")?;
     let stderr = child.stderr.take().ok_or("could not read Claude's errors")?;
-    let prompt = prompt.to_owned();
+    let stdin = Arc::new(Mutex::new(Some(stdin)));
     // The question can be long: write it from a thread so a full pipe never stalls the editor.
+    let first = stdin.clone();
+    let line = user_message(prompt);
     std::thread::spawn(move || {
-        let _ = stdin.write_all(prompt.as_bytes());
+        if let Some(pipe) = first.lock().ok().as_mut().and_then(|g| g.as_mut()) {
+            let _ = writeln!(pipe, "{line}");
+            let _ = pipe.flush();
+        }
     });
     let (tx, rx) = mpsc::channel();
     let child = Arc::new(Mutex::new(child));
@@ -347,18 +472,26 @@ pub fn start(opts: &Options, prompt: &str) -> Result<Run, String> {
         }
     });
     let waiter = child.clone();
+    let closer = stdin.clone();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             for event in parse_line(&line) {
+                let done = matches!(event, Event::Done { .. });
                 if tx.send(Message::Event(event)).is_err() {
                     return;
+                }
+                if done {
+                    // The turn is over: closing the input is how the program is told to finish.
+                    if let Ok(mut pipe) = closer.lock() {
+                        *pipe = None;
+                    }
                 }
             }
         }
         let code = waiter.lock().ok().and_then(|mut c| c.wait().ok()).and_then(|s| s.code());
         let _ = tx.send(Message::Exited(code));
     });
-    Ok(Run { child, rx })
+    Ok(Run { child, stdin, rx })
 }
 
 impl Run {
@@ -376,6 +509,22 @@ impl Run {
                 Err(TryRecvError::Disconnected) => return (out, true),
             }
         }
+    }
+
+    /// Answer one of the program's questions.
+    pub fn respond(&self, request_id: &str, decision: &Decision) -> Result<(), String> {
+        self.write_line(&control_response(request_id, decision))
+    }
+
+    /// Tell the program it cannot have what it asked for.
+    pub fn refuse(&self, request_id: &str, error: &str) -> Result<(), String> {
+        self.write_line(&control_error(request_id, error))
+    }
+
+    fn write_line(&self, line: &str) -> Result<(), String> {
+        let mut guard = self.stdin.lock().map_err(|_| "the connection to Claude is broken".to_owned())?;
+        let pipe = guard.as_mut().ok_or("Claude is no longer listening")?;
+        writeln!(pipe, "{line}").and_then(|_| pipe.flush()).map_err(|e| format!("could not answer Claude: {e}"))
     }
 
     /// Stop the program.
@@ -425,6 +574,190 @@ pub fn compose_prompt(question: &str, context: Option<&EditorContext>) -> String
     out
 }
 
+// ---- showing a change ----
+
+/// What a row of a diff is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowKind {
+    Same,
+    Add,
+    Del,
+    /// Lines left out between two changes.
+    Gap,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffRow {
+    pub kind: RowKind,
+    pub text: String,
+}
+
+/// The most rows of a diff kept for display.
+const MAX_DIFF_ROWS: usize = 400;
+
+/// The changed lines between `old` and `new` with `context` unchanged lines around each change.
+pub fn diff_rows(old: &str, new: &str, context: usize) -> Vec<DiffRow> {
+    use similar::{ChangeTag, TextDiff};
+    let diff = TextDiff::from_lines(old, new);
+    let mut rows = Vec::new();
+    for (gi, group) in diff.grouped_ops(context).iter().enumerate() {
+        if gi > 0 {
+            rows.push(DiffRow { kind: RowKind::Gap, text: String::new() });
+        }
+        for op in group {
+            for change in diff.iter_changes(op) {
+                let kind = match change.tag() {
+                    ChangeTag::Equal => RowKind::Same,
+                    ChangeTag::Insert => RowKind::Add,
+                    ChangeTag::Delete => RowKind::Del,
+                };
+                rows.push(DiffRow { kind, text: change.value().trim_end_matches(['\n', '\r']).to_owned() });
+            }
+        }
+        if rows.len() >= MAX_DIFF_ROWS {
+            rows.truncate(MAX_DIFF_ROWS);
+            break;
+        }
+    }
+    rows
+}
+
+/// How many lines were added and removed.
+pub fn diff_counts(rows: &[DiffRow]) -> (usize, usize) {
+    (rows.iter().filter(|r| r.kind == RowKind::Add).count(), rows.iter().filter(|r| r.kind == RowKind::Del).count())
+}
+
+/// Whether a tool changes a file's text.
+pub fn is_edit_tool(name: &str) -> bool {
+    matches!(name, "Edit" | "MultiEdit" | "Write")
+}
+
+/// The file as it would be after the tool ran on `before`. `None` when it cannot be told (a text to replace that is not
+/// there, a tool that is not an edit).
+pub fn edit_preview(before: &str, tool: &str, input: &Value) -> Option<String> {
+    let replace = |text: &str, edit: &Value| -> Option<String> {
+        let (old, new) = (edit["old_string"].as_str()?, edit["new_string"].as_str()?);
+        if old.is_empty() {
+            return Some(format!("{new}{text}"));
+        }
+        if !text.contains(old) {
+            return None;
+        }
+        Some(if edit["replace_all"].as_bool().unwrap_or(false) { text.replace(old, new) } else { text.replacen(old, new, 1) })
+    };
+    match tool {
+        "Write" => input["content"].as_str().map(str::to_owned),
+        "Edit" => replace(before, input),
+        "MultiEdit" => input["edits"].as_array()?.iter().try_fold(before.to_owned(), |text, edit| replace(&text, edit)),
+        _ => None,
+    }
+}
+
+/// A change drawn from the tool's own input, when the file as it was is not known (a saved conversation): the old text
+/// as removed lines and the new as added ones.
+pub fn input_diff(tool: &str, input: &Value) -> Vec<DiffRow> {
+    let pair = |old: &str, new: &str| diff_rows(old, new, 0);
+    match tool {
+        "Write" => pair("", input["content"].as_str().unwrap_or_default()),
+        "Edit" => pair(input["old_string"].as_str().unwrap_or_default(), input["new_string"].as_str().unwrap_or_default()),
+        "MultiEdit" => input["edits"].as_array().map(|edits| edits.iter().flat_map(|e| pair(e["old_string"].as_str().unwrap_or_default(), e["new_string"].as_str().unwrap_or_default())).collect()).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+// ---- saved conversations ----
+
+/// Claude Code's folder (`CLAUDE_CONFIG_DIR`, or `~/.claude`).
+pub fn claude_home() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(|h| PathBuf::from(h).join(".claude"))
+}
+
+/// The name of the folder that holds a project's conversations: its path with everything but letters and digits as `-`.
+pub fn project_dir_name(cwd: &Path) -> String {
+    cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+}
+
+/// One saved conversation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionInfo {
+    pub id: String,
+    /// What was first asked, in a few words.
+    pub title: String,
+    pub modified: std::time::SystemTime,
+    pub path: PathBuf,
+}
+
+/// The most conversations listed.
+const MAX_SESSIONS: usize = 40;
+
+/// The saved conversations of the project in `cwd`, newest first.
+pub fn list_sessions(cwd: &Path) -> Vec<SessionInfo> {
+    let Some(dir) = claude_home().map(|h| h.join("projects").join(project_dir_name(cwd))) else { return Vec::new() };
+    list_sessions_in(&dir)
+}
+
+/// The saved conversations in one project folder, newest first.
+pub fn list_sessions_in(dir: &Path) -> Vec<SessionInfo> {
+    let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut found: Vec<SessionInfo> = read
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+        .filter_map(|e| {
+            let path = e.path();
+            let modified = e.metadata().ok()?.modified().ok()?;
+            let title = first_question(&path)?;
+            Some(SessionInfo { id: path.file_stem()?.to_string_lossy().into_owned(), title, modified, path })
+        })
+        .collect();
+    found.sort_by(|a, b| b.modified.cmp(&a.modified));
+    // Continuing a conversation can leave the earlier file behind with the same opening question: keep the newest.
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|s| seen.insert(s.title.clone()));
+    found.truncate(MAX_SESSIONS);
+    found
+}
+
+/// The first thing the user asked in a saved conversation, shortened.
+fn first_question(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    for line in BufReader::new(file).lines().map_while(Result::ok).take(400) {
+        for event in parse_transcript_line(&line) {
+            if let Event::UserText(text) = event {
+                let text = strip_context(&text);
+                let first = text.lines().find(|l| !l.trim().is_empty())?.trim();
+                return Some(first.chars().take(80).collect());
+            }
+        }
+    }
+    None
+}
+
+/// A saved conversation, ready to show and to continue.
+pub fn load_session(path: &Path) -> Result<Conversation, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("could not open the conversation: {e}"))?;
+    let mut convo = Conversation { session_id: path.file_stem().map(|s| s.to_string_lossy().into_owned()), ..Default::default() };
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        for event in parse_transcript_line(&line) {
+            convo.apply(event);
+        }
+    }
+    Ok(convo)
+}
+
+/// "3 min ago", for the conversation list.
+pub fn ago(then: std::time::SystemTime, now: std::time::SystemTime) -> String {
+    let secs = now.duration_since(then).map(|d| d.as_secs()).unwrap_or(0);
+    match secs {
+        0..=59 => "just now".to_owned(),
+        60..=3599 => format!("{} min ago", secs / 60),
+        3600..=86_399 => format!("{} h ago", secs / 3600),
+        _ => format!("{} d ago", secs / 86_400),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -460,7 +793,7 @@ mod tests {
         assert_eq!(c.entries[0], Entry::User("what is in a.txt?".into()));
         assert_eq!(
             c.entries[1],
-            Entry::Tool { id: "t1".into(), name: "Read".into(), summary: "/p/a.txt".into(), path: Some("/p/a.txt".into()), result: Some("1\thello".into()), failed: false }
+            Entry::Tool { id: "t1".into(), name: "Read".into(), summary: "/p/a.txt".into(), path: Some("/p/a.txt".into()), input: json!({"file_path": "/p/a.txt"}), result: Some("1\thello".into()), failed: false }
         );
         // The streamed pieces and the finished block are one answer, not two.
         assert_eq!(c.entries[2], Entry::Assistant { text: "a.txt has hello.".into(), streaming: false });
@@ -526,6 +859,7 @@ mod tests {
         let mut o = Options { binary: "claude".into(), cwd: ".".into(), mode: PermissionMode::AcceptEdits, model: String::new(), resume: None };
         let a = build_args(&o);
         assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
+        assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]) && a.windows(2).any(|w| w == ["--input-format", "stream-json"]));
         assert!(a.contains(&"--include-partial-messages".to_owned()) && !a.contains(&"--resume".to_owned()) && !a.contains(&"--model".to_owned()));
         o.resume = Some("abc".into());
         o.model = " sonnet ".into();
@@ -539,7 +873,7 @@ mod tests {
             assert_eq!(PermissionMode::from_id(m.id()), Some(m));
         }
         assert_eq!(PermissionMode::from_id("bogus"), None);
-        assert_eq!(PermissionMode::ReadOnly.next().next().next(), PermissionMode::ReadOnly);
+        assert_eq!(PermissionMode::Ask.next().next().next(), PermissionMode::Ask);
     }
 
     #[test]
@@ -563,11 +897,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("forge-claude-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("claude");
-        let body = format!("#!/bin/sh\ncat > \"{0}/prompt.txt\"\necho '{1}'\necho '{2}'\necho '{3}'\necho oops >&2\n", dir.display(), INIT, FINAL, DONE);
+        let body = format!("#!/bin/sh\nread -r line\necho \"$line\" > \"{0}/prompt.txt\"\necho '{1}'\necho '{2}'\necho '{3}'\necho oops >&2\n", dir.display(), INIT, FINAL, DONE);
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::ReadOnly, model: String::new(), resume: None };
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), resume: None };
         let mut run = start(&opts, "hello there").unwrap();
         let mut convo = Conversation::default();
         convo.ask("hello there");
@@ -590,7 +924,179 @@ mod tests {
         assert_eq!(stderr, vec!["oops".to_owned()]);
         assert!(!convo.busy);
         assert_eq!(convo.entries.last(), Some(&Entry::Assistant { text: "a.txt has hello.".into(), streaming: false }));
-        assert_eq!(std::fs::read_to_string(dir.join("prompt.txt")).unwrap(), "hello there");
+        // The question went in as one JSON line.
+        let sent: Value = serde_json::from_str(std::fs::read_to_string(dir.join("prompt.txt")).unwrap().trim()).unwrap();
+        assert_eq!((sent["type"].as_str(), sent["message"]["content"].as_str()), (Some("user"), Some("hello there")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const ASK_WRITE: &str = r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Write","display_name":"Write","input":{"file_path":"/p/a.txt","content":"hi\n"},"description":"a.txt","permission_suggestions":[{"type":"setMode","mode":"acceptEdits","destination":"session"}],"tool_use_id":"t9"}}"#;
+
+    #[test]
+    fn a_permission_request_is_read_kept_and_cleared() {
+        let mut c = Conversation::default();
+        c.ask("write it");
+        feed(&mut c, &[ASK_WRITE]);
+        let [r] = c.pending.as_slice() else { panic!("{:?}", c.pending) };
+        assert_eq!((r.id.as_str(), r.tool_name.as_str(), r.tool_use_id.as_str(), r.description.as_str()), ("r1", "Write", "t9", "a.txt"));
+        assert_eq!(r.input["content"], "hi\n");
+        assert_eq!(r.suggestions, vec![json!({"type": "setMode", "mode": "acceptEdits", "destination": "session"})]);
+        // The tool call being abandoned withdraws the question.
+        feed(&mut c, &[r#"{"type":"control_cancel_request","request_id":"r1"}"#]);
+        assert!(c.pending.is_empty());
+        // A finished turn leaves no question open.
+        feed(&mut c, &[ASK_WRITE, DONE]);
+        assert!(c.pending.is_empty() && !c.busy);
+        // A request of another kind is not a question for the user.
+        let other = parse_line(r#"{"type":"control_request","request_id":"r2","request":{"subtype":"hook_callback"}}"#);
+        assert_eq!(other, vec![Event::Unsupported { request_id: "r2".into() }]);
+    }
+
+    #[test]
+    fn answers_are_written_in_the_programs_protocol() {
+        let allow: Value = serde_json::from_str(&control_response("r1", &Decision::Allow { input: json!({"a": 1}), permissions: vec![] })).unwrap();
+        assert_eq!(allow, json!({"type": "control_response", "response": {"subtype": "success", "request_id": "r1", "response": {"behavior": "allow", "updatedInput": {"a": 1}}}}));
+        let keep: Value = serde_json::from_str(&control_response("r1", &Decision::Allow { input: json!({}), permissions: vec![json!({"type": "setMode"})] })).unwrap();
+        assert_eq!(keep["response"]["response"]["updatedPermissions"], json!([{"type": "setMode"}]));
+        let deny: Value = serde_json::from_str(&control_response("r1", &Decision::Deny { message: "no".into() })).unwrap();
+        assert_eq!(deny["response"]["response"], json!({"behavior": "deny", "message": "no"}));
+        let err: Value = serde_json::from_str(&control_error("r2", "unsupported")).unwrap();
+        assert_eq!((err["response"]["subtype"].as_str(), err["response"]["request_id"].as_str()), (Some("error"), Some("r2")));
+        assert!(!control_response("r", &Decision::Deny { message: "a\nb".into() }).contains('\n'), "one line per message");
+    }
+
+    #[test]
+    fn edits_are_previewed_before_they_happen() {
+        let before = "one\ntwo\nthree\n";
+        assert_eq!(edit_preview(before, "Edit", &json!({"old_string": "two", "new_string": "2"})).as_deref(), Some("one\n2\nthree\n"));
+        assert_eq!(edit_preview("a a a", "Edit", &json!({"old_string": "a", "new_string": "b"})).as_deref(), Some("b a a"));
+        assert_eq!(edit_preview("a a a", "Edit", &json!({"old_string": "a", "new_string": "b", "replace_all": true})).as_deref(), Some("b b b"));
+        assert_eq!(edit_preview(before, "Edit", &json!({"old_string": "zzz", "new_string": "y"})), None);
+        assert_eq!(edit_preview("x y", "MultiEdit", &json!({"edits": [{"old_string": "x", "new_string": "1"}, {"old_string": "y", "new_string": "2"}]})).as_deref(), Some("1 2"));
+        assert_eq!(edit_preview("old", "Write", &json!({"content": "new"})).as_deref(), Some("new"));
+        assert_eq!(edit_preview(before, "Bash", &json!({})), None);
+        assert!(is_edit_tool("Edit") && is_edit_tool("Write") && !is_edit_tool("Read"));
+    }
+
+    #[test]
+    fn a_diff_shows_the_change_with_context_and_gaps() {
+        let old: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+        let new = old.replace("line 3\n", "three\n").replace("line 18\n", "eighteen\nextra\n");
+        let rows = diff_rows(&old, &new, 1);
+        let kinds: Vec<RowKind> = rows.iter().map(|r| r.kind).collect();
+        assert!(kinds.contains(&RowKind::Gap), "two far-apart changes are two groups: {rows:?}");
+        assert_eq!(diff_counts(&rows), (3, 2));
+        assert!(rows.contains(&DiffRow { kind: RowKind::Del, text: "line 3".into() }) && rows.contains(&DiffRow { kind: RowKind::Add, text: "eighteen".into() }));
+        assert!(!rows.iter().any(|r| r.text == "line 10"), "unchanged lines far from a change are left out");
+        assert!(diff_rows("same\n", "same\n", 3).is_empty());
+        // From the tool's own input, when the file is not known.
+        assert_eq!(diff_counts(&input_diff("Edit", &json!({"old_string": "a\nb", "new_string": "c"}))), (1, 2));
+        assert_eq!(diff_counts(&input_diff("Write", &json!({"content": "x\ny\n"}))), (2, 0));
+        assert!(input_diff("Bash", &json!({})).is_empty());
+    }
+
+    #[test]
+    fn a_saved_conversation_is_replayed() {
+        let lines = [
+            r#"{"type":"queue-operation","sessionId":"s"}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<editor_context>\nThe user has a.rs open in their editor.\n</editor_context>\n\nwhat is this?"},"sessionId":"s"}"#,
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/x</command-name>"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/p/a.rs"}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"tool_use_id":"t1","type":"tool_result","content":"fn x() {}"}]}}"#,
+            r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"side chat"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"It is a function."}]}}"#,
+            r#"{"type":"attachment"}"#,
+            r#"{"type":"last-prompt"}"#,
+        ];
+        let mut c = Conversation::default();
+        for l in lines {
+            for e in parse_transcript_line(l) {
+                c.apply(e);
+            }
+        }
+        assert_eq!(c.entries.len(), 3, "{:?}", c.entries);
+        assert_eq!(c.entries[0], Entry::User("what is this?".into()), "the editor context was not typed");
+        assert!(matches!(&c.entries[1], Entry::Tool { name, result: Some(r), .. } if name == "Read" && r == "fn x() {}"));
+        assert_eq!(c.entries[2], Entry::Assistant { text: "It is a function.".into(), streaming: false });
+        assert_eq!(strip_context("plain"), "plain");
+    }
+
+    #[test]
+    fn conversations_of_a_project_are_listed_newest_first_and_loaded() {
+        assert_eq!(project_dir_name(Path::new("/home/me/my project/a.b")), "-home-me-my-project-a-b");
+        let dir = std::env::temp_dir().join(format!("forge-claude-sessions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, question: &str| {
+            let text = format!("{{\"type\":\"queue-operation\"}}\n{{\"type\":\"user\",\"message\":{{\"content\":\"{question}\"}}}}\n{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"ok\"}}]}}}}\n");
+            std::fs::write(dir.join(name), text).unwrap();
+        };
+        write("old.jsonl", "first question");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        write("new.jsonl", "second question");
+        std::fs::write(dir.join("empty.jsonl"), "{\"type\":\"attachment\"}\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "x").unwrap();
+        let list = list_sessions_in(&dir);
+        assert_eq!(list.iter().map(|s| (s.id.as_str(), s.title.as_str())).collect::<Vec<_>>(), vec![("new", "second question"), ("old", "first question")]);
+        let c = load_session(&list[0].path).unwrap();
+        assert_eq!((c.session_id.as_deref(), c.entries.len()), (Some("new"), 2));
+        assert!(load_session(&dir.join("missing.jsonl")).is_err());
+        assert!(list_sessions_in(&dir.join("nope")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let now = std::time::SystemTime::now();
+        assert_eq!(ago(now, now), "just now");
+        assert_eq!(ago(now - std::time::Duration::from_secs(300), now), "5 min ago");
+        assert_eq!(ago(now - std::time::Duration::from_secs(7200), now), "2 h ago");
+        assert_eq!(ago(now - std::time::Duration::from_secs(3 * 86_400), now), "3 d ago");
+    }
+
+    /// The question and answer cross the pipe both ways while the program waits.
+    #[cfg(unix)]
+    #[test]
+    fn a_permission_is_asked_and_answered_while_the_turn_runs() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("forge-claude-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("claude");
+        let body = format!("#!/bin/sh\nread -r first\nprintf '%s\\n' '{0}'\nread -r answer\nprintf '%s\\n' \"$answer\" > \"{1}/answer.txt\"\nprintf '%s\\n' '{2}'\nread -r more || echo closed > \"{1}/closed.txt\"\n", ASK_WRITE, dir.display(), DONE);
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), resume: None };
+        let mut run = start(&opts, "write it").unwrap();
+        let mut convo = Conversation::default();
+        convo.ask("write it");
+        let mut answered = false;
+        let mut exited = false;
+        for _ in 0..400 {
+            let (messages, ended) = run.poll();
+            for m in messages {
+                match m {
+                    Message::Event(e) => convo.apply(e),
+                    Message::Exited(_) => exited = true,
+                    Message::Stderr(_) => {}
+                }
+            }
+            if !answered {
+                if let Some(request) = convo.pending.first().cloned() {
+                    run.respond(&request.id, &Decision::Allow { input: request.input.clone(), permissions: request.suggestions.clone() }).unwrap();
+                    convo.pending.clear();
+                    answered = true;
+                }
+            }
+            if ended {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(answered && exited && !convo.busy);
+        let got: Value = serde_json::from_str(std::fs::read_to_string(dir.join("answer.txt")).unwrap().trim()).unwrap();
+        assert_eq!(got["response"]["request_id"], "r1");
+        assert_eq!(got["response"]["response"]["behavior"], "allow");
+        assert_eq!(got["response"]["response"]["updatedInput"]["content"], "hi\n");
+        // When the turn ended the input was closed, so the program could finish.
+        assert_eq!(std::fs::read_to_string(dir.join("closed.txt")).unwrap().trim(), "closed");
+        assert!(run.respond("r1", &Decision::Deny { message: "late".into() }).is_err(), "nobody is listening after the turn");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

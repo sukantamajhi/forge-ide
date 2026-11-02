@@ -1,9 +1,10 @@
 //! The Claude chat in the side bar: ask about the code, let Claude read and change it. It drives the `claude`
 //! program (see `forge_core::claude`), so it uses the user's own Claude Code sign-in and settings.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use forge_core::claude::{self, Conversation, EditorContext, Entry, Message, Options, PermissionMode, Run};
+use forge_core::claude::{self, Conversation, Decision, DiffRow, EditorContext, Entry, Event, Message, Options, PermissionMode, PermissionRequest, Run, SessionInfo};
 use forge_core::commands::Command;
 use forge_core::markdown::{self, Block};
 use forge_core::input::Outcome;
@@ -29,6 +30,19 @@ pub(crate) struct ClaudeState {
     pub blocks: Vec<(usize, Vec<Block>)>,
     /// The program's recent error output, shown if it dies without an answer.
     pub stderr: Vec<String>,
+    /// Each edit tool call's file as it was just before the call: `tool call id -> (file, text)`.
+    pub snapshots: HashMap<String, (PathBuf, String)>,
+    /// What each finished edit changed: `tool call id -> rows`.
+    pub diffs: HashMap<String, Vec<DiffRow>>,
+    /// What each question about an edit would change: `request id -> rows`.
+    pub previews: HashMap<String, Vec<DiffRow>>,
+    /// The edits whose diff is open in the chat.
+    pub expanded: HashSet<String>,
+    /// The saved conversations of this project, and whether they are listed instead of the chat.
+    pub history: Vec<SessionInfo>,
+    pub show_history: bool,
+    /// The options picked so far for the questions Claude asks: `question text -> labels`.
+    pub answers: HashMap<String, Vec<String>>,
 }
 
 impl Default for ClaudeState {
@@ -43,6 +57,13 @@ impl Default for ClaudeState {
             scroll: ScrollHandle::new(),
             blocks: Vec::new(),
             stderr: Vec::new(),
+            snapshots: HashMap::new(),
+            diffs: HashMap::new(),
+            previews: HashMap::new(),
+            expanded: HashSet::new(),
+            history: Vec::new(),
+            show_history: false,
+            answers: HashMap::new(),
         }
     }
 }
@@ -56,6 +77,21 @@ impl Workspace {
         self.sidebar_view = SidebarView::Claude;
         self.focus = Focus::Claude;
         let _ = self.claude_binary();
+        if self.claude.convo.entries.is_empty() {
+            self.claude.history = claude::list_sessions(self.root());
+        }
+    }
+
+    /// Drop what belongs to the conversation that is leaving the screen.
+    fn claude_forget_details(&mut self) {
+        let c = &mut self.claude;
+        c.blocks.clear();
+        c.stderr.clear();
+        c.snapshots.clear();
+        c.diffs.clear();
+        c.previews.clear();
+        c.expanded.clear();
+        c.answers.clear();
     }
 
     /// The `claude` program, looked up until it is found (so installing it needs no restart).
@@ -69,8 +105,8 @@ impl Workspace {
     pub fn claude_new_chat(&mut self) {
         self.claude_stop();
         self.claude.convo.clear();
-        self.claude.blocks.clear();
-        self.claude.stderr.clear();
+        self.claude_forget_details();
+        self.claude.show_history = false;
         self.open_claude();
     }
 
@@ -105,7 +141,8 @@ impl Workspace {
     /// The open file and the selected text.
     fn claude_context(&self) -> EditorContext {
         let (Some(doc), Some(view)) = (self.active_doc(), self.active_view()) else { return EditorContext::default() };
-        if doc.untitled || doc.path.as_os_str().is_empty() {
+        // Only a real file on disk: not an untitled tab, a diff or another page made by the editor.
+        if doc.untitled || !doc.path.is_file() {
             return EditorContext::default();
         }
         let file = claude::display_path(&doc.path.to_string_lossy(), self.root());
@@ -160,7 +197,8 @@ impl Workspace {
         for message in messages {
             match message {
                 Message::Event(event) => {
-                    finished |= matches!(event, claude::Event::Done { .. });
+                    finished |= matches!(event, Event::Done { .. });
+                    self.claude_note_event(&event);
                     self.claude.convo.apply(event);
                 }
                 Message::Stderr(line) => {
@@ -176,20 +214,68 @@ impl Workspace {
             if self.claude.convo.busy {
                 // It ended without saying it was done: it could not start, or it was killed.
                 self.claude.convo.busy = false;
+                self.claude.convo.pending.clear();
                 let why = self.claude.stderr.join("\n");
                 self.claude.convo.notice(if why.trim().is_empty() { "Claude stopped without an answer.".to_owned() } else { why });
                 finished = true;
             }
         }
         if finished {
-            self.claude_explain_refusals();
             self.claude_after_turn();
         }
+        self.claude_finish_diffs();
         self.claude_refresh_blocks();
-        if follow || finished {
+        if follow || finished || !self.claude.convo.pending.is_empty() {
             self.scroll_claude_to_bottom();
         }
         true
+    }
+
+    /// What to remember of an event before it is folded into the chat: a file as it was before an edit, what an edit
+    /// would change, and a polite refusal of requests this chat does not know.
+    fn claude_note_event(&mut self, event: &Event) {
+        match event {
+            Event::ToolUse { id, name, input } if claude::is_edit_tool(name) => {
+                if let Some(path) = input["file_path"].as_str() {
+                    self.claude.snapshots.insert(id.clone(), (PathBuf::from(path), read_text(path).unwrap_or_default()));
+                }
+            }
+            Event::Permission(request) if claude::is_edit_tool(&request.tool_name) => {
+                let before = self.claude.snapshots.get(&request.tool_use_id).map(|(_, t)| t.clone()).or_else(|| request.input["file_path"].as_str().and_then(read_text)).unwrap_or_default();
+                let rows = match claude::edit_preview(&before, &request.tool_name, &request.input) {
+                    Some(after) => claude::diff_rows(&before, &after, 3),
+                    None => claude::input_diff(&request.tool_name, &request.input),
+                };
+                self.claude.previews.insert(request.id.clone(), rows);
+            }
+            Event::Unsupported { request_id } => {
+                if let Some(run) = &self.claude.run {
+                    let _ = run.refuse(request_id, "this chat does not support that request");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Work out what each edit that has just finished changed, from the file before and after.
+    fn claude_finish_diffs(&mut self) {
+        let done: Vec<(String, String)> = self
+            .claude
+            .convo
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Tool { id, name, result: Some(_), failed: false, .. } if claude::is_edit_tool(name) && !self.claude.diffs.contains_key(id) => Some((id.clone(), name.clone())),
+                _ => None,
+            })
+            .collect();
+        for (id, _) in done {
+            let Some((path, before)) = self.claude.snapshots.get(&id).cloned() else { continue };
+            // The file on disk is what Claude wrote, not an unsaved copy in the editor.
+            if let Some(after) = read_text(&path.to_string_lossy()) {
+                self.claude.diffs.insert(id, claude::diff_rows(&before, &after, 3));
+            }
+        }
     }
 
     /// Claude changed files, perhaps: show them as they are now.
@@ -199,18 +285,120 @@ impl Workspace {
         self.git_request_refresh();
     }
 
-    /// In read-only mode a refused edit is the expected outcome: say how to allow it.
-    fn claude_explain_refusals(&mut self) {
-        if self.claude.mode != PermissionMode::ReadOnly {
+    // ---- answering Claude ----
+
+    /// Answer the question `id` and let the turn go on.
+    pub(crate) fn claude_decide(&mut self, id: &str, decision: Decision) {
+        let Some(run) = &self.claude.run else { return };
+        if let Err(error) = run.respond(id, &decision) {
+            self.claude.convo.notice(error);
+        }
+        self.claude.convo.pending.retain(|r| r.id != id);
+        self.claude.previews.remove(id);
+    }
+
+    /// Allow what Claude asked, as asked; with `remember`, also keep the rule change it offered (such as accepting all
+    /// edits for the rest of the conversation).
+    pub(crate) fn claude_allow(&mut self, request: &PermissionRequest, remember: bool) {
+        let permissions = if remember { request.suggestions.clone() } else { Vec::new() };
+        if remember && request.suggestions.iter().any(|s| s["mode"] == "acceptEdits") {
+            self.claude.mode = PermissionMode::AcceptEdits;
+        }
+        self.claude_decide(&request.id, Decision::Allow { input: request.input.clone(), permissions });
+    }
+
+    pub(crate) fn claude_deny(&mut self, request: &PermissionRequest, message: &str) {
+        self.claude_decide(&request.id, Decision::Deny { message: message.to_owned() });
+    }
+
+    /// The plan is approved; with `auto_accept`, Claude may then edit without asking.
+    pub(crate) fn claude_approve_plan(&mut self, request: &PermissionRequest, auto_accept: bool) {
+        let permissions = if auto_accept { vec![serde_json::json!({ "type": "setMode", "mode": "acceptEdits", "destination": "session" })] } else { Vec::new() };
+        self.claude.mode = if auto_accept { PermissionMode::AcceptEdits } else { PermissionMode::Ask };
+        self.claude_decide(&request.id, Decision::Allow { input: request.input.clone(), permissions });
+    }
+
+    /// An option picked for one of Claude's questions. Once every question has an answer they are sent.
+    pub(crate) fn claude_pick(&mut self, request: &PermissionRequest, question: &str, label: &str, multi: bool) {
+        let picked = self.claude.answers.entry(question.to_owned()).or_default();
+        if multi {
+            match picked.iter().position(|l| l == label) {
+                Some(i) => {
+                    picked.remove(i);
+                }
+                None => picked.push(label.to_owned()),
+            }
             return;
         }
-        let asked_at = self.claude.convo.entries.iter().rposition(|e| matches!(e, Entry::User(_))).unwrap_or(0);
-        let refused = self.claude.convo.entries[asked_at..].iter().any(|e| {
-            matches!(e, Entry::Tool { name, failed: true, result: Some(r), .. }
-                if matches!(name.as_str(), "Edit" | "MultiEdit" | "Write" | "NotebookEdit" | "Bash") && r.to_ascii_lowercase().contains("permission"))
-        });
-        if refused {
-            self.claude.convo.notice("Claude needed permission to change files or run commands. Change the mode above the question box (Shift+Tab) to \"Edit automatically\" and ask again.");
+        *picked = vec![label.to_owned()];
+        let questions = request.input["questions"].as_array().cloned().unwrap_or_default();
+        let single_only = questions.iter().all(|q| !q["multiSelect"].as_bool().unwrap_or(false));
+        if single_only && questions.iter().all(|q| q["question"].as_str().is_some_and(|t| self.claude.answers.get(t).is_some_and(|a| !a.is_empty()))) {
+            self.claude_send_answers(request);
+        }
+    }
+
+    /// Send the picked options as the answer to Claude's questions.
+    pub(crate) fn claude_send_answers(&mut self, request: &PermissionRequest) {
+        let answers: serde_json::Map<String, serde_json::Value> = request.input["questions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|q| q["question"].as_str())
+            .map(|q| (q.to_owned(), serde_json::Value::String(self.claude.answers.get(q).map(|a| a.join(", ")).unwrap_or_default())))
+            .collect();
+        let mut input = request.input.clone();
+        input["answers"] = serde_json::Value::Object(answers);
+        self.claude.answers.clear();
+        self.claude_decide(&request.id, Decision::Allow { input, permissions: Vec::new() });
+    }
+
+    // ---- diffs ----
+
+    /// Open a tab with the side-by-side diff of what an edit changed.
+    pub(crate) fn claude_open_diff(&mut self, tool_id: &str, cx: &mut Context<Self>) {
+        let Some((path, before)) = self.claude.snapshots.get(tool_id).cloned() else {
+            self.set_status("The file as it was before this edit is not kept (it is from an earlier session)");
+            return;
+        };
+        let after = read_text(&path.to_string_lossy()).unwrap_or_default();
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let text = forge_core::git::diff_texts(&before, &after, &name, &name);
+        if text.is_empty() {
+            self.set_status("This edit left the file unchanged");
+            return;
+        }
+        self.open_virtual(&format!("claude:{tool_id}"), &format!("{name} (Claude)"), &text, true, cx);
+    }
+
+    pub(crate) fn claude_toggle_diff(&mut self, tool_id: &str) {
+        if !self.claude.expanded.remove(tool_id) {
+            self.claude.expanded.insert(tool_id.to_owned());
+        }
+    }
+
+    // ---- history ----
+
+    pub(crate) fn claude_toggle_history(&mut self) {
+        self.claude.show_history = !self.claude.show_history;
+        if self.claude.show_history {
+            self.claude.history = claude::list_sessions(self.root());
+        }
+    }
+
+    /// Show a saved conversation and carry on from it with the next question.
+    pub(crate) fn claude_resume(&mut self, session: &SessionInfo) {
+        match claude::load_session(&session.path) {
+            Ok(convo) => {
+                self.claude_stop();
+                self.claude_forget_details();
+                self.claude.convo = convo;
+                self.claude.show_history = false;
+                self.claude_refresh_blocks();
+                self.focus = Focus::Claude;
+                self.scroll_claude_to_bottom();
+            }
+            Err(error) => self.set_status(error),
         }
     }
 
@@ -331,12 +519,22 @@ impl Workspace {
                     .flex()
                     .flex_row()
                     .gap_0p5()
+                    .child(icon_button("claude-history", crate::codicons::HISTORY, "Past Conversations", Command::ClaudeHistory, true, cx))
                     .child(icon_button("claude-stop", crate::codicons::DEBUG_STOP, "Stop", Command::ClaudeStop, busy, cx))
                     .child(icon_button("claude-new", crate::codicons::ADD, "New Conversation", Command::ClaudeNewChat, true, cx)),
             );
 
         let empty = c.convo.entries.is_empty();
         let mut list = div().id("claude-scroll").flex().flex_col().gap_3().px_3().pb_2().flex_1().min_h_0().overflow_y_scroll().track_scroll(&c.scroll);
+        if c.show_history {
+            list = list.child(div().text_xs().text_color(rgb(t.dim)).child("PAST CONVERSATIONS"));
+            list = if c.history.is_empty() {
+                list.child(div().text_sm().text_color(rgb(t.dim)).child("Nothing yet. Conversations in this folder are saved by Claude Code and appear here."))
+            } else {
+                list.child(self.render_claude_history(&c.history, cx))
+            };
+            return self.claude_frame(header, list, cx);
+        }
         if empty {
             let missing = self.claude.binary.is_none() && claude::find_claude(&self.settings.claude_path).is_none();
             list = list.child(
@@ -348,15 +546,22 @@ impl Workspace {
                     .text_sm()
                     .text_color(rgb(t.dim))
                     .child(div().text_color(rgb(t.text)).font_weight(FontWeight::SEMIBOLD).child("Ask Claude about this project"))
-                    .child("It can read your files, search the code, and with \"Edit automatically\" change them. The open file and your selection go along with each question.")
+                    .child("It can read your files, search the code, and change them: you are asked before each edit or command. The open file and your selection go along with each question.")
                     .child("Alt+K adds the selection to the question as a reference.")
                     .when(missing, |d| d.child(div().text_color(rgb(t.warning)).child(INSTALL_HINT))),
             );
+            if !c.history.is_empty() {
+                list = list
+                    .child(div().text_xs().text_color(rgb(t.dim)).child("RECENT"))
+                    .child(self.render_claude_history(&c.history[..c.history.len().min(5)], cx));
+            }
         }
         for (ix, entry) in c.convo.entries.iter().enumerate() {
             list = list.child(self.render_claude_entry(ix, entry, cx));
         }
-        if busy {
+        if let Some(request) = c.convo.pending.first() {
+            list = list.child(self.render_claude_permission(request, cx));
+        } else if busy {
             list = list.child(div().text_xs().text_color(rgb(t.dim)).child("Claude is working...  (Esc to stop)"));
         }
 
@@ -377,7 +582,7 @@ impl Workspace {
             .border_1()
             .border_color(rgb(t.border))
             .text_xs()
-            .text_color(rgb(if c.mode == PermissionMode::ReadOnly { t.dim } else { t.warning }))
+            .text_color(rgb(if c.mode == PermissionMode::Ask { t.dim } else { t.warning }))
             .cursor_pointer()
             .hover(|s| s.bg(rgb(t.border)))
             .tooltip(self.tooltip("Change what Claude may do without asking", Some(Command::ClaudeCycleMode)))
@@ -433,6 +638,16 @@ impl Workspace {
             .child(crate::icons::glyph(crate::codicons::SEND, 1.0, if send_enabled { t.text } else { t.dim }));
         let input = self.render_text_area(AreaId::Claude, Focus::Claude, "claude-input", "Ask Claude...", vec![send.into_any_element()], 26.0, cx);
 
+        self.claude_frame_with_input(header, list, chip, context_chip, input)
+    }
+
+    /// The panel with only a list in it (no question box): the past conversations.
+    fn claude_frame(&self, header: impl IntoElement, list: impl IntoElement, _cx: &mut Context<Self>) -> AnyElement {
+        div().flex().flex_col().flex_1().min_h_0().child(header).child(list).into_any_element()
+    }
+
+    fn claude_frame_with_input(&self, header: impl IntoElement, list: impl IntoElement, chip: impl IntoElement, context_chip: Option<impl IntoElement>, input: impl IntoElement) -> AnyElement {
+        let t = &self.theme;
         div()
             .flex()
             .flex_col()
@@ -512,50 +727,18 @@ impl Workspace {
                     )
                     .into_any_element()
             }
-            Entry::Tool { name, summary, path, result, failed, .. } => {
-                let icon = match name.as_str() {
-                    "Read" => crate::codicons::EYE,
-                    "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => crate::codicons::EDIT,
-                    "Bash" => crate::codicons::TERMINAL,
-                    "Grep" | "Glob" => crate::codicons::SEARCH,
-                    "WebFetch" | "WebSearch" => crate::codicons::GLOBE,
-                    _ => crate::codicons::TOOLS,
-                };
-                let shown = match path {
-                    Some(p) => claude::display_path(p, self.root()),
-                    None => summary.clone(),
-                };
-                let open = path.clone().map(PathBuf::from);
-                let color = if *failed { t.error } else { t.dim };
-                let detail = (*failed).then(|| result.clone()).flatten().map(|r| r.lines().next().unwrap_or_default().chars().take(160).collect::<String>());
-                div()
-                    .flex()
-                    .flex_col()
-                    .w_full()
-                    .child(
-                        div()
-                            .id(("claude-tool", ix))
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1()
-                            .text_xs()
-                            .text_color(rgb(color))
-                            .when(open.is_some(), |d| d.cursor_pointer().hover(|s| s.text_color(rgb(t.text))))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(path) = &open {
-                                    this.open_file(path, None, cx);
-                                    cx.notify();
-                                }
-                            }))
-                            .child(crate::icons::glyph(icon, 0.875, color))
-                            .child(div().flex_none().font_weight(FontWeight::MEDIUM).child(name.clone()))
-                            .child(div().min_w_0().flex_1().overflow_hidden().whitespace_nowrap().child(shown)),
-                    )
-                    .children(detail.map(|d| div().pl_4().text_xs().text_color(rgb(t.error)).child(d)))
-                    .into_any_element()
-            }
+            Entry::Tool { .. } => self.render_claude_tool(ix, entry, cx),
             Entry::Notice(text) => div().w_full().text_xs().text_color(rgb(t.warning)).child(text.clone()).into_any_element(),
         }
     }
+}
+
+/// A file's text, when it is there and is text of a sensible size.
+fn read_text(path: &str) -> Option<String> {
+    const LIMIT: u64 = 2_000_000;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > LIMIT {
+        return None;
+    }
+    String::from_utf8(std::fs::read(path).ok()?).ok()
 }
