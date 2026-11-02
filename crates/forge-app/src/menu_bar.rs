@@ -181,6 +181,7 @@ impl Workspace {
                 c("Search", FindInFiles),
                 c("Source Control", ShowGit),
                 c("Extensions", ShowExtensions),
+                c("Claude", ShowClaude),
                 sep(),
                 c("Problems", ShowProblems),
                 c("Terminal", ToggleTerminal),

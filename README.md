@@ -309,6 +309,18 @@ Message with AI`). Forge fills the message box with a one-line subject you can e
   with thinking turned off for 2.5 Flash and Flash-Lite and set to low for models that cannot turn it off (2.5 Pro, Gemini 3).
   If a model still runs out of tokens, the message says so; pick a model that thinks less.
 
+## Claude
+
+The Claude tab in the side bar (**Ctrl+Alt+C**, or View, Claude) is a chat with [Claude Code](https://docs.claude.com/claude-code), like its VS Code extension. It runs the `claude` program headless in your project folder (`claude -p --output-format stream-json`), so it uses your own Claude Code sign-in and settings. Install the program and sign in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`).
+
+- Answers stream in as Markdown. The tools Claude uses (Read, Edit, Bash...) show as rows; click one to open its file.
+- The open file and your selection go along with each question (click the chip under the chat to leave it out). **Alt+K** (Claude: Ask About Selection) adds an `@file#L1-9` reference to the question.
+- **Enter** sends, **Shift+Enter** adds a line, **Esc** stops a running answer, **Shift+Tab** changes the mode. A conversation continues until you start a new one (the + button).
+- Open files that Claude changed reload by themselves, and the Explorer and Source Control refresh when an answer ends.
+- The chat runs without a terminal, so Claude cannot stop and ask permission in the middle of an answer. The mode says what it may do: **Read only** (the default: read and search; edits and commands are refused), **Edit automatically** (also changes files; commands are still refused) or **Plan mode** (looks and proposes, changes nothing).
+
+Settings (`settings.json`): `claude.permissionMode` (`default`, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name; empty is Claude Code's own choice) and `claude.path` (the program, when it is not on the PATH).
+
 ## Icons
 
 The icons are VS Code's **Codicons** (`@vscode/codicons` 0.0.46-24, © Microsoft, icons under CC BY 4.0, code under MIT). The font is
