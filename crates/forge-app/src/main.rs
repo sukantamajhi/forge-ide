@@ -40,6 +40,8 @@ mod language_mode;
 mod lsp_extras;
 mod outline_view;
 mod terminal_mouse;
+mod claude_cards;
+mod claude_view;
 mod titlebar;
 mod tree;
 mod wrap;

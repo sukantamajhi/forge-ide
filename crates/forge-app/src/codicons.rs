@@ -54,3 +54,14 @@ pub const EXTENSIONS: char = '\u{eae6}';
 pub const PINNED: char = '\u{eba0}';
 pub const TRASH: char = '\u{ea81}';
 pub const CLOUD_DOWNLOAD: char = '\u{eac2}';
+
+// The Claude chat.
+pub const CHAT_SPARKLE: char = '\u{ec4f}';
+pub const SEND: char = '\u{ec0f}';
+pub const COPY: char = '\u{ebcc}';
+pub const EDIT: char = '\u{ea73}';
+pub const EYE: char = '\u{ea70}';
+pub const GLOBE: char = '\u{eb01}';
+pub const TOOLS: char = '\u{eb6d}';
+pub const HISTORY: char = '\u{ea82}';
+pub const DIFF: char = '\u{eae1}';

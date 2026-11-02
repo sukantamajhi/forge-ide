@@ -247,6 +247,20 @@ Not done for Linux: the OpenAI / Gemini key cannot be saved yet (it is encrypted
 Every command has a VS Code id and is listed in the Command Palette with its shortcut. Syntax
 highlighting covers Rust, JSON, JavaScript, Python and TOML.
 
+## Building packages in Docker
+
+`docker-compose.yml` builds the release files in clean containers, so the result does not depend on what is installed on your machine:
+
+```
+docker compose run --rm package-linux     # dist/forge-<version>-linux-x86_64.tar.gz and dist/forge_<version>_amd64.deb (+ .sha256)
+docker compose up site                    # the landing page at http://localhost:8080
+docker compose --profile windows run --rm package-windows    # dist\Forge-Setup-<version>.exe
+```
+
+(`make docker-package-linux`, `make docker-site` and `make docker-package-windows` run the same.) The Linux build uses Ubuntu 22.04, so the program runs on distributions with glibc 2.35 or newer. Compiled dependencies are cached in Docker volumes: the first build is long, later ones are quick.
+
+The Windows installer can only be built in a **Windows** container, on a Windows machine with Docker in Windows-containers mode: a Linux container cannot build Forge for Windows. On Windows you can also run `make installer` directly (needs Rust, Visual Studio Build Tools and Inno Setup 6).
+
 ## Installer
 
 ```powershell
@@ -308,6 +322,19 @@ Message with AI`). Forge fills the message box with a one-line subject you can e
   so Forge keeps that small: OpenAI's GPT-5 models get minimal reasoning and a 2,000-token budget; Gemini gets 4,096 tokens,
   with thinking turned off for 2.5 Flash and Flash-Lite and set to low for models that cannot turn it off (2.5 Pro, Gemini 3).
   If a model still runs out of tokens, the message says so; pick a model that thinks less.
+
+## Claude
+
+The Claude tab in the side bar (**Ctrl+Alt+C**, or View, Claude) is a chat with [Claude Code](https://docs.claude.com/claude-code), like its VS Code extension. It runs the `claude` program headless in your project folder (`claude -p --output-format stream-json`), so it uses your own Claude Code sign-in and settings. Install the program and sign in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`).
+
+- Answers stream in as Markdown. The tools Claude uses (Read, Edit, Bash...) show as rows; click one to open its file.
+- The open file and your selection go along with each question (click the chip under the chat to leave it out). **Alt+K** (Claude: Ask About Selection) adds an `@file#L1-9` reference to the question.
+- **Enter** sends, **Shift+Enter** adds a line, **Esc** stops a running answer, **Shift+Tab** changes the mode. The clock button lists the conversations Claude Code saved for this folder (the same ones `claude --resume` shows); click one to read it and carry on from it. The most recent ones are also listed when the chat is empty.
+- **Permissions.** Claude asks before it edits a file or runs a command, and the question appears in the chat: for an edit you see the lines it would change, for a command the command itself. **Allow**, **Deny**, or **Allow all edits this session**. When Claude has a plan it shows it for approval, and when it has a question it shows the choices as buttons.
+- **Diffs.** Each edit shows as a row with the lines added and removed (+3 -1); click it to see the change inline. The file button opens the file and the diff button opens the full diff in a tab. Open files that Claude changed reload by themselves, and the Explorer and Source Control refresh when an answer ends.
+- **Modes** (the chip above the question box): **Ask before edits** (the default), **Edit automatically** (edits go through; commands are still asked about) and **Plan mode** (Claude looks and proposes a plan, and changes nothing until you approve it).
+
+Settings (`settings.json`): `claude.permissionMode` (`default` asks before edits, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name; empty is Claude Code's own choice) and `claude.path` (the program, when it is not on the PATH).
 
 ## Icons
 

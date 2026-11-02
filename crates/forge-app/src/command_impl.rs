@@ -274,6 +274,15 @@ impl Workspace {
             FormatSelection => self.format_selection(),
             OrganizeImports => self.organize_imports(),
             ShowOutline => self.reveal_outline(),
+            ShowClaude => self.open_claude(),
+            ClaudeNewChat => self.claude_new_chat(),
+            ClaudeStop => self.claude_stop(),
+            ClaudeAddSelection => self.claude_add_selection(),
+            ClaudeCycleMode => self.claude_cycle_mode(),
+            ClaudeHistory => {
+                self.open_claude();
+                self.claude_toggle_history();
+            }
             CollapseExplorer => {
                 self.tree.collapse_all();
                 self.explorer_selected = None;

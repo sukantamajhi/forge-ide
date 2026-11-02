@@ -1,0 +1,67 @@
+# Forge in containers.
+#
+#   docker compose run --rm package-linux              build dist/forge-<version>-linux-x86_64.tar.gz and dist/forge_<version>_amd64.deb
+#   docker compose up site                             the landing page at http://localhost:8080
+#   docker compose --profile windows run --rm package-windows
+#                                                      the Windows installer (Windows host with Windows containers only)
+#
+# To get the files in dist/ owned by you rather than root (Linux):
+#   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose run --rm package-linux
+name: forge
+
+services:
+  # The Linux packages, built in Ubuntu 22.04. The source folder is mounted, the packages land in ./dist, and the build
+  # cache (compiled dependencies, downloaded crates) is kept in volumes so a second build takes minutes, not an hour.
+  package-linux:
+    build:
+      context: .
+      dockerfile: Dockerfile.build
+    image: forge-build:ubuntu-22.04
+    working_dir: /work
+    volumes:
+      - .:/work
+      - forge-target:/work/target
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+    environment:
+      HOST_UID: ${HOST_UID:-0}
+      HOST_GID: ${HOST_GID:-0}
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        make package-linux package-deb
+        chown "$$HOST_UID:$$HOST_GID" dist/*.tar.gz dist/*.deb dist/*.sha256
+        ls -lh dist
+
+  # The landing page (site/), the same image Railway builds from Dockerfile.site.
+  site:
+    build:
+      context: .
+      dockerfile: Dockerfile.site
+    image: forge-site
+    ports:
+      - "${SITE_PORT:-8080}:8080"
+    environment:
+      # The public address, for canonical links and the install command shown on the page.
+      SITE_URL: ${SITE_URL:-http://localhost:8080}
+
+  # The Windows installer. Windows containers only: leave this profile off on Linux and macOS.
+  package-windows:
+    profiles: ["windows"]
+    build:
+      context: .
+      dockerfile: Dockerfile.windows
+    image: forge-build:windows
+    platform: windows/amd64
+    working_dir: 'C:\work'
+    volumes:
+      - type: bind
+        source: .
+        target: 'C:\work'
+
+volumes:
+  forge-target:
+  cargo-registry:
+  cargo-git:

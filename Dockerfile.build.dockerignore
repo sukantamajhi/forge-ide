@@ -1,0 +1,2 @@
+# Nothing from the repository goes into the build image: the source is mounted when it runs.
+*

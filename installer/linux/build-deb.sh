@@ -24,6 +24,10 @@ install -Dm644 "$root/assets/forge-logo.svg" "$stage/usr/share/icons/hicolor/sca
 install -Dm644 "$root/installer/linux/forge.desktop" "$stage/usr/share/applications/forge.desktop"
 install -Dm644 "$root/README.md" "$stage/usr/share/doc/forge/README.md"
 
+# The oldest glibc the program runs on is the newest symbol version it uses, so a build on a new system is not offered
+# to an old one. Falls back to a safe guess when objdump is not there.
+glibc=$(objdump -T "$binary" 2>/dev/null | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -n 1 || true)
+glibc=${glibc:-2.31}
 size=$(du -sk "$stage" | cut -f1)
 mkdir -p "$stage/DEBIAN"
 cat > "$stage/DEBIAN/control" <<CONTROL
@@ -33,7 +37,7 @@ Section: editors
 Priority: optional
 Architecture: $arch
 Installed-Size: $size
-Depends: libc6 (>= 2.31), libvulkan1, libxkbcommon0, libxkbcommon-x11-0, libxcb1, libfreetype6, libfontconfig1, libwayland-client0
+Depends: libc6 (>= $glibc), libvulkan1, libxkbcommon0, libxkbcommon-x11-0, libxcb1, libfreetype6, libfontconfig1, libwayland-client0
 Recommends: git
 Maintainer: Forge <noreply@forge.invalid>
 Homepage: https://github.com/sukantamajhi/forge-ide

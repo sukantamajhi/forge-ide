@@ -250,6 +250,12 @@ commands! {
     GitBlame, "git.blame", "Git: Show Blame for Current Line", [];
     LanguageServers, "forge.languageServers", "Language Servers: Manage and Install...", [];
     ShowExtensions, "workbench.view.extensions", "View: Show Extensions", ["ctrl+shift+x"];
+    ShowClaude, "forge.claude.open", "Claude: Open Chat", ["ctrl+alt+c"];
+    ClaudeNewChat, "forge.claude.newChat", "Claude: New Conversation", [];
+    ClaudeStop, "forge.claude.stop", "Claude: Stop", [];
+    ClaudeAddSelection, "forge.claude.addSelection", "Claude: Ask About Selection", ["alt+k"];
+    ClaudeCycleMode, "forge.claude.cycleMode", "Claude: Change Permission Mode", [];
+    ClaudeHistory, "forge.claude.history", "Claude: Past Conversations", [];
     ExtensionsInstall, "forge.extensions.install", "Extensions: Install from Open VSX...", [];
     ExtensionsVsix, "forge.extensions.vsix", "Extensions: Install from VSIX...", [];
     ExtensionsManage, "forge.extensions.manage", "Extensions: Manage Installed...", [];

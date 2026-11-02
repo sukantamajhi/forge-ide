@@ -38,7 +38,7 @@ LINUX_DEPS := build-essential pkg-config clang cmake libfontconfig-dev libwaylan
 
 .DEFAULT_GOAL := help
 .PHONY: help run build release release-windows release-linux release-all test check fmt fmt-check lint clean \
-        installer package-windows package-linux package-deb package-all linux-deps site site-docker-build site-docker-run
+        installer package-windows package-linux package-deb package-all docker-package-linux docker-package-windows docker-site linux-deps site site-docker-build site-docker-run
 
 help: ## List the available tasks
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-16s %s\n", $$1, $$2}'
@@ -125,6 +125,15 @@ package-deb: release-linux ## Build dist/forge_<version>_amd64.deb for Debian/Ub
 	cd dist && sha256sum forge_$(VERSION)_*.deb > forge_$(VERSION).deb.sha256
 
 package-all: package-windows package-linux ## Windows installer and Linux archive (Windows with WSL2)
+
+docker-package-linux: ## Build the Linux .tar.gz and .deb in a clean Ubuntu 22.04 container (needs Docker): dist/
+	HOST_UID=$$(id -u) HOST_GID=$$(id -g) docker compose run --rm package-linux
+
+docker-package-windows: ## Build the Windows installer in a Windows container (Windows host, Windows containers mode)
+	docker compose --profile windows run --rm package-windows
+
+docker-site: ## Run the landing page in Docker at http://localhost:8080
+	docker compose up --build site
 
 site: ## Serve the landing page on port 8099 (SITE_PORT=...)
 	cd site && python -m http.server $(SITE_PORT) --bind 127.0.0.1

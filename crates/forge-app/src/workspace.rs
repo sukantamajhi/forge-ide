@@ -462,6 +462,14 @@ pub(crate) enum Focus {
     Scm,
     Extensions,
     Terminal,
+    Claude,
+}
+
+/// Which multi-line text box in the side bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AreaId {
+    Scm,
+    Claude,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -470,6 +478,7 @@ pub(crate) enum SidebarView {
     Search,
     Git,
     Extensions,
+    Claude,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -880,6 +889,8 @@ pub(crate) struct Workspace {
     pub git_tx: Sender<GitMsg>,
     pub git_rx: Receiver<GitMsg>,
     pub scm_message: forge_core::textarea::TextArea,
+    /// The Claude chat: its conversation, question box and running program.
+    pub claude: crate::claude_view::ClaudeState,
     /// A mouse drag is selecting text in the commit message box.
     pub scm_dragging: bool,
     /// A drag on the minimap is scrolling the editor.
@@ -1047,6 +1058,7 @@ impl Focusable for Workspace {
 impl Workspace {
     pub fn new(root: PathBuf, initial_file: Option<&Path>, cx: &mut Context<Self>) -> Self {
         let settings = std::fs::read_to_string(config_dir().join("settings.json")).map(|t| Settings::parse(&t)).unwrap_or_default();
+        let claude_mode = settings.claude_mode;
         // The panel sizes the user left last time.
         let saved_layout = forge_core::ui_state::UiState::load();
         let mut keymap = Keymap::default();
@@ -1155,6 +1167,7 @@ impl Workspace {
             git_tx,
             git_rx,
             scm_message: forge_core::textarea::TextArea::default(),
+            claude: crate::claude_view::ClaudeState { mode: claude_mode, ..Default::default() },
             scm_dragging: false,
             minimap_dragging: false,
             sidebar_base: saved_layout.sidebar,
@@ -1344,6 +1357,20 @@ impl Workspace {
     }
 
     // ---- accessors ----
+
+    pub(crate) fn area(&self, which: AreaId) -> &forge_core::textarea::TextArea {
+        match which {
+            AreaId::Scm => &self.scm_message,
+            AreaId::Claude => &self.claude.input,
+        }
+    }
+
+    pub(crate) fn area_mut(&mut self, which: AreaId) -> &mut forge_core::textarea::TextArea {
+        match which {
+            AreaId::Scm => &mut self.scm_message,
+            AreaId::Claude => &mut self.claude.input,
+        }
+    }
 
     pub fn root(&self) -> &Path {
         self.tree.root()

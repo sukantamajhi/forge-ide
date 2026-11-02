@@ -145,6 +145,7 @@ impl Workspace {
             Focus::Find => self.find_key(k, &pressed, cx),
             Focus::Search => self.search_key(k, &pressed, cx),
             Focus::Scm => self.scm_key(k, &pressed, cx),
+            Focus::Claude => self.claude_key(k, cx),
             Focus::Extensions => self.ext_key(k, &pressed, cx),
             Focus::Terminal => self.terminal_key(k, &pressed, cx),
             Focus::Explorer => self.explorer_key(k, &pressed, cx),
@@ -1520,6 +1521,7 @@ impl Workspace {
         }
         changed |= self.poll_install();
         changed |= self.poll_ext();
+        changed |= self.poll_claude();
         changed |= self.poll_ext_detail();
         changed |= self.poll_ext_icons();
         // A shell that exited closes its terminal.

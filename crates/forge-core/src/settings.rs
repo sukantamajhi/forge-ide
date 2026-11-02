@@ -112,6 +112,12 @@ pub struct Settings {
     pub ai_provider: crate::ai::Provider,
     /// `ai.geminiModel`: the Gemini model used when the provider is Gemini.
     pub ai_gemini_model: String,
+    /// `claude.path`: the `claude` program, when it is not on the PATH. Empty looks for it.
+    pub claude_path: String,
+    /// `claude.model`: the model the Claude chat asks for (an alias like `sonnet`, or a full name). Empty is the program's own choice.
+    pub claude_model: String,
+    /// `claude.permissionMode`: what Claude may do without asking: `default` (read only), `acceptEdits` or `plan`.
+    pub claude_mode: crate::claude::PermissionMode,
 }
 
 impl Default for Settings {
@@ -151,6 +157,9 @@ impl Default for Settings {
             languages: Default::default(),
             ai_model: crate::ai::DEFAULT_MODEL.to_owned(),
             ai_provider: crate::ai::Provider::default(),
+            claude_path: String::new(),
+            claude_model: String::new(),
+            claude_mode: crate::claude::PermissionMode::default(),
             ai_gemini_model: crate::ai::DEFAULT_GEMINI_MODEL.to_owned(),
         }
     }
@@ -361,6 +370,15 @@ impl Settings {
         if let Some(v) = map.get("ai.geminiModel").and_then(Value::as_str).map(str::trim).filter(|m| !m.is_empty()) {
             s.ai_gemini_model = v.to_owned();
         }
+        if let Some(v) = map.get("claude.path").and_then(Value::as_str) {
+            s.claude_path = v.trim().to_owned();
+        }
+        if let Some(v) = map.get("claude.model").and_then(Value::as_str) {
+            s.claude_model = v.trim().to_owned();
+        }
+        if let Some(v) = map.get("claude.permissionMode").and_then(Value::as_str).and_then(crate::claude::PermissionMode::from_id) {
+            s.claude_mode = v;
+        }
         if let Some(v) = map.get("ai.provider").and_then(Value::as_str).and_then(crate::ai::Provider::from_id) {
             s.ai_provider = v;
         }
@@ -497,6 +515,9 @@ mod tests {
         let off = Settings::parse(r#"{ "editor.inlayHints.enabled": "off", "editor.semanticHighlighting.enabled": false }"#);
         assert!(!off.inlay_hints && !off.semantic_highlighting);
         assert!(!Settings::parse(r#"{ "workbench.editor.enablePreview": false }"#).enable_preview);
+        let claude = Settings::parse(r#"{ "claude.path": " /opt/claude ", "claude.model": "sonnet", "claude.permissionMode": "acceptEdits" }"#);
+        assert_eq!((claude.claude_path.as_str(), claude.claude_model.as_str(), claude.claude_mode), ("/opt/claude", "sonnet", crate::claude::PermissionMode::AcceptEdits));
+        assert_eq!(Settings::parse(r#"{ "claude.permissionMode": "bogus" }"#).claude_mode, crate::claude::PermissionMode::Ask);
         assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);
         assert!(Settings::parse(r#"{ "editor.snippetSuggestions": "top" }"#).snippet_suggestions);
         let f = Settings::parse(r#"{ "editor.fontFamily": " JetBrains Mono ", "workbench.fontFamily": "Inter" }"#);

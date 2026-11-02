@@ -19,7 +19,7 @@ use gpui::{
 
 use crate::resize::{equal_shares, Edge, Resize};
 use crate::workspace::{
-    Focus, InputField, InputHit, OverlayKind, PanelView, SearchRow, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
+    AreaId, Focus, InputField, InputHit, OverlayKind, PanelView, SearchRow, SidebarView, Workspace, BREADCRUMB_HEIGHT, FOLD_WIDTH, FONT, GUTTER_WIDTH,
     GLYPH_WIDTH, LINE_NUMBER_WIDTH, TAB_BAR_HEIGHT, TEXT_PAD,
 };
 
@@ -1135,6 +1135,7 @@ impl Workspace {
                         SidebarView::Git => Focus::Scm,
                         SidebarView::Extensions => Focus::Extensions,
                         SidebarView::Explorer => Focus::Explorer,
+                        SidebarView::Claude => Focus::Claude,
                     };
                     if view == SidebarView::Extensions {
                         this.open_extensions_view();
@@ -1160,6 +1161,7 @@ impl Workspace {
             SidebarView::Search => self.render_search(cx).into_any_element(),
             SidebarView::Git => self.render_scm(cx),
             SidebarView::Extensions => self.render_extensions(cx).into_any_element(),
+            SidebarView::Claude => self.render_claude(cx),
         };
         div()
             .flex()
@@ -1185,6 +1187,7 @@ impl Workspace {
                     .child(tab(crate::codicons::SEARCH, "Search", Command::FindInFiles, SidebarView::Search, 0, cx))
                     .child(tab(crate::codicons::SOURCE_CONTROL, "Source Control", Command::ShowGit, SidebarView::Git, changes, cx))
                     .child(tab(crate::codicons::EXTENSIONS, "Extensions", Command::ShowExtensions, SidebarView::Extensions, 0, cx))
+                    .child(tab(crate::codicons::CHAT_SPARKLE, "Claude", Command::ShowClaude, SidebarView::Claude, 0, cx))
                     .child(
                         div()
                             .id("sidebar-more")
@@ -1563,11 +1566,12 @@ impl Workspace {
         16.0 * self.settings.font_size / 14.0 * 1.625
     }
 
-    /// The commit message box: wrapped rows, caret, selection, placeholder, mouse selection.
-    fn render_message_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// A multi-line text box in the side bar: wrapped rows, caret, selection, placeholder, mouse selection. `id` names
+    /// its elements, `extra` are children drawn over it (a button), and `pr_extra` keeps text clear of them.
+    pub(crate) fn render_text_area(&self, which: AreaId, focus: Focus, id: &'static str, placeholder: &'static str, extra: Vec<AnyElement>, pr_extra: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
         let t = self.theme.clone();
-        let focused = self.focus == Focus::Scm;
-        let area = &self.scm_message;
+        let focused = self.focus == focus;
+        let area = self.area(which);
         let rows = area.rows();
         let chars: Vec<char> = area.text().chars().collect();
         let (caret_row, _) = area.cursor_row_col();
@@ -1575,13 +1579,12 @@ impl Workspace {
         let line_h = self.line_height();
         let char_w = f32::from(self.char_width).max(1.0);
         let text_left = SCM_PAD + 1.0 + INPUT_PAD;
-        let placeholder = "Message (Ctrl+Enter to commit)";
         let column_at = move |x: Pixels| (((f32::from(x) - text_left) / char_w).round().max(0.0)) as usize;
 
         let row_elements = rows.iter().enumerate().map(|(ri, r)| {
             let caret = |on: bool| div().w(px(1.0)).h(px(line_h - 4.0)).flex_none().bg(rgb(if on { t.caret } else { t.bg }));
             let mut row = div()
-                .id(("scm-input-row", ri))
+                .id((id, ri))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -1591,24 +1594,26 @@ impl Workspace {
                 .cursor_text()
                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    this.focus = Focus::Scm;
-                    let offset = this.scm_message.offset_at(ri, column_at(ev.position.x));
+                    this.focus = focus;
+                    let offset = this.area_mut(which).offset_at(ri, column_at(ev.position.x));
                     match ev.click_count {
-                        1 => this.scm_message.set_cursor(offset, ev.modifiers.shift),
-                        2 => this.scm_message.select_word_at(offset),
-                        _ => this.scm_message.select_all(),
+                        1 => this.area_mut(which).set_cursor(offset, ev.modifiers.shift),
+                        2 => this.area_mut(which).select_word_at(offset),
+                        _ => this.area_mut(which).select_all(),
                     }
                     this.scm_dragging = ev.click_count == 1;
                     cx.notify();
                 }))
                 .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    this.focus = Focus::Scm;
-                    let offset = this.scm_message.offset_at(ri, column_at(ev.position.x));
-                    if !this.scm_message.selection().is_some_and(|(a, b)| a <= offset && offset <= b) {
-                        this.scm_message.set_cursor(offset, false);
+                    this.focus = focus;
+                    let offset = this.area_mut(which).offset_at(ri, column_at(ev.position.x));
+                    if !this.area_mut(which).selection().is_some_and(|(a, b)| a <= offset && offset <= b) {
+                        this.area_mut(which).set_cursor(offset, false);
                     }
-                    this.open_input_menu(ev.position, crate::context_menu::InputTarget::Message, cx);
+                    if which == AreaId::Scm {
+                        this.open_input_menu(ev.position, crate::context_menu::InputTarget::Message, cx);
+                    }
                 }))
                 .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
                     if !this.scm_dragging {
@@ -1618,8 +1623,8 @@ impl Workspace {
                         this.scm_dragging = false;
                         return;
                     }
-                    let offset = this.scm_message.offset_at(ri, column_at(ev.position.x));
-                    this.scm_message.set_cursor(offset, true);
+                    let offset = this.area_mut(which).offset_at(ri, column_at(ev.position.x));
+                    this.area_mut(which).set_cursor(offset, true);
                     cx.notify();
                 }));
             if area.is_empty() {
@@ -1657,6 +1662,33 @@ impl Workspace {
             row
         });
 
+        div()
+            .id((id, 100_000usize))
+            .relative()
+            .w_full()
+            .pl(px(INPUT_PAD))
+            .pr(px(INPUT_PAD + pr_extra))
+            .py(px(5.0))
+            .bg(rgb(t.bg))
+            .border_1()
+            .border_color(rgb(if focused { t.info } else { t.border }))
+            .rounded(px(INPUT_RADIUS))
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                this.focus = focus;
+                cx.notify();
+            }))
+            .children(row_elements)
+            .children(extra)
+    }
+
+
+    /// The commit message box, with the AI button at its right edge.
+    fn render_message_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme.clone();
         let can_ai = self.git.as_ref().is_some_and(|g| g.status.staged().next().is_some() && g.job.is_none()) && !self.ai_pending;
         let ai_tip = if self.ai_pending { "Writing a commit message..." } else { "Write Commit Message with AI" };
         let ai_button = div()
@@ -1679,27 +1711,7 @@ impl Workspace {
                 }
             }))
             .child(crate::icons::glyph(crate::codicons::SPARKLE, 1.0, if can_ai { t.text } else { t.dim }));
-        div()
-            .id("scm-input")
-            .relative()
-            .w_full()
-            .pl(px(INPUT_PAD))
-            .pr(px(INPUT_PAD + self.ai_button_reserve()))
-            .py(px(5.0))
-            .bg(rgb(t.bg))
-            .border_1()
-            .border_color(rgb(if focused { t.info } else { t.border }))
-            .rounded(px(INPUT_RADIUS))
-            .overflow_hidden()
-            .flex()
-            .flex_col()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                cx.stop_propagation();
-                this.focus = Focus::Scm;
-                cx.notify();
-            }))
-            .children(row_elements)
-            .child(ai_button)
+        self.render_text_area(AreaId::Scm, Focus::Scm, "scm-input", "Message (Ctrl+Enter to commit)", vec![ai_button.into_any_element()], self.ai_button_reserve(), cx)
     }
 
     fn render_scm(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2965,6 +2977,8 @@ impl Render for Workspace {
         self.sync_terminal_size(window.viewport_size().width);
         let cols = self.scm_wrap_cols();
         self.scm_message.set_wrap(cols);
+        let claude_cols = self.claude_wrap_cols();
+        self.claude.input.set_wrap(claude_cols);
         // One rem is 16px at the default zoom. Zooming changes the font size, and every size written in
         // rems (buttons, icons, rows) follows it.
         window.set_rem_size(px(16.0 * self.settings.font_size / 14.0));
