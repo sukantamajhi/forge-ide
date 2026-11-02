@@ -541,7 +541,7 @@ impl Workspace {
             OverlayKind::QuickOpen => "Search files by name (append : to go to line, > for commands, @ for symbols)",
             OverlayKind::GoToLine => "Type a line number, or line:column",
             OverlayKind::Symbols => "Go to symbol in editor",
-            OverlayKind::OpenRecent => "Select a folder to open",
+            OverlayKind::OpenRecent => "Select a folder to open (Ctrl+Enter: in a new window)",
             OverlayKind::SnippetFiles => "Select a language for the snippets file, or a global one",
             OverlayKind::Language => "Select the language mode for the file, or Auto Detect",
             OverlayKind::CompareWith => "Select the file to compare the active file with",
@@ -681,9 +681,7 @@ impl Workspace {
             OverlayKind::Language => self.language_items(&text),
             OverlayKind::OpenRecent => {
                 let folders = &self.recent_folders;
-                if folders.is_empty() {
-                    overlay.note = Some("No folders opened before".to_owned());
-                }
+                overlay.note = Some(if folders.is_empty() { "No folders opened before" } else { "Enter opens it here, Ctrl+Enter in a new window" }.to_owned());
                 let labels: Vec<String> = folders.iter().map(|p| p.to_string_lossy().into_owned()).collect();
                 rank(&text, &labels, 30)
                     .into_iter()
@@ -1046,6 +1044,15 @@ impl Workspace {
             ("up", false) if !overlay.items.is_empty() => overlay.selected = (overlay.selected + overlay.items.len() - 1) % overlay.items.len(),
             ("pagedown", _) => overlay.selected = (overlay.selected + 8).min(overlay.items.len().saturating_sub(1)),
             ("pageup", _) => overlay.selected = overlay.selected.saturating_sub(8),
+            // Recent folders: Enter opens the folder here, Ctrl+Enter in a new window.
+            ("enter", true) if overlay.kind == OverlayKind::OpenRecent => {
+                let picked = overlay.items.get(overlay.selected).map(|i| i.action.clone());
+                self.overlay = None;
+                if let Some(ItemAction::OpenRecent(path)) = picked {
+                    self.open_in_new_window(&path);
+                }
+                return true;
+            }
             ("enter", _) => {
                 self.accept_overlay(cx);
                 return true;

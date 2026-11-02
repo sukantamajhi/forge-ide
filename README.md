@@ -149,7 +149,7 @@ Not done for Linux: the OpenAI / Gemini key cannot be saved yet (it is encrypted
 - **Editor navigation and files:**
   - **Go Back / Go Forward** (Alt+Left / Alt+Right) return to where you were before a jump: opening another file, go to definition,
     a symbol or a line. **Reopen Closed Editor** (Ctrl+Shift+T) brings back the last closed tab with its caret (30 are kept this session).
-  - **Open Recent** (Ctrl+R) lists folders opened before, newest first, and opens the chosen one in this window.
+  - **Open Recent** (Ctrl+R) lists folders opened before, newest first. **Enter** opens the chosen one in this window; **Ctrl+Enter** (or Ctrl+click) opens it in a new window.
   - **Zen Mode** (Ctrl+K Z) hides the side bar and panel; the same shortcut brings them back.
   - **Auto Save:** `"files.autoSave": "afterDelay"` saves the open file once it has been left alone for `"files.autoSaveDelay"`
     milliseconds (200 or more; 1000 by default). `"onFocusChange"` saves every modified file when you switch tabs or open another file.
