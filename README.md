@@ -259,7 +259,7 @@ docker compose --profile windows run --rm package-windows    # dist\Forge-Setup-
 
 (`make docker-package-linux`, `make docker-site` and `make docker-package-windows` run the same.) The Linux build uses Ubuntu 22.04, so the program runs on distributions with glibc 2.35 or newer. Compiled dependencies are cached in Docker volumes: the first build is long, later ones are quick.
 
-The Windows installer can only be built in a **Windows** container, on a Windows machine with Docker in Windows-containers mode: a Linux container cannot build Forge for Windows. On Windows you can also run `make installer` directly (needs Rust, Visual Studio Build Tools and Inno Setup 6).
+The Windows installer can only be built in a **Windows** container (Docker Desktop: tray icon, *Switch to Windows containers...*; `docker info --format "{{.OSType}}"` must print `windows`, otherwise the build fails with `runc run failed ... "powershell" not found`), on a Windows machine with Docker in Windows-containers mode: a Linux container cannot build Forge for Windows. On Windows you can also run `make installer` directly (needs Rust, Visual Studio Build Tools and Inno Setup 6).
 
 ## Installer
 

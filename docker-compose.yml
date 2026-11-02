@@ -47,14 +47,14 @@ services:
       # The public address, for canonical links and the install command shown on the page.
       SITE_URL: ${SITE_URL:-http://localhost:8080}
 
-  # The Windows installer. Windows containers only: leave this profile off on Linux and macOS.
+  # The Windows installer. Windows containers only: leave this profile off on Linux and macOS, and on Windows switch
+  # Docker Desktop to "Windows containers" first (docker info --format "{{.OSType}}" must say windows).
   package-windows:
     profiles: ["windows"]
     build:
       context: .
       dockerfile: Dockerfile.windows
     image: forge-build:windows
-    platform: windows/amd64
     working_dir: 'C:\work'
     volumes:
       - type: bind
