@@ -632,7 +632,8 @@ impl Workspace {
                     .gap_0p5()
                     .child(icon_button("claude-history", crate::codicons::HISTORY, "Past Conversations", Command::ClaudeHistory, true, cx))
                     .child(icon_button("claude-stop", crate::codicons::DEBUG_STOP, "Stop", Command::ClaudeStop, busy, cx))
-                    .child(icon_button("claude-new", crate::codicons::ADD, "New Conversation", Command::ClaudeNewChat, true, cx)),
+                    .child(icon_button("claude-new", crate::codicons::ADD, "New Conversation", Command::ClaudeNewChat, true, cx))
+                    .child(icon_button("claude-close", crate::codicons::CLOSE, "Hide Claude Chat", Command::ToggleClaude, true, cx)),
             );
 
         let empty = c.convo.entries.is_empty();

@@ -251,7 +251,7 @@ commands! {
     LanguageServers, "forge.languageServers", "Language Servers: Manage and Install...", [];
     ShowExtensions, "workbench.view.extensions", "View: Show Extensions", ["ctrl+shift+x"];
     ShowClaude, "forge.claude.open", "Claude: Open Chat", ["ctrl+alt+c"];
-    ToggleClaude, "forge.claude.toggle", "View: Toggle Claude Chat", [];
+    ToggleClaude, "forge.claude.toggle", "View: Toggle Claude Chat", ["ctrl+alt+b"];
     ClaudeNewChat, "forge.claude.newChat", "Claude: New Conversation", [];
     ClaudeStop, "forge.claude.stop", "Claude: Stop", [];
     ClaudeAddSelection, "forge.claude.addSelection", "Claude: Ask About Selection", ["alt+k"];
