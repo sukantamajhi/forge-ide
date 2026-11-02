@@ -47,6 +47,8 @@ pub(crate) struct ClaudeState {
     pub answers: HashMap<String, Vec<String>>,
     /// The thinking blocks (by entry) the reader opened after they were done.
     pub open_thoughts: HashSet<usize>,
+    /// The list of saved conversations was read for a chat that was open from the start.
+    pub history_loaded: bool,
     /// The turn that is running, to run it again if the program does not know a flag.
     pub last_turn: Option<(Options, String)>,
     /// This Claude Code does not know `--thinking-display`: leave it out.
@@ -73,6 +75,7 @@ impl Default for ClaudeState {
             show_history: false,
             answers: HashMap::new(),
             open_thoughts: HashSet::new(),
+            history_loaded: false,
             last_turn: None,
             no_thinking_flag: false,
         }
@@ -84,8 +87,12 @@ impl Workspace {
 
     /// Show the chat on the right and put the caret in its question box.
     pub fn open_claude(&mut self) {
+        let was_open = self.claude_visible;
         self.claude_visible = true;
         self.focus = Focus::Claude;
+        if !was_open {
+            self.save_ui_state();
+        }
         let _ = self.claude_binary();
         if self.claude.convo.entries.is_empty() {
             self.claude.history = claude::list_sessions(self.root());
@@ -99,6 +106,7 @@ impl Workspace {
             if self.focus == Focus::Claude {
                 self.focus = Focus::Editor;
             }
+            self.save_ui_state();
         } else {
             self.open_claude();
         }
@@ -263,6 +271,14 @@ impl Workspace {
 
     /// Take what the program reported since the last call. Whether anything changed.
     pub fn poll_claude(&mut self) -> bool {
+        // A chat that was left open comes back open: list the saved conversations once, as opening it would.
+        if self.claude_visible && !self.claude.history_loaded {
+            self.claude.history_loaded = true;
+            if self.claude.convo.entries.is_empty() {
+                self.claude.history = claude::list_sessions(self.root());
+            }
+            return true;
+        }
         let Some(run) = self.claude.run.as_mut() else { return false };
         let (messages, ended) = run.poll();
         if messages.is_empty() && !ended {
@@ -638,6 +654,8 @@ impl Workspace {
 
         let empty = c.convo.entries.is_empty();
         let mut list = div().id("claude-scroll").flex().flex_col().gap_3().px_3().pb_2().flex_1().min_h_0().overflow_y_scroll().track_scroll(&c.scroll);
+        // A sideways gesture over a code block scrolls the block, not this list up and down.
+        list.style().restrict_scroll_to_axis = Some(true);
         if c.show_history {
             list = list.child(div().text_xs().text_color(rgb(t.dim)).child("PAST CONVERSATIONS"));
             list = if c.history.is_empty() {

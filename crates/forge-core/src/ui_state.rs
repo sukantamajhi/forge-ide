@@ -14,6 +14,8 @@ pub struct UiState {
     pub sidebar: f32,
     /// The Claude chat on the right of the editor.
     pub claude: f32,
+    /// The Claude chat was open when the window closed.
+    pub claude_open: bool,
     pub panel_height: f32,
     pub preview_width: Option<f32>,
     pub debug_columns: [f32; 3],
@@ -21,7 +23,7 @@ pub struct UiState {
 
 impl Default for UiState {
     fn default() -> Self {
-        Self { sidebar: 300.0, claude: 400.0, panel_height: 250.0, preview_width: None, debug_columns: [0.36, 0.30, 0.34] }
+        Self { sidebar: 300.0, claude: 400.0, claude_open: false, panel_height: 250.0, preview_width: None, debug_columns: [0.36, 0.30, 0.34] }
     }
 }
 
@@ -45,6 +47,7 @@ impl UiState {
         if let Some(v) = map.get("claude").and_then(|v| number(v, 260.0, 900.0)) {
             state.claude = v;
         }
+        state.claude_open = map.get("claudeOpen").and_then(Value::as_bool).unwrap_or(false);
         if let Some(v) = map.get("panelHeight").and_then(|v| number(v, 80.0, 2000.0)) {
             state.panel_height = v;
         }
@@ -61,7 +64,7 @@ impl UiState {
     pub fn to_json(&self) -> String {
         // Four decimals are plenty for a pixel size or a share, and keep the file readable.
         let tidy = |v: f32| (f64::from(v) * 10_000.0).round() / 10_000.0;
-        let mut value = json!({ "sidebar": tidy(self.sidebar), "claude": tidy(self.claude), "panelHeight": tidy(self.panel_height), "debugColumns": self.debug_columns.map(tidy) });
+        let mut value = json!({ "sidebar": tidy(self.sidebar), "claude": tidy(self.claude), "claudeOpen": self.claude_open, "panelHeight": tidy(self.panel_height), "debugColumns": self.debug_columns.map(tidy) });
         if let Some(width) = self.preview_width {
             value["previewWidth"] = json!(tidy(width));
         }
@@ -83,7 +86,7 @@ mod tests {
 
     #[test]
     fn sizes_survive_a_round_trip() {
-        let state = UiState { sidebar: 412.5, claude: 480.0, panel_height: 310.0, preview_width: Some(520.0), debug_columns: [0.5, 0.25, 0.25] };
+        let state = UiState { sidebar: 412.5, claude: 480.0, claude_open: true, panel_height: 310.0, preview_width: Some(520.0), debug_columns: [0.5, 0.25, 0.25] };
         assert_eq!(UiState::parse(&state.to_json()), state);
         let without_preview = UiState { preview_width: None, ..state };
         assert_eq!(UiState::parse(&without_preview.to_json()).preview_width, None);
@@ -100,6 +103,7 @@ mod tests {
         assert_eq!(odd, UiState::default());
         let partly = UiState::parse(r#"{ "sidebar": 350, "panelHeight": "tall", "claude": 100 }"#);
         assert_eq!((partly.sidebar, partly.panel_height, partly.claude), (350.0, 250.0, 400.0));
+        assert!(!UiState::parse(r#"{ "claudeOpen": "yes" }"#).claude_open && UiState::parse(r#"{ "claudeOpen": true }"#).claude_open);
         assert!(UiState::default().claude > UiState::default().sidebar, "the chat is a little wider than the Explorer");
     }
 

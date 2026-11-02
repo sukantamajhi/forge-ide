@@ -74,7 +74,7 @@ impl Workspace {
 
     /// Remember the panel sizes for the next session.
     pub(crate) fn save_ui_state(&mut self) {
-        let state = forge_core::ui_state::UiState { sidebar: self.sidebar_base, claude: self.claude_base, panel_height: self.panel_height, preview_width: self.preview_px, debug_columns: self.debug_cols };
+        let state = forge_core::ui_state::UiState { sidebar: self.sidebar_base, claude: self.claude_base, claude_open: self.claude_visible, panel_height: self.panel_height, preview_width: self.preview_px, debug_columns: self.debug_cols };
         if let Err(error) = state.save() {
             self.set_status(error);
         }

@@ -1173,7 +1173,7 @@ impl Workspace {
             scm_dragging: false,
             minimap_dragging: false,
             sidebar_base: saved_layout.sidebar,
-            claude_visible: false,
+            claude_visible: saved_layout.claude_open,
             claude_base: saved_layout.claude,
             panel_height: saved_layout.panel_height,
             preview_px: saved_layout.preview_width,

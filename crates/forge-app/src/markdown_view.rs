@@ -113,7 +113,14 @@ fn block(ctx: &Ctx, b: &Block) -> AnyElement {
                 .into_any_element()
         }
         Block::Paragraph(spans) => div().w_full().py(rems(0.375)).text_color(rgb(t.text)).child(text(ctx, spans, false)).into_any_element(),
-        Block::Code { lang, text: code } => div()
+        Block::Code { lang, text: code } => {
+            // A line of code is not wrapped: the block scrolls sideways (a sideways gesture, or Shift+wheel). The plain
+            // wheel is left to the page, so it does not slide the code while the page scrolls past it.
+            let id = ctx.next_id.get();
+            ctx.next_id.set(id + 1);
+            let mut lines = div().id(("md-code", id)).flex().flex_col().items_start().w_full().overflow_x_scroll();
+            lines.style().restrict_scroll_to_axis = Some(true);
+            div()
             .w_full()
             .my(rems(0.5))
             .p_3()
@@ -126,8 +133,10 @@ fn block(ctx: &Ctx, b: &Block) -> AnyElement {
             .overflow_hidden()
             .text_sm()
             .when(!lang.is_empty(), |d| d.child(div().pb_1().text_xs().text_color(rgb(t.dim)).child(lang.clone())))
-            .children(code.split('\n').map(|line| div().whitespace_nowrap().min_h(rems(1.25)).text_color(rgb(t.text)).child(line.to_owned())))
-            .into_any_element(),
+            .child(lines.children(code.split('\n').map(|line| div().flex_none().whitespace_nowrap().min_h(rems(1.25)).text_color(rgb(t.text)).child(line.to_owned())))
+            )
+            .into_any_element()
+        }
         Block::Quote(blocks) => div()
             .w_full()
             .my(rems(0.375))
