@@ -467,7 +467,7 @@ impl Workspace {
         }
         let moved_far = self.mouse.is_none_or(|p| (p.x - ev.position.x).abs() > px_f(2.0) || (p.y - ev.position.y).abs() > px_f(2.0));
         self.mouse = Some(ev.position);
-        if self.terminal_mouse_move(ev) {
+        if self.terminal_mouse_move(ev) || self.claude_select_move(ev) {
             cx.notify();
         }
         let over_word = (ev.modifiers.control || ev.modifiers.platform) && self.point_at(ev.position).is_some_and(|(g, line, col)| {
@@ -526,6 +526,7 @@ impl Workspace {
 
     pub fn on_mouse_up(&mut self, ev: &MouseUpEvent, cx: &mut Context<Self>) {
         self.terminal_mouse_up(ev, cx);
+        self.claude_select_up();
         self.input_dragging = None;
         self.drag = None;
         self.scm_dragging = false;

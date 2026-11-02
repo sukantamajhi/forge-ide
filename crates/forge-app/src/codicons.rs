@@ -3,6 +3,8 @@
 //! Generated from the font's own stylesheet.
 
 pub const PREVIEW: char = '\u{eb2f}';
+pub const ATTACH: char = '\u{ec34}';
+pub const FILE_MEDIA: char = '\u{eaea}';
 pub const GO_TO_FILE: char = '\u{ea94}';
 pub const ARROW_LEFT: char = '\u{ea9b}';
 pub const ARROW_RIGHT: char = '\u{ea9c}';

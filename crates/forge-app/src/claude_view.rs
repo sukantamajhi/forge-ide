@@ -1,10 +1,11 @@
 //! The Claude chat in the side bar: ask about the code, let Claude read and change it. It drives the `claude`
 //! program (see `forge_core::claude`), so it uses the user's own Claude Code sign-in and settings.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use forge_core::claude::{self, Conversation, Decision, DiffRow, EditorContext, Entry, Event, Message, Options, PermissionMode, PermissionRequest, Run, SessionInfo};
+use forge_core::claude::{self, Conversation, Decision, DiffRow, EditorContext, Entry, Event, ImageAttachment, Message, Options, PermissionMode, PermissionRequest, Run, SessionInfo};
 use forge_core::commands::Command;
 use forge_core::markdown::{self, Block};
 use forge_core::input::Outcome;
@@ -17,6 +18,14 @@ use crate::workspace::{AreaId, Focus, Workspace};
 
 /// Where to send someone who does not have the program.
 const INSTALL_HINT: &str = "Claude Code is not installed. Install it with:  npm install -g @anthropic-ai/claude-code  (see docs.claude.com/claude-code), sign in once by running `claude` in a terminal, then try again. If it is installed somewhere unusual, set \"claude.path\" in settings.json.";
+
+/// The `@name` being typed in the question box, and the project files that match it.
+pub(crate) struct Mention {
+    /// Where its `@` is, in chars.
+    pub start: usize,
+    pub items: Vec<String>,
+    pub selected: usize,
+}
 
 pub(crate) struct ClaudeState {
     pub convo: Conversation,
@@ -51,6 +60,18 @@ pub(crate) struct ClaudeState {
     pub last_turn: Option<(Options, String)>,
     /// This Claude Code does not know `--thinking-display`: leave it out.
     pub no_thinking_flag: bool,
+    /// The texts drawn in the last frame, in order, so the mouse can pick among them; and the selection in them.
+    pub texts: RefCell<Vec<crate::claude_select::Registered>>,
+    pub sel: Option<crate::claude_select::Sel>,
+    pub sel_dragging: bool,
+    /// The chat was scrolled by a drag: the selection's head is re-placed once it has been laid out again.
+    pub drag_follow: bool,
+    /// The tool calls whose output is open in the chat.
+    pub shown_output: HashSet<String>,
+    /// Pictures that will go with the next question.
+    pub attachments: Vec<ImageAttachment>,
+    /// The file suggestions shown while an `@name` is being typed.
+    pub mention: Option<Mention>,
 }
 
 impl Default for ClaudeState {
@@ -75,6 +96,13 @@ impl Default for ClaudeState {
             open_thoughts: HashSet::new(),
             last_turn: None,
             no_thinking_flag: false,
+            texts: RefCell::new(Vec::new()),
+            sel: None,
+            sel_dragging: false,
+            drag_follow: false,
+            shown_output: HashSet::new(),
+            attachments: Vec::new(),
+            mention: None,
         }
     }
 }
@@ -115,6 +143,8 @@ impl Workspace {
         c.expanded.clear();
         c.answers.clear();
         c.open_thoughts.clear();
+        c.shown_output.clear();
+        c.sel = None;
     }
 
     /// The `claude` program, looked up until it is found (so installing it needs no restart).
@@ -241,8 +271,12 @@ impl Workspace {
         };
         let context = self.claude.use_context.then(|| self.claude_context());
         let prompt = claude::compose_prompt(&question, context.as_ref());
-        let opts = Options { binary, cwd: self.root().to_path_buf(), mode: self.claude.mode, model: self.settings.claude_model.clone(), effort: self.settings.claude_effort.clone(), show_thinking: self.settings.claude_show_thinking && !self.claude.no_thinking_flag, resume: self.claude.convo.session_id.clone() };
-        self.claude.convo.ask(&question);
+        let images = std::mem::take(&mut self.claude.attachments);
+        let shown_question = images.iter().fold(question.clone(), |q, i| format!("{q}\n[Attached image: {}]", i.name));
+        self.claude.mention = None;
+        let opts = Options { binary, cwd: self.root().to_path_buf(), mode: self.claude.mode, model: self.settings.claude_model.clone(), effort: self.settings.claude_effort.clone(), show_thinking: self.settings.claude_show_thinking && !self.claude.no_thinking_flag, resume: self.claude.convo.session_id.clone(), images };
+        self.claude.convo.ask(&shown_question);
+        self.claude.sel = None;
         self.claude.input.set_text("");
         self.claude.stderr.clear();
         match claude::start(&opts, &prompt) {
@@ -257,6 +291,97 @@ impl Workspace {
         }
         self.claude_refresh_blocks();
         self.scroll_claude_to_bottom();
+    }
+
+    // ---- @ files and attachments ----
+
+    /// Look at what is being typed: while it is an `@name`, list the project files that match.
+    pub(crate) fn claude_update_mention(&mut self) {
+        let text = self.claude.input.text().to_owned();
+        let Some((start, query)) = claude::mention_at(&text, self.claude.input.cursor()) else {
+            self.claude.mention = None;
+            return;
+        };
+        self.ensure_file_index();
+        let items: Vec<String> = match self.file_index.as_ref() {
+            Some(files) => forge_core::quick::file_entries(files, self.root(), &query, &self.recent_files, 8).into_iter().map(|e| e.label).collect(),
+            None => Vec::new(),
+        };
+        let selected = self.claude.mention.as_ref().map_or(0, |m| m.selected).min(items.len().saturating_sub(1));
+        self.claude.mention = (!items.is_empty()).then_some(Mention { start, items, selected });
+    }
+
+    /// Put the chosen file in the question in place of what was typed after the `@`.
+    pub(crate) fn claude_accept_mention(&mut self) -> bool {
+        let Some(m) = self.claude.mention.take() else { return false };
+        let Some(path) = m.items.get(m.selected).cloned() else { return false };
+        let caret = self.claude.input.cursor();
+        self.claude.input.set_cursor(m.start, false);
+        self.claude.input.set_cursor(caret, true);
+        self.claude.input.insert(&format!("@{path} "));
+        true
+    }
+
+    /// Choose files with the system's dialog and attach them.
+    pub(crate) fn claude_pick_files(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(gpui::PathPromptOptions { files: true, directories: false, multiple: true, prompt: None });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picked.await {
+                let _ = this.update(cx, |workspace, cx| {
+                    workspace.claude_attach_paths(&paths);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Attach files to the next question: pictures go along with it, anything else is named in it as an `@file`.
+    pub(crate) fn claude_attach_paths(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            match claude::image_media_type(path) {
+                Some(media) => match std::fs::read(path).map_err(|e| format!("cannot read {name}: {e}")).and_then(|bytes| claude::attach_image(&name, media, &bytes)) {
+                    Ok(image) => self.claude_add_image(image),
+                    Err(error) => self.set_status(error),
+                },
+                None => {
+                    let label = claude::display_path(&path.to_string_lossy(), self.root());
+                    self.claude.input.insert(&format!("@{label} "));
+                }
+            }
+        }
+        self.open_claude();
+    }
+
+    fn claude_add_image(&mut self, image: ImageAttachment) {
+        if !self.claude.attachments.contains(&image) {
+            self.claude.attachments.push(image);
+        }
+    }
+
+    /// A picture on the clipboard goes with the next question; true when there was one.
+    pub(crate) fn claude_paste_image(&mut self, item: &gpui::ClipboardItem) -> bool {
+        for entry in item.entries() {
+            let gpui::ClipboardEntry::Image(image) = entry else { continue };
+            let (media, ext) = match image.format {
+                gpui::ImageFormat::Png => ("image/png", "png"),
+                gpui::ImageFormat::Jpeg => ("image/jpeg", "jpg"),
+                gpui::ImageFormat::Webp => ("image/webp", "webp"),
+                gpui::ImageFormat::Gif => ("image/gif", "gif"),
+                _ => {
+                    self.set_status("Claude reads PNG, JPEG, GIF and WebP pictures");
+                    return true;
+                }
+            };
+            let name = format!("pasted image {}.{ext}", self.claude.attachments.len() + 1);
+            match claude::attach_image(&name, media, &image.bytes) {
+                Ok(attached) => self.claude_add_image(attached),
+                Err(error) => self.set_status(error),
+            }
+            return true;
+        }
+        false
     }
 
     // ---- the running turn ----
@@ -463,6 +588,13 @@ impl Workspace {
         self.open_virtual(&format!("claude:{tool_id}"), &format!("{name} (Claude)"), &text, true, cx);
     }
 
+    /// Show or hide what a tool call printed.
+    pub(crate) fn claude_toggle_output(&mut self, tool_id: &str) {
+        if !self.claude.shown_output.remove(tool_id) {
+            self.claude.shown_output.insert(tool_id.to_owned());
+        }
+    }
+
     pub(crate) fn claude_toggle_diff(&mut self, tool_id: &str) {
         if !self.claude.expanded.remove(tool_id) {
             self.claude.expanded.insert(tool_id.to_owned());
@@ -526,6 +658,43 @@ impl Workspace {
 
     pub(crate) fn claude_key(&mut self, k: &Keystroke, cx: &mut Context<Self>) -> bool {
         let ctrl = k.modifiers.control || k.modifiers.platform;
+        // A card is waiting: its buttons answer to the keyboard (numbers and Enter only while the question box is empty).
+        if let Some(request) = self.claude.convo.pending.first().cloned() {
+            let plain = !ctrl && !k.modifiers.alt && !k.modifiers.shift;
+            let key_ok = k.key == "escape" || (plain && self.claude.input.is_empty());
+            if key_ok {
+                let actions = claude::card_actions(&request);
+                if let Some(i) = claude::card_key(&actions, k.key.as_str()) {
+                    let kind = actions[i].kind.clone();
+                    self.claude_run_action(&request, &kind);
+                    return true;
+                }
+            }
+        }
+        // The file suggestions under an `@`: arrows choose, Tab or Enter takes one, Escape closes the list.
+        if let Some(m) = self.claude.mention.as_mut() {
+            let last = m.items.len().saturating_sub(1);
+            match (k.key.as_str(), k.modifiers.shift) {
+                ("down", false) => {
+                    m.selected = (m.selected + 1).min(last);
+                    return true;
+                }
+                ("up", false) => {
+                    m.selected = m.selected.saturating_sub(1);
+                    return true;
+                }
+                ("tab" | "enter", false) if !ctrl && !k.modifiers.alt => {
+                    if self.claude_accept_mention() {
+                        return true;
+                    }
+                }
+                ("escape", _) => {
+                    self.claude.mention = None;
+                    return true;
+                }
+                _ => {}
+            }
+        }
         match (k.key.as_str(), ctrl, k.modifiers.shift) {
             ("escape", _, _) => {
                 if self.claude.convo.busy {
@@ -545,13 +714,21 @@ impl Workspace {
                     if k.key == "x" {
                         self.claude.input.delete_selection();
                     }
+                } else if let Some(text) = self.claude_selection_text() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    self.set_status("Copied the selected text");
                 }
                 return true;
             }
             ("v", true, _) => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                    self.claude.input.insert(&text);
+                if let Some(item) = cx.read_from_clipboard() {
+                    if !self.claude_paste_image(&item) {
+                        if let Some(text) = item.text() {
+                            self.claude.input.insert(&text);
+                        }
+                    }
                 }
+                self.claude_update_mention();
                 return true;
             }
             // Enter sends, Shift+Enter starts a new line.
@@ -565,7 +742,11 @@ impl Workspace {
             }
             _ => {}
         }
-        matches!(self.claude.input.apply(&k.key, ctrl, k.modifiers.shift, k.key_char.as_deref()), Outcome::Edited | Outcome::Moved | Outcome::Submit)
+        let changed = matches!(self.claude.input.apply(&k.key, ctrl, k.modifiers.shift, k.key_char.as_deref()), Outcome::Edited | Outcome::Moved | Outcome::Submit);
+        if changed {
+            self.claude_update_mention();
+        }
+        changed
     }
 
     // ---- drawing ----
@@ -585,6 +766,17 @@ impl Workspace {
             .border_l_1()
             .border_color(rgb(t.border))
             .child(self.resize_handle(("resize", 7), Resize::Claude, Edge::Left, cx))
+            // Files dropped on the chat (from the Explorer or from the system) are attached to the next question.
+            .drag_over::<gpui::ExternalPaths>(|s, _, _, _| s.bg(gpui::rgba(0x3b82f61a)))
+            .drag_over::<crate::explorer_dnd::DraggedEntry>(|s, _, _, _| s.bg(gpui::rgba(0x3b82f61a)))
+            .on_drop(cx.listener(|this, dropped: &gpui::ExternalPaths, _, cx| {
+                this.claude_attach_paths(dropped.paths());
+                cx.notify();
+            }))
+            .on_drop(cx.listener(|this, dragged: &crate::explorer_dnd::DraggedEntry, _, cx| {
+                this.claude_attach_paths(std::slice::from_ref(&dragged.path));
+                cx.notify();
+            }))
             .child(self.render_claude(cx))
             .into_any_element()
     }
@@ -637,7 +829,24 @@ impl Workspace {
             );
 
         let empty = c.convo.entries.is_empty();
-        let mut list = div().id("claude-scroll").flex().flex_col().gap_3().px_3().pb_2().flex_1().min_h_0().overflow_y_scroll().track_scroll(&c.scroll);
+        // The texts drawn below register themselves again, in order.
+        c.texts.borrow_mut().clear();
+        let mut list = div()
+            .id("claude-scroll")
+            .flex()
+            .flex_col()
+            .gap_3()
+            .px_3()
+            .pb_2()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&c.scroll)
+            .cursor_text()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                this.claude_select_down(ev);
+                cx.notify();
+            }));
         if c.show_history {
             list = list.child(div().text_xs().text_color(rgb(t.dim)).child("PAST CONVERSATIONS"));
             list = if c.history.is_empty() {
@@ -771,8 +980,105 @@ impl Workspace {
             }))
             .child(crate::icons::glyph(crate::codicons::SEND, 1.0, if send_enabled { t.text } else { t.dim }));
         let input = self.render_text_area(AreaId::Claude, Focus::Claude, "claude-input", "Ask Claude...", vec![send.into_any_element()], 26.0, cx);
+        // Attach: the system's file dialog; pictures can also be pasted or dropped on the chat.
+        let attach = div()
+            .id("claude-attach")
+            .w(px(22.0))
+            .h(px(22.0))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(|s| s.bg(rgb(t.border)))
+            .tooltip(self.tooltip("Attach files or pictures (you can also paste or drop them)", None))
+            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+            .on_click(cx.listener(|this, _, _, cx| this.claude_pick_files(cx)))
+            .child(crate::icons::glyph(crate::codicons::ATTACH, 0.9375, t.dim));
+        let picture_chips: Vec<AnyElement> = c
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                div()
+                    .id(("claude-picture", i))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .min_w_0()
+                    .px_2()
+                    .py(px(1.0))
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(rgb(t.border))
+                    .text_xs()
+                    .text_color(rgb(t.text))
+                    .child(crate::icons::glyph(crate::codicons::FILE_MEDIA, 0.75, t.dim))
+                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().child(a.name.clone()))
+                    .child(
+                        div()
+                            .id(("claude-picture-x", i))
+                            .w(px(14.0))
+                            .h(px(14.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgb(t.border)))
+                            .tooltip(self.tooltip("Remove", None))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if i < this.claude.attachments.len() {
+                                    this.claude.attachments.remove(i);
+                                }
+                                cx.notify();
+                            }))
+                            .child(crate::icons::glyph(crate::codicons::CLOSE, 0.625, t.dim)),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        let suggestions = c.mention.as_ref().map(|m| {
+            div()
+                .flex()
+                .flex_col()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(t.border))
+                .bg(rgb(t.popup))
+                .shadow_sm()
+                .children(m.items.iter().enumerate().map(|(i, label)| {
+                    div()
+                        .id(("claude-mention", i))
+                        .px_2()
+                        .py(px(2.0))
+                        .text_xs()
+                        .text_color(rgb(t.text))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .cursor_pointer()
+                        .when(i == m.selected, |d| d.bg(rgb(t.selection)))
+                        .when(i != m.selected, |d| d.hover(|s| s.bg(rgb(t.tab_active))))
+                        .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(m) = this.claude.mention.as_mut() {
+                                m.selected = i;
+                            }
+                            this.claude_accept_mention();
+                            cx.notify();
+                        }))
+                        .child(label.clone())
+                }))
+                .into_any_element()
+        });
 
-        self.claude_frame_with_input(header, list, vec![chip.into_any_element(), model_chip.into_any_element(), effort_chip.into_any_element()], context_chip, input)
+        let mut chips = vec![chip.into_any_element(), model_chip.into_any_element(), effort_chip.into_any_element(), attach.into_any_element()];
+        chips.extend(picture_chips);
+        self.claude_frame_with_input(header, list, chips, context_chip, suggestions, input)
     }
 
     /// The panel with only a list in it (no question box): the past conversations.
@@ -780,7 +1086,7 @@ impl Workspace {
         div().flex().flex_col().flex_1().min_h_0().child(header).child(list).into_any_element()
     }
 
-    fn claude_frame_with_input(&self, header: impl IntoElement, list: impl IntoElement, chips: Vec<AnyElement>, context_chip: Option<impl IntoElement>, input: impl IntoElement) -> AnyElement {
+    fn claude_frame_with_input(&self, header: impl IntoElement, list: impl IntoElement, chips: Vec<AnyElement>, context_chip: Option<impl IntoElement>, suggestions: Option<AnyElement>, input: impl IntoElement) -> AnyElement {
         let t = &self.theme;
         div()
             .flex()
@@ -797,6 +1103,7 @@ impl Workspace {
                     .gap_1()
                     .p(px(10.0))
                     .child(div().flex().flex_row().flex_wrap().items_center().gap_1().children(chips).children(context_chip))
+                    .children(suggestions)
                     .child(input)
                     .child(div().text_xs().text_color(rgb(t.dim)).child("Enter to send, Shift+Enter for a new line")),
             )
@@ -814,14 +1121,14 @@ impl Workspace {
                 .bg(rgb(t.tab_active))
                 .text_sm()
                 .text_color(rgb(t.text))
-                .child(text.clone())
+                .child(self.claude_text(text))
                 .into_any_element(),
             Entry::Assistant { text, .. } => {
                 let blocks = self.claude.blocks.get(ix).map(|b| b.1.as_slice()).unwrap_or_default();
                 let body: Vec<AnyElement> = if blocks.is_empty() {
-                    vec![div().text_sm().child(text.clone()).into_any_element()]
+                    vec![div().text_sm().child(self.claude_text(text)).into_any_element()]
                 } else {
-                    blocks.iter().enumerate().map(|(bi, b)| self.markdown_block(b, self.root().to_path_buf(), ix * 1000 + bi * 40, cx)).collect()
+                    blocks.iter().enumerate().map(|(bi, b)| self.claude_markdown_block(b, self.root().to_path_buf(), ix * 1000 + bi * 40, cx)).collect()
                 };
                 let copy_text = text.clone();
                 div()
@@ -863,7 +1170,7 @@ impl Workspace {
             }
             Entry::Tool { .. } => self.render_claude_tool(ix, entry, cx),
             Entry::Thinking { text, streaming } => self.render_claude_thinking(ix, text, *streaming, cx),
-            Entry::Notice(text) => div().w_full().text_xs().text_color(rgb(t.warning)).child(text.clone()).into_any_element(),
+            Entry::Notice(text) => div().w_full().text_xs().text_color(rgb(t.warning)).child(self.claude_text(text)).into_any_element(),
         }
     }
 }

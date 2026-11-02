@@ -17,5 +17,6 @@ vt100 = "0.18"
 trash = "5"
 similar = "3"
 sha2 = "0.10"
+base64 = "0.22"
 pulldown-cmark = { version = "0.13", default-features = false }
 zip = { version = "2", default-features = false, features = ["deflate"] }

@@ -41,6 +41,7 @@ mod lsp_extras;
 mod outline_view;
 mod terminal_mouse;
 mod claude_cards;
+mod claude_select;
 mod claude_view;
 mod titlebar;
 mod tree;

@@ -153,9 +153,152 @@ pub fn control_error(request_id: &str, error: &str) -> String {
     serde_json::json!({ "type": "control_response", "response": { "subtype": "error", "request_id": request_id, "error": error } }).to_string()
 }
 
-/// The message that starts a turn, in the program's streaming input format.
-pub fn user_message(prompt: &str) -> String {
-    serde_json::json!({ "type": "user", "message": { "role": "user", "content": prompt } }).to_string()
+/// An image sent along with a question.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageAttachment {
+    /// The file's name, for showing it.
+    pub name: String,
+    /// `image/png`, `image/jpeg`, `image/gif` or `image/webp`.
+    pub media_type: String,
+    /// The picture, base64 encoded.
+    pub data: String,
+}
+
+/// The largest image sent, in bytes (the API takes 5 MB once it is base64 encoded).
+pub const MAX_IMAGE_BYTES: usize = 3_700_000;
+
+/// The media type of an image file by its extension, if it is a kind Claude reads.
+pub fn image_media_type(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_string_lossy().to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Wrap picture bytes for sending; refuses what is too big.
+pub fn attach_image(name: &str, media_type: &str, bytes: &[u8]) -> Result<ImageAttachment, String> {
+    use base64::Engine;
+    if bytes.is_empty() {
+        return Err(format!("{name} is empty"));
+    }
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!("{name} is {:.1} MB: images over {:.1} MB are not sent", bytes.len() as f64 / 1e6, MAX_IMAGE_BYTES as f64 / 1e6));
+    }
+    Ok(ImageAttachment { name: name.to_owned(), media_type: media_type.to_owned(), data: base64::engine::general_purpose::STANDARD.encode(bytes) })
+}
+
+/// The message that starts a turn, in the program's streaming input format: the question, and any pictures after it.
+pub fn user_message(prompt: &str, images: &[ImageAttachment]) -> String {
+    let content = if images.is_empty() {
+        Value::String(prompt.to_owned())
+    } else {
+        let mut blocks = vec![serde_json::json!({ "type": "text", "text": prompt })];
+        blocks.extend(images.iter().map(|i| serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": i.media_type, "data": i.data } })));
+        Value::Array(blocks)
+    };
+    serde_json::json!({ "type": "user", "message": { "role": "user", "content": content } }).to_string()
+}
+
+/// The `@name` the user is typing at char offset `caret` of `text`: where its `@` is (in chars) and what follows it.
+/// An `@` only counts at the start or after a space or new line, so addresses like `a@b.c` are left alone.
+pub fn mention_at(text: &str, caret: usize) -> Option<(usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let caret = caret.min(chars.len());
+    let mut i = caret;
+    while i > 0 {
+        let c = chars[i - 1];
+        if c.is_whitespace() {
+            return None;
+        }
+        if c == '@' {
+            let start = i - 1;
+            return (start == 0 || chars[start - 1].is_whitespace()).then(|| (start, chars[i..caret].iter().collect()));
+        }
+        i -= 1;
+    }
+    None
+}
+
+// ---- the answers a card offers ----
+
+/// What one button of a card does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CardKind {
+    Allow,
+    /// Allow, and keep the rule change the program offered.
+    AllowAndRemember,
+    Deny,
+    PlanAuto,
+    PlanAsk,
+    PlanKeep,
+    /// One option of one of Claude's questions.
+    Option { question: String, label: String, multi: bool },
+    SendAnswers,
+    Skip,
+}
+
+/// One button of a card: what it does, what it says, and whether it is the one to press.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CardAction {
+    pub kind: CardKind,
+    pub label: String,
+    pub primary: bool,
+}
+
+/// The buttons of the card for `request`, in order. The chat draws them, and the keyboard picks among them: number
+/// `n` is the n-th button.
+pub fn card_actions(request: &PermissionRequest) -> Vec<CardAction> {
+    let action = |kind: CardKind, label: &str, primary: bool| CardAction { kind, label: label.to_owned(), primary };
+    match request.tool_name.as_str() {
+        "ExitPlanMode" => vec![
+            action(CardKind::PlanAuto, "Approve, edit automatically", true),
+            action(CardKind::PlanAsk, "Approve, ask before edits", false),
+            action(CardKind::PlanKeep, "Keep planning", false),
+        ],
+        "AskUserQuestion" => {
+            let questions = request.input["questions"].as_array().cloned().unwrap_or_default();
+            let mut out = Vec::new();
+            for q in &questions {
+                let question = q["question"].as_str().unwrap_or_default().to_owned();
+                let multi = q["multiSelect"].as_bool().unwrap_or(false);
+                for o in q["options"].as_array().into_iter().flatten() {
+                    let label = o["label"].as_str().unwrap_or_default().to_owned();
+                    out.push(CardAction { kind: CardKind::Option { question: question.clone(), label: label.clone(), multi }, label, primary: false });
+                }
+            }
+            if questions.iter().any(|q| q["multiSelect"].as_bool().unwrap_or(false)) {
+                out.push(action(CardKind::SendAnswers, "Send answers", true));
+            }
+            out.push(action(CardKind::Skip, "Skip", false));
+            out
+        }
+        _ => {
+            let mut out = vec![action(CardKind::Allow, "Allow", true)];
+            if let Some(s) = request.suggestions.first() {
+                let label = match s["type"].as_str() {
+                    Some("setMode") if s["mode"] == "acceptEdits" => "Allow all edits this session",
+                    Some("setMode") => "Allow, and don't ask again",
+                    _ => "Always allow this",
+                };
+                out.push(action(CardKind::AllowAndRemember, label, false));
+            }
+            out.push(action(CardKind::Deny, "Deny", false));
+            out
+        }
+    }
+}
+
+/// Which button a key presses: `1`..`9` the n-th, Enter the primary one, Escape the one that says no.
+pub fn card_key(actions: &[CardAction], key: &str) -> Option<usize> {
+    match key {
+        "enter" => actions.iter().position(|a| a.primary),
+        "escape" => actions.iter().rposition(|a| matches!(a.kind, CardKind::Deny | CardKind::PlanKeep | CardKind::Skip)),
+        digit if digit.len() == 1 => digit.chars().next()?.to_digit(10).filter(|d| *d >= 1).map(|d| d as usize - 1).filter(|i| *i < actions.len()),
+        _ => None,
+    }
 }
 
 /// The events in one line of the program's output (none for lines Forge has no use for).
@@ -241,7 +384,13 @@ pub fn parse_transcript_line(line: &str) -> Vec<Event> {
         let content = &v["message"]["content"];
         let typed = match content {
             Value::String(s) => Some(s.clone()),
-            Value::Array(blocks) if blocks.iter().all(|b| b["type"] == "text") && !blocks.is_empty() => Some(blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n")),
+            Value::Array(blocks) if blocks.iter().all(|b| b["type"] == "text" || b["type"] == "image") && blocks.iter().any(|b| b["type"] == "text") => {
+                let mut text = blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+                for _ in blocks.iter().filter(|b| b["type"] == "image") {
+                    text.push_str("\n[Attached image]");
+                }
+                Some(text)
+            }
             _ => None,
         };
         return match typed {
@@ -387,8 +536,8 @@ impl Conversation {
     }
 }
 
-/// The longest tool result the chat keeps, in characters.
-const MAX_RESULT_CHARS: usize = 4000;
+/// The longest tool result the chat keeps, in characters (what a long command or file prints is cut after this).
+pub const MAX_RESULT_CHARS: usize = 20_000;
 
 /// A question as the user typed it: without the editor context [`compose_prompt`] put in front of it.
 pub fn strip_context(text: &str) -> String {
@@ -424,6 +573,25 @@ pub fn display_path(path: &str, root: &Path) -> String {
 
 /// The `claude` program: on the PATH, or where its installers put it.
 pub fn find_claude(configured: &str) -> Option<PathBuf> {
+    find_claude_in(configured).map(|p| real_program(&p))
+}
+
+/// What an npm install puts on the PATH on Windows is a `claude.cmd` script that starts the real `claude.exe` beside
+/// it. Run that program itself when it is there: stopping a turn then ends the program, not just the script around it.
+pub fn real_program(found: &Path) -> PathBuf {
+    let is_script = found.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    if is_script {
+        if let Some(dir) = found.parent() {
+            let exe = dir.join("node_modules").join("@anthropic-ai").join("claude-code").join("bin").join("claude.exe");
+            if exe.is_file() {
+                return exe;
+            }
+        }
+    }
+    found.to_path_buf()
+}
+
+fn find_claude_in(configured: &str) -> Option<PathBuf> {
     let configured = configured.trim();
     if !configured.is_empty() {
         let p = PathBuf::from(configured);
@@ -458,6 +626,8 @@ pub struct Options {
     pub show_thinking: bool,
     /// The session to continue, when the chat has already begun.
     pub resume: Option<String>,
+    /// Pictures that go with the question.
+    pub images: Vec<ImageAttachment>,
 }
 
 /// The program's arguments for one turn. The question itself goes in on standard input, as a JSON line.
@@ -517,7 +687,7 @@ pub fn start(opts: &Options, prompt: &str) -> Result<Run, String> {
     let stdin = Arc::new(Mutex::new(Some(stdin)));
     // The question can be long: write it from a thread so a full pipe never stalls the editor.
     let first = stdin.clone();
-    let line = user_message(prompt);
+    let line = user_message(prompt, &opts.images);
     std::thread::spawn(move || {
         if let Some(pipe) = first.lock().ok().as_mut().and_then(|g| g.as_mut()) {
             let _ = writeln!(pipe, "{line}");
@@ -591,9 +761,15 @@ impl Run {
         writeln!(pipe, "{line}").and_then(|_| pipe.flush()).map_err(|e| format!("could not answer Claude: {e}"))
     }
 
-    /// Stop the program.
+    /// Stop the program, and anything it started.
     pub fn stop(&self) {
         if let Ok(mut child) = self.child.lock() {
+            #[cfg(windows)]
+            {
+                // A script around the program, or tools it started, would outlive a plain kill: end the whole tree.
+                use std::os::windows::process::CommandExt;
+                let _ = Command::new("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null()).status();
+            }
             let _ = child.kill();
         }
     }
@@ -827,6 +1003,24 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn an_npm_script_is_swapped_for_the_program_beside_it() {
+        let dir = std::env::temp_dir().join(format!("forge-claude-shim-{}", std::process::id()));
+        let bin = dir.join("node_modules").join("@anthropic-ai").join("claude-code").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = dir.join("claude.cmd");
+        std::fs::write(&script, "@echo off").unwrap();
+        // No program beside the script yet: the script it is.
+        assert_eq!(real_program(&script), script);
+        std::fs::write(bin.join("claude.exe"), "").unwrap();
+        assert_eq!(real_program(&script), bin.join("claude.exe"));
+        // Anything that is not a script is left alone.
+        let plain = dir.join("claude");
+        std::fs::write(&plain, "").unwrap();
+        assert_eq!(real_program(&plain), plain);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn feed(convo: &mut Conversation, lines: &[&str]) {
         for line in lines {
             for event in parse_line(line) {
@@ -920,7 +1114,7 @@ mod tests {
 
     #[test]
     fn arguments_continue_the_session_and_set_the_mode() {
-        let mut o = Options { binary: "claude".into(), cwd: ".".into(), mode: PermissionMode::AcceptEdits, model: String::new(), effort: String::new(), show_thinking: false, resume: None };
+        let mut o = Options { binary: "claude".into(), cwd: ".".into(), mode: PermissionMode::AcceptEdits, model: String::new(), effort: String::new(), show_thinking: false, resume: None, images: Vec::new() };
         let a = build_args(&o);
         assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]) && a.windows(2).any(|w| w == ["--input-format", "stream-json"]));
@@ -1003,7 +1197,7 @@ mod tests {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), show_thinking: false, resume: None };
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), show_thinking: false, resume: None, images: Vec::new() };
         let mut run = start(&opts, "hello there").unwrap();
         let mut convo = Conversation::default();
         convo.ask("hello there");
@@ -1164,7 +1358,7 @@ mod tests {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), show_thinking: false, resume: None };
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), show_thinking: false, resume: None, images: Vec::new() };
         let mut run = start(&opts, "write it").unwrap();
         let mut convo = Conversation::default();
         convo.ask("write it");
@@ -1200,5 +1394,90 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("closed.txt")).unwrap().trim(), "closed");
         assert!(run.respond("r1", &Decision::Deny { message: "late".into() }).is_err(), "nobody is listening after the turn");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod card_and_attachment_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn request(tool: &str, input: Value, suggestions: Vec<Value>) -> PermissionRequest {
+        PermissionRequest { id: "r1".into(), tool_name: tool.into(), tool_use_id: "t1".into(), description: String::new(), input, suggestions }
+    }
+
+    #[test]
+    fn a_tool_card_offers_allow_remember_and_deny() {
+        let plain = card_actions(&request("Bash", json!({ "command": "ls" }), vec![]));
+        assert_eq!(plain.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(), ["Allow", "Deny"]);
+        let edit = card_actions(&request("Edit", json!({}), vec![json!({ "type": "setMode", "mode": "acceptEdits" })]));
+        assert_eq!(edit.iter().map(|a| a.kind.clone()).collect::<Vec<_>>(), [CardKind::Allow, CardKind::AllowAndRemember, CardKind::Deny]);
+        assert_eq!(edit[1].label, "Allow all edits this session");
+    }
+
+    #[test]
+    fn plan_and_question_cards_list_their_buttons() {
+        let plan = card_actions(&request("ExitPlanMode", json!({ "plan": "x" }), vec![]));
+        assert_eq!(plan.len(), 3);
+        assert!(plan[0].primary && !plan[2].primary);
+        let q = request("AskUserQuestion", json!({ "questions": [{ "question": "Which?", "options": [{ "label": "A" }, { "label": "B" }] }, { "question": "More?", "multiSelect": true, "options": [{ "label": "X" }] }] }), vec![]);
+        let actions = card_actions(&q);
+        assert_eq!(actions.iter().map(|a| a.label.as_str()).collect::<Vec<_>>(), ["A", "B", "X", "Send answers", "Skip"]);
+        assert!(matches!(&actions[2].kind, CardKind::Option { question, multi: true, .. } if question == "More?"));
+    }
+
+    #[test]
+    fn keys_press_the_buttons() {
+        let actions = card_actions(&request("Edit", json!({}), vec![json!({ "type": "setMode", "mode": "acceptEdits" })]));
+        assert_eq!(card_key(&actions, "1"), Some(0));
+        assert_eq!(card_key(&actions, "2"), Some(1));
+        assert_eq!(card_key(&actions, "3"), Some(2));
+        assert_eq!(card_key(&actions, "4"), None);
+        assert_eq!(card_key(&actions, "0"), None);
+        assert_eq!(card_key(&actions, "enter"), Some(0));
+        assert_eq!(card_key(&actions, "escape"), Some(2));
+        assert_eq!(card_key(&actions, "x"), None);
+        // A question with only single choices has no primary button: Enter does nothing, Escape skips.
+        let q = card_actions(&request("AskUserQuestion", json!({ "questions": [{ "question": "Q", "options": [{ "label": "A" }] }] }), vec![]));
+        assert_eq!(card_key(&q, "enter"), None);
+        assert_eq!(card_key(&q, "escape"), Some(1));
+    }
+
+    #[test]
+    fn a_mention_is_found_at_the_caret() {
+        assert_eq!(mention_at("look at @src/ma", 15), Some((8, "src/ma".to_owned())));
+        assert_eq!(mention_at("@", 1), Some((0, String::new())));
+        assert_eq!(mention_at("mail me@home", 12), None);
+        assert_eq!(mention_at("see @a.rs and then", 18), None);
+        assert_eq!(mention_at("see @a.rs and", 6), Some((4, "a".to_owned())));
+        assert_eq!(mention_at("line one\n@x", 11), Some((9, "x".to_owned())));
+    }
+
+    #[test]
+    fn pictures_go_after_the_question_as_base64_blocks() {
+        let plain: Value = serde_json::from_str(&user_message("hi", &[])).unwrap();
+        assert_eq!(plain["message"]["content"], "hi");
+        let image = attach_image("shot.png", "image/png", &[1, 2, 3, 4]).unwrap();
+        assert_eq!(image.data, "AQIDBA==");
+        let with: Value = serde_json::from_str(&user_message("what is this?", &[image])).unwrap();
+        let blocks = with["message"]["content"].as_array().unwrap();
+        assert_eq!((blocks[0]["type"].as_str(), blocks[0]["text"].as_str()), (Some("text"), Some("what is this?")));
+        assert_eq!((blocks[1]["type"].as_str(), blocks[1]["source"]["media_type"].as_str(), blocks[1]["source"]["data"].as_str()), (Some("image"), Some("image/png"), Some("AQIDBA==")));
+    }
+
+    #[test]
+    fn images_are_recognised_and_limited() {
+        assert_eq!(image_media_type(Path::new("a/B.PNG")), Some("image/png"));
+        assert_eq!(image_media_type(Path::new("x.jpeg")), Some("image/jpeg"));
+        assert_eq!(image_media_type(Path::new("x.svg")), None);
+        assert_eq!(image_media_type(Path::new("x")), None);
+        assert!(attach_image("a.png", "image/png", &[]).is_err());
+        assert!(attach_image("big.png", "image/png", &vec![0u8; MAX_IMAGE_BYTES + 1]).unwrap_err().contains("big.png"));
+    }
+
+    #[test]
+    fn a_saved_question_with_a_picture_still_shows() {
+        let line = json!({ "type": "user", "message": { "content": [{ "type": "text", "text": "what is this?" }, { "type": "image", "source": {} }] } }).to_string();
+        assert_eq!(parse_transcript_line(&line), vec![Event::UserText("what is this?\n[Attached image]".to_owned())]);
     }
 }

@@ -2169,6 +2169,7 @@ impl Workspace {
             changed |= terminal.pump();
         }
         changed |= self.poll_background();
+        changed |= self.claude_select_autoscroll();
         changed |= self.debug_tick(cx);
         self.save_session(false);
         self.save_backups(false);

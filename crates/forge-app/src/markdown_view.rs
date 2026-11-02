@@ -19,6 +19,8 @@ struct Ctx<'a> {
     /// The folder of the document, for links to neighbouring files.
     base: PathBuf,
     next_id: Cell<usize>,
+    /// Set in the Claude chat, where the text can be selected with the mouse.
+    select: Option<crate::claude_select::Selectable<'a>>,
 }
 
 /// One paragraph's worth of spans as wrapping text with styled runs; links in it can be clicked.
@@ -64,7 +66,10 @@ fn text(ctx: &Ctx, spans: &[Span], bold_all: bool) -> AnyElement {
             runs.push((start..content.len(), style));
         }
     }
-    let styled = StyledText::new(content).with_highlights(runs);
+    let styled = match &ctx.select {
+        Some(select) => select.register(&content, runs),
+        None => StyledText::new(content).with_highlights(runs),
+    };
     if link_ranges.is_empty() {
         return styled.into_any_element();
     }
@@ -126,7 +131,13 @@ fn block(ctx: &Ctx, b: &Block) -> AnyElement {
             .overflow_hidden()
             .text_sm()
             .when(!lang.is_empty(), |d| d.child(div().pb_1().text_xs().text_color(rgb(t.dim)).child(lang.clone())))
-            .children(code.split('\n').map(|line| div().whitespace_nowrap().min_h(rems(1.25)).text_color(rgb(t.text)).child(line.to_owned())))
+            .children(code.split('\n').map(|line| {
+                let row = div().whitespace_nowrap().min_h(rems(1.25)).text_color(rgb(t.text));
+                match &ctx.select {
+                    Some(select) => row.child(select.register(line, Vec::new())),
+                    None => row.child(line.to_owned()),
+                }
+            }))
             .into_any_element(),
         Block::Quote(blocks) => div()
             .w_full()
@@ -217,7 +228,13 @@ impl Workspace {
     /// One Markdown block drawn like the preview, for pages that lay out their blocks lazily.
     /// `id_seed` keeps the ids of clickable links unique across blocks.
     pub(crate) fn markdown_block(&self, b: &Block, base: PathBuf, id_seed: usize, cx: &mut Context<Self>) -> AnyElement {
-        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base, next_id: Cell::new(id_seed) };
+        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base, next_id: Cell::new(id_seed), select: None };
+        block(&ctx, b)
+    }
+
+    /// As [`Self::markdown_block`], for the Claude chat: its text can be selected with the mouse.
+    pub(crate) fn claude_markdown_block(&self, b: &Block, base: PathBuf, id_seed: usize, cx: &mut Context<Self>) -> AnyElement {
+        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base, next_id: Cell::new(id_seed), select: Some(self.claude_selectable()) };
         block(&ctx, b)
     }
 
@@ -245,7 +262,7 @@ impl Workspace {
         }
         let (_, _, blocks) = self.md_cache.as_ref()?;
         let doc = self.active_doc()?;
-        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base: doc.path.parent().map(Path::to_path_buf).unwrap_or_default(), next_id: Cell::new(0) };
+        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base: doc.path.parent().map(Path::to_path_buf).unwrap_or_default(), next_id: Cell::new(0), select: None };
         let t = &self.theme;
         let title = doc.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Some(
@@ -355,7 +372,7 @@ impl Workspace {
     pub fn render_markdown_full(&self, g: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (_, _, blocks) = self.md_cache.as_ref()?;
         let doc = self.active_doc()?;
-        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base: doc.path.parent().map(Path::to_path_buf).unwrap_or_default(), next_id: Cell::new(0) };
+        let ctx = Ctx { t: &self.theme, workspace: cx.entity(), base: doc.path.parent().map(Path::to_path_buf).unwrap_or_default(), next_id: Cell::new(0), select: None };
         let t = &self.theme;
         Some(
             div()
