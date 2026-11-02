@@ -1,0 +1,26 @@
+# Builds the Linux packages (dist/forge-<version>-linux-x86_64.tar.gz and dist/forge_<version>_amd64.deb) in a clean
+# Ubuntu 22.04, so the result runs on any distribution with glibc 2.35 or newer (a build made on a newer system
+# needs that system's glibc or newer). The source is not copied in: docker-compose.yml mounts it at /work.
+#
+#   docker compose run --rm package-linux        (see docker-compose.yml)
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+# The same packages as `make linux-deps`, plus what the packaging steps use (make, git, dpkg-deb, sha256sum).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git make dpkg-dev file \
+      build-essential pkg-config clang cmake \
+      libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+      libx11-xcb-dev libxcb1-dev libssl-dev libzstd-dev libvulkan1 libasound2-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+ && rustup --version && cargo --version
+
+WORKDIR /work
+CMD ["make", "package-linux", "package-deb"]

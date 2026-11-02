@@ -247,6 +247,20 @@ Not done for Linux: the OpenAI / Gemini key cannot be saved yet (it is encrypted
 Every command has a VS Code id and is listed in the Command Palette with its shortcut. Syntax
 highlighting covers Rust, JSON, JavaScript, Python and TOML.
 
+## Building packages in Docker
+
+`docker-compose.yml` builds the release files in clean containers, so the result does not depend on what is installed on your machine:
+
+```
+docker compose run --rm package-linux     # dist/forge-<version>-linux-x86_64.tar.gz and dist/forge_<version>_amd64.deb (+ .sha256)
+docker compose up site                    # the landing page at http://localhost:8080
+docker compose --profile windows run --rm package-windows    # dist\Forge-Setup-<version>.exe
+```
+
+(`make docker-package-linux`, `make docker-site` and `make docker-package-windows` run the same.) The Linux build uses Ubuntu 22.04, so the program runs on distributions with glibc 2.35 or newer. Compiled dependencies are cached in Docker volumes: the first build is long, later ones are quick.
+
+The Windows installer can only be built in a **Windows** container, on a Windows machine with Docker in Windows-containers mode: a Linux container cannot build Forge for Windows. On Windows you can also run `make installer` directly (needs Rust, Visual Studio Build Tools and Inno Setup 6).
+
 ## Installer
 
 ```powershell
