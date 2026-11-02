@@ -39,7 +39,7 @@ impl Workspace {
         let size = std::fs::metadata(&path).map(|m| size_text(m.len())).unwrap_or_default();
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Some(
-            crate::scroll::overlay_page("image-page", left, t.bg, t.text)
+            crate::scroll::overlay_page("image-page", left, self.claude_width(), t.bg, t.text)
                 .p_6()
                 .flex()
                 .flex_col()

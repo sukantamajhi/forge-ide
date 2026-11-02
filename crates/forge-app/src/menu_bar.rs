@@ -39,7 +39,7 @@ impl TitleLayout {
         let center = width >= 860.0;
         let layout_icons = width >= 700.0;
         let gear = width >= 520.0;
-        let tools = if layout_icons { 2.0 * ICON_W } else { 0.0 } + if gear { ICON_W } else { 0.0 } + 8.0;
+        let tools = if layout_icons { 3.0 * ICON_W } else { 0.0 } + if gear { ICON_W } else { 0.0 } + 8.0;
         let reserved = 4.0 + LOGO_SLOT + WINDOW_BUTTONS_W + tools + if center { 300.0 } else { 0.0 };
         let space = (width - reserved).max(0.0);
         let total: f32 = (0..TITLES.len()).map(title_width).sum();
@@ -488,6 +488,7 @@ impl Workspace {
         let sidebar = if self.sidebar_visible { crate::codicons::LAYOUT_SIDEBAR_LEFT } else { crate::codicons::LAYOUT_SIDEBAR_LEFT_OFF };
         let sidebar_color = if self.sidebar_visible { t.text } else { t.dim };
         let panel_color = if self.panel_visible { t.text } else { t.dim };
+        let claude_color = if self.claude_visible { t.text } else { t.dim };
         div()
             .flex()
             .flex_row()
@@ -496,6 +497,7 @@ impl Workspace {
             .gap_0p5()
             .pr_2()
             .children(lay.layout_icons.then(|| self.title_button("tool-sidebar", sidebar, sidebar_color, "Toggle Primary Side Bar", Command::ToggleSidebar, cx)))
+            .children(lay.layout_icons.then(|| self.title_button("tool-claude", crate::codicons::CHAT_SPARKLE, claude_color, "Toggle Claude Chat", Command::ToggleClaude, cx)))
             .children(lay.layout_icons.then(|| self.title_button("tool-panel", crate::codicons::LAYOUT_PANEL, panel_color, "Toggle Panel", Command::TogglePanel, cx)))
             .children(lay.gear.then(|| self.title_button("tool-settings", crate::codicons::SETTINGS_GEAR, t.dim, "Settings", Command::OpenSettings, cx)))
     }

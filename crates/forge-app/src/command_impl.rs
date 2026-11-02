@@ -275,6 +275,7 @@ impl Workspace {
             OrganizeImports => self.organize_imports(),
             ShowOutline => self.reveal_outline(),
             ShowClaude => self.open_claude(),
+            ToggleClaude => self.toggle_claude(),
             ClaudeNewChat => self.claude_new_chat(),
             ClaudeStop => self.claude_stop(),
             ClaudeAddSelection => self.claude_add_selection(),

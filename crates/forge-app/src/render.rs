@@ -1135,7 +1135,6 @@ impl Workspace {
                         SidebarView::Git => Focus::Scm,
                         SidebarView::Extensions => Focus::Extensions,
                         SidebarView::Explorer => Focus::Explorer,
-                        SidebarView::Claude => Focus::Claude,
                     };
                     if view == SidebarView::Extensions {
                         this.open_extensions_view();
@@ -1161,7 +1160,6 @@ impl Workspace {
             SidebarView::Search => self.render_search(cx).into_any_element(),
             SidebarView::Git => self.render_scm(cx),
             SidebarView::Extensions => self.render_extensions(cx).into_any_element(),
-            SidebarView::Claude => self.render_claude(cx),
         };
         div()
             .flex()
@@ -1187,7 +1185,6 @@ impl Workspace {
                     .child(tab(crate::codicons::SEARCH, "Search", Command::FindInFiles, SidebarView::Search, 0, cx))
                     .child(tab(crate::codicons::SOURCE_CONTROL, "Source Control", Command::ShowGit, SidebarView::Git, changes, cx))
                     .child(tab(crate::codicons::EXTENSIONS, "Extensions", Command::ShowExtensions, SidebarView::Extensions, 0, cx))
-                    .child(tab(crate::codicons::CHAT_SPARKLE, "Claude", Command::ShowClaude, SidebarView::Claude, 0, cx))
                     .child(
                         div()
                             .id("sidebar-more")
@@ -3004,6 +3001,9 @@ impl Render for Workspace {
             main = main.child(self.render_sidebar(cx));
         }
         main = main.child(centre);
+        if self.claude_visible {
+            main = main.child(self.render_claude_panel(cx));
+        }
 
         let signature = self.signature.clone();
         div()
