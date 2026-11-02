@@ -57,6 +57,28 @@ impl PermissionMode {
     }
 }
 
+/// The models offered in the chat: the value of `--model` (an alias for the latest model of that kind) and its name.
+/// An empty value leaves the choice to Claude Code.
+pub const MODELS: &[(&str, &str)] = &[("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")];
+
+/// How hard Claude thinks, the values of `--effort`: more effort is slower and costs more. Empty is Claude Code's own choice.
+pub const EFFORTS: &[(&str, &str)] = &[("", "Default"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra high"), ("max", "Max")];
+
+/// The name to show for a `--model` value: the alias's name, or the value itself for a full model name.
+pub fn model_label(value: &str) -> String {
+    MODELS.iter().find(|(v, _)| v.eq_ignore_ascii_case(value.trim())).map_or_else(|| value.trim().to_owned(), |(_, l)| (*l).to_owned())
+}
+
+/// The name to show for an `--effort` value.
+pub fn effort_label(value: &str) -> String {
+    EFFORTS.iter().find(|(v, _)| v.eq_ignore_ascii_case(value.trim())).map_or_else(|| value.trim().to_owned(), |(_, l)| (*l).to_owned())
+}
+
+/// Whether `value` is one of the effort levels `--effort` takes (or empty).
+pub fn is_effort(value: &str) -> bool {
+    EFFORTS.iter().any(|(v, _)| v.eq_ignore_ascii_case(value.trim()))
+}
+
 // ---- events ----
 
 /// One thing the program reported.
@@ -398,6 +420,8 @@ pub struct Options {
     pub cwd: PathBuf,
     pub mode: PermissionMode,
     pub model: String,
+    /// How hard Claude thinks (`low` .. `max`); empty is the program's own choice.
+    pub effort: String,
     /// The session to continue, when the chat has already begun.
     pub resume: Option<String>,
 }
@@ -410,6 +434,9 @@ pub fn build_args(opts: &Options) -> Vec<String> {
         .to_vec();
     if !opts.model.trim().is_empty() {
         args.extend(["--model".to_owned(), opts.model.trim().to_owned()]);
+    }
+    if !opts.effort.trim().is_empty() {
+        args.extend(["--effort".to_owned(), opts.effort.trim().to_owned()]);
     }
     if let Some(id) = opts.resume.as_ref().filter(|s| !s.is_empty()) {
         args.extend(["--resume".to_owned(), id.clone()]);
@@ -856,15 +883,24 @@ mod tests {
 
     #[test]
     fn arguments_continue_the_session_and_set_the_mode() {
-        let mut o = Options { binary: "claude".into(), cwd: ".".into(), mode: PermissionMode::AcceptEdits, model: String::new(), resume: None };
+        let mut o = Options { binary: "claude".into(), cwd: ".".into(), mode: PermissionMode::AcceptEdits, model: String::new(), effort: String::new(), resume: None };
         let a = build_args(&o);
         assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(a.windows(2).any(|w| w == ["--permission-prompt-tool", "stdio"]) && a.windows(2).any(|w| w == ["--input-format", "stream-json"]));
         assert!(a.contains(&"--include-partial-messages".to_owned()) && !a.contains(&"--resume".to_owned()) && !a.contains(&"--model".to_owned()));
         o.resume = Some("abc".into());
         o.model = " sonnet ".into();
+        o.effort = "high".into();
         let a = build_args(&o);
-        assert!(a.windows(2).any(|w| w == ["--resume", "abc"]) && a.windows(2).any(|w| w == ["--model", "sonnet"]));
+        assert!(a.windows(2).any(|w| w == ["--resume", "abc"]) && a.windows(2).any(|w| w == ["--model", "sonnet"]) && a.windows(2).any(|w| w == ["--effort", "high"]));
+    }
+
+    #[test]
+    fn models_and_effort_levels_have_names() {
+        assert_eq!((model_label(""), model_label("opus"), model_label("claude-opus-4-1")), ("Default".to_owned(), "Opus".to_owned(), "claude-opus-4-1".to_owned()));
+        assert_eq!((effort_label(""), effort_label("xhigh"), effort_label("odd")), ("Default".to_owned(), "Extra high".to_owned(), "odd".to_owned()));
+        assert!(is_effort("") && is_effort("max") && is_effort("LOW") && !is_effort("extreme"));
+        assert_eq!(MODELS[0].0, "", "the first choice leaves it to Claude Code");
     }
 
     #[test]
@@ -901,7 +937,7 @@ mod tests {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), resume: None };
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), resume: None };
         let mut run = start(&opts, "hello there").unwrap();
         let mut convo = Conversation::default();
         convo.ask("hello there");
@@ -1062,7 +1098,7 @@ mod tests {
         std::fs::write(&script, body).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), resume: None };
+        let opts = Options { binary: script, cwd: dir.clone(), mode: PermissionMode::Ask, model: String::new(), effort: String::new(), resume: None };
         let mut run = start(&opts, "write it").unwrap();
         let mut convo = Conversation::default();
         convo.ask("write it");

@@ -116,6 +116,8 @@ pub struct Settings {
     pub claude_path: String,
     /// `claude.model`: the model the Claude chat asks for (an alias like `sonnet`, or a full name). Empty is the program's own choice.
     pub claude_model: String,
+    /// `claude.effort`: how hard Claude thinks: `low`, `medium`, `high`, `xhigh` or `max`. Empty is Claude Code's own choice.
+    pub claude_effort: String,
     /// `claude.permissionMode`: what Claude may do without asking: `default` (read only), `acceptEdits` or `plan`.
     pub claude_mode: crate::claude::PermissionMode,
 }
@@ -159,6 +161,7 @@ impl Default for Settings {
             ai_provider: crate::ai::Provider::default(),
             claude_path: String::new(),
             claude_model: String::new(),
+            claude_effort: String::new(),
             claude_mode: crate::claude::PermissionMode::default(),
             ai_gemini_model: crate::ai::DEFAULT_GEMINI_MODEL.to_owned(),
         }
@@ -376,6 +379,9 @@ impl Settings {
         if let Some(v) = map.get("claude.model").and_then(Value::as_str) {
             s.claude_model = v.trim().to_owned();
         }
+        if let Some(v) = map.get("claude.effort").and_then(Value::as_str).filter(|v| crate::claude::is_effort(v)) {
+            s.claude_effort = v.trim().to_ascii_lowercase();
+        }
         if let Some(v) = map.get("claude.permissionMode").and_then(Value::as_str).and_then(crate::claude::PermissionMode::from_id) {
             s.claude_mode = v;
         }
@@ -515,7 +521,9 @@ mod tests {
         let off = Settings::parse(r#"{ "editor.inlayHints.enabled": "off", "editor.semanticHighlighting.enabled": false }"#);
         assert!(!off.inlay_hints && !off.semantic_highlighting);
         assert!(!Settings::parse(r#"{ "workbench.editor.enablePreview": false }"#).enable_preview);
-        let claude = Settings::parse(r#"{ "claude.path": " /opt/claude ", "claude.model": "sonnet", "claude.permissionMode": "acceptEdits" }"#);
+        let claude = Settings::parse(r#"{ "claude.path": " /opt/claude ", "claude.model": "sonnet", "claude.permissionMode": "acceptEdits", "claude.effort": "High" }"#);
+        assert_eq!(claude.claude_effort, "high");
+        assert_eq!(Settings::parse(r#"{ "claude.effort": "extreme" }"#).claude_effort, "");
         assert_eq!((claude.claude_path.as_str(), claude.claude_model.as_str(), claude.claude_mode), ("/opt/claude", "sonnet", crate::claude::PermissionMode::AcceptEdits));
         assert_eq!(Settings::parse(r#"{ "claude.permissionMode": "bogus" }"#).claude_mode, crate::claude::PermissionMode::Ask);
         assert!(!Settings::parse(r#"{ "editor.snippetSuggestions": "none" }"#).snippet_suggestions);

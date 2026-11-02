@@ -334,7 +334,9 @@ The Claude chat opens in a panel on the right of the editor (**Ctrl+Alt+C**, the
 - **Diffs.** Each edit shows as a row with the lines added and removed (+3 -1); click it to see the change inline. The file button opens the file and the diff button opens the full diff in a tab. Open files that Claude changed reload by themselves, and the Explorer and Source Control refresh when an answer ends.
 - **Modes** (the chip above the question box): **Ask before edits** (the default), **Edit automatically** (edits go through; commands are still asked about) and **Plan mode** (Claude looks and proposes a plan, and changes nothing until you approve it).
 
-Settings (`settings.json`): `claude.permissionMode` (`default` asks before edits, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name; empty is Claude Code's own choice) and `claude.path` (the program, when it is not on the PATH).
+- **Model and thinking** (the two chips above the question box): click one for a menu. The model is **Default** (Claude Code's own choice), **Opus**, **Sonnet**, **Haiku** or **Fable**. Thinking is how hard Claude thinks before it answers: **Low**, **Medium**, **High**, **Extra high** or **Max** (more thinking is slower and costs more); **Default** leaves it to Claude Code. The choice applies from the next question on and is kept in `settings.json`.
+
+Settings (`settings.json`): `claude.permissionMode` (`default` asks before edits, `acceptEdits`, `plan`), `claude.model` (an alias such as `sonnet`, or a full model name such as `claude-sonnet-4-5`; empty is Claude Code's own choice), `claude.effort` (`low`, `medium`, `high`, `xhigh`, `max`; empty is Claude Code's own choice) and `claude.path` (the program, when it is not on the PATH).
 
 ## Icons
 
