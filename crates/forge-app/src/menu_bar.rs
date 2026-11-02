@@ -182,6 +182,7 @@ impl Workspace {
                 c("Source Control", ShowGit),
                 c("Extensions", ShowExtensions),
                 c("Claude", ShowClaude),
+                c("Toggle Claude Chat", ToggleClaude),
                 sep(),
                 c("Problems", ShowProblems),
                 c("Terminal", ToggleTerminal),

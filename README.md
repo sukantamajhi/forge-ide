@@ -325,7 +325,7 @@ Message with AI`). Forge fills the message box with a one-line subject you can e
 
 ## Claude
 
-The Claude chat opens in a panel on the right of the editor (**Ctrl+Alt+C**, the chat button in the title bar, or View, Claude; the same again hides it), a little wider than the Explorer, and you can drag its left edge to change its width (it is remembered). It is a chat with [Claude Code](https://docs.claude.com/claude-code), like its VS Code extension. It runs the `claude` program headless in your project folder (`claude -p --output-format stream-json`), so it uses your own Claude Code sign-in and settings. Install the program and sign in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`).
+The Claude chat opens in a panel on the right of the editor (**Ctrl+Alt+C**, the chat button in the title bar, or View, Claude). To hide it, press **Ctrl+Alt+B**, click the **x** in its header, or use the title bar button again; the conversation is kept while it is hidden, a little wider than the Explorer, and you can drag its left edge to change its width (it is remembered). It is a chat with [Claude Code](https://docs.claude.com/claude-code), like its VS Code extension. It runs the `claude` program headless in your project folder (`claude -p --output-format stream-json`), so it uses your own Claude Code sign-in and settings. Install the program and sign in once (`npm install -g @anthropic-ai/claude-code`, then run `claude`).
 
 - Answers stream in as Markdown. The tools Claude uses (Read, Edit, Bash...) show as rows; click one to open its file.
 - The open file and your selection go along with each question (click the chip under the chat to leave it out). **Alt+K** (Claude: Ask About Selection) adds an `@file#L1-9` reference to the question.
