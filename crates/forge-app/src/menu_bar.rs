@@ -120,6 +120,7 @@ impl Workspace {
                 c("New Window", NewWindow),
                 sep(),
                 c("Open Folder...", OpenFolder),
+                c("Add Folder to Workspace...", AddFolderToWorkspace),
                 c("Open Recent...", OpenRecent),
                 sep(),
                 c("Save", Save),

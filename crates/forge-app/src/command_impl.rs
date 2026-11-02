@@ -202,6 +202,7 @@ impl Workspace {
             SaveAs => self.save_as(cx),
             NewFolder => self.prompt_new_entry(true),
             OpenFolder => self.open_folder_dialog(cx),
+            AddFolderToWorkspace => self.add_folder_dialog(cx),
 
             // ---- workbench ----
             ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
@@ -731,6 +732,31 @@ impl Workspace {
         .detach();
     }
 
+    fn add_folder_dialog(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: true, prompt: None });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = picked.await {
+                let _ = this.update(cx, |workspace, cx| {
+                    for path in paths {
+                        workspace.add_workspace_folder(path);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Show another folder in the Explorer next to the open one(s), and look for its git repositories too.
+    pub fn add_workspace_folder(&mut self, path: std::path::PathBuf) {
+        if self.tree.add_root(path.clone()) {
+            self.set_status(format!("Added {} to the workspace", path.display()));
+            self.init_git();
+        } else {
+            self.set_status(format!("{} is already in the workspace", path.display()));
+        }
+    }
+
     pub fn open_folder(&mut self, root: std::path::PathBuf, cx: &mut Context<Self>) {
         self.save_session(true);
         self.session_ready = false;
@@ -744,6 +770,9 @@ impl Workspace {
         self.focused_group = 0;
         self.lsp = crate::lsp::LspManager::new(root.clone());
         self.tree = crate::tree::FileTree::new(root.clone());
+        // The repositories of the folder that was open are not this folder's.
+        self.git = None;
+        self.other_repos.clear();
         self.init_git();
         self.branches.clear();
         self.history.clear();

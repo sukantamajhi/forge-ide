@@ -1111,7 +1111,7 @@ impl Workspace {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = &self.theme;
-        let changes = self.git.as_ref().map_or(0, |g| g.status.changes.len());
+        let changes: usize = self.repos().map(|g| g.status.changes.len()).sum();
         let tab = |icon: char, name: &'static str, command: Command, view: SidebarView, badge: usize, cx: &mut Context<Self>| {
             let active = self.sidebar_view == view;
             div()
@@ -1259,7 +1259,7 @@ impl Workspace {
                                     let selected = this.explorer_selected == Some(ix);
                                     let open = this.active_doc().is_some_and(|d| crate::workspace::same_path(&d.path, &entry.path));
                                     let (path, is_dir) = (entry.path.clone(), entry.is_dir);
-                                    let decor = this.git.as_ref().and_then(|g| g.decor.get(&entry.path)).copied();
+                                    let decor = this.repos().find_map(|g| g.decor.get(&entry.path)).copied();
                                     let name_color = match decor {
                                         Some('U' | 'A') => t.git_added,
                                         Some('D') => t.git_deleted,
@@ -1737,22 +1737,47 @@ impl Workspace {
         };
         #[derive(Clone)]
         enum Row {
-            Header { staged: bool, count: usize, open: bool },
-            File(Change, bool),
+            /// A repository, when there are several: its folder, branch and number of changes.
+            Repo { root: std::path::PathBuf, branch: String, count: usize, open: bool, active: bool },
+            Header { root: std::path::PathBuf, staged: bool, count: usize, open: bool },
+            File(std::path::PathBuf, Change, bool),
         }
+        let repo_name = |root: &std::path::Path| root.file_name().map_or_else(|| root.display().to_string(), |n| n.to_string_lossy().into_owned());
         let staged: Vec<Change> = git.status.staged().cloned().collect();
         let unstaged: Vec<Change> = git.status.unstaged().cloned().collect();
+        // With several repositories each gets a row of its own, with its changes below it.
+        let multi = !self.other_repos.is_empty();
         let mut rows: Vec<Row> = Vec::new();
-        for (is_staged, list, open) in [(true, &staged, self.scm_staged_open), (false, &unstaged, self.scm_changes_open)] {
-            if list.is_empty() {
-                continue;
+        let mut repos: Vec<&crate::workspace::GitState> = self.repos().collect();
+        repos.sort_by(|a, b| a.root.cmp(&b.root));
+        for repo in repos {
+            let open_repo = !self.scm_repos_closed.contains(&repo.root);
+            let repo_staged: Vec<Change> = repo.status.staged().cloned().collect();
+            let repo_unstaged: Vec<Change> = repo.status.unstaged().cloned().collect();
+            if multi {
+                rows.push(Row::Repo {
+                    root: repo.root.clone(),
+                    branch: repo.status.branch.clone().unwrap_or_else(|| format!("detached at {}", repo.status.head)),
+                    count: repo.status.changes.len(),
+                    open: open_repo,
+                    active: crate::workspace::same_path(&repo.root, &git.root),
+                });
+                if !open_repo {
+                    continue;
+                }
             }
-            rows.push(Row::Header { staged: is_staged, count: list.len(), open });
-            if open {
-                rows.extend(list.iter().cloned().map(|c| Row::File(c, is_staged)));
+            for (is_staged, list, open) in [(true, &repo_staged, self.scm_staged_open), (false, &repo_unstaged, self.scm_changes_open)] {
+                if list.is_empty() {
+                    continue;
+                }
+                rows.push(Row::Header { root: repo.root.clone(), staged: is_staged, count: list.len(), open });
+                if open {
+                    rows.extend(list.iter().cloned().map(|c| Row::File(repo.root.clone(), c, is_staged)));
+                }
             }
         }
         let branch = git.status.branch.clone().unwrap_or_else(|| format!("detached at {}", git.status.head));
+        let branch = if multi { format!("{}  ·  {branch}", repo_name(&git.root)) } else { branch };
         let sync = if git.status.upstream.is_some() { format!("  ↓{} ↑{}", git.status.behind, git.status.ahead) } else { String::new() };
         // An operation (commit, push, publish, sync...) running in the background: its name and how long it has run.
         let working = git.job.clone().map(|name| (name, git.job_started.map_or(0, |at| at.elapsed().as_millis() as u64)));
@@ -1952,15 +1977,59 @@ impl Workspace {
                             range
                                 .filter_map(|i| rows.get(i).cloned().map(|r| (i, r)))
                                 .map(|(i, row)| match row {
-                                    Row::Header { staged, count, open } => {
+                                    Row::Repo { root, branch, count, open, active } => {
+                                        let name = repo_name(&root);
+                                        let click_root = root.clone();
+                                        div()
+                                            .id(("scm-repo", i))
+                                            .w_full()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap(rems(0.375))
+                                            .h(rems(1.75))
+                                            .px(rems(0.375))
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .bg(rgb(t.tab_active))
+                                            .hover(|s| s.bg(rgb(t.border)))
+                                            .tooltip(this.tooltip(&root.display().to_string(), None))
+                                            // Click: this repository becomes the one the commit box and the commands use,
+                                            // and its changes fold or unfold.
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.activate_repo(&click_root);
+                                                if !this.scm_repos_closed.remove(&click_root) {
+                                                    this.scm_repos_closed.insert(click_root.clone());
+                                                }
+                                                cx.notify();
+                                            }))
+                                            .child(crate::icons::glyph(if open { crate::codicons::CHEVRON_DOWN } else { crate::codicons::CHEVRON_RIGHT }, 1.0, t.dim))
+                                            .child(crate::icons::glyph(crate::codicons::GIT_BRANCH, 1.0, if active { t.text } else { t.dim }))
+                                            .child(div().whitespace_nowrap().font_weight(FontWeight::BOLD).text_color(rgb(if active { t.text } else { t.dim })).child(name))
+                                            .child(div().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_xs().text_color(rgb(t.dim)).child(branch))
+                                            .children((count > 0).then(|| {
+                                                div()
+                                                    .min_w(rems(1.375))
+                                                    .px_1()
+                                                    .rounded_full()
+                                                    .flex()
+                                                    .justify_center()
+                                                    .bg(rgb(t.border))
+                                                    .text_color(rgb(t.text))
+                                                    .child(count.to_string())
+                                            }))
+                                            .into_any_element()
+                                    }
+                                    Row::Header { root, staged, count, open } => {
                                         let (label, glyph, tip, command) = if staged {
                                             ("STAGED CHANGES", crate::codicons::REMOVE, "Unstage All Changes", Command::GitUnstageAll)
                                         } else {
                                             ("CHANGES", crate::codicons::ADD, "Stage All Changes", Command::GitStageAll)
                                         };
-                                        let group = format!("scm-head-{}", usize::from(staged));
+                                        let group = format!("scm-head-{i}");
+                                        let (discard_root, bulk_root) = (root.clone(), root);
                                         div()
-                                            .id(("scm-head", usize::from(staged)))
+                                            .id(("scm-head", i))
                                             .group(group.clone())
                                             .w_full()
                                             .flex()
@@ -1998,15 +2067,16 @@ impl Workspace {
                                                     .hover(|s| s.bg(rgb(t.border)))
                                                     .cursor_pointer()
                                                     .tooltip(this.tooltip("Discard All Changes", Some(Command::GitDiscardAll)))
-                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
                                                         cx.stop_propagation();
+                                                        this.activate_repo(&discard_root);
                                                         this.run_command(Command::GitDiscardAll, false, cx);
                                                     }))
                                                     .child(crate::icons::glyph(crate::codicons::DISCARD, 1.0, t.text))
                                             }))
                                             .child(
                                                 div()
-                                                    .id(("scm-bulk", usize::from(staged)))
+                                                    .id(("scm-bulk", i))
                                                     .invisible()
                                                     .group_hover(group, |s| s.visible())
                                                     .w(rems(1.625))
@@ -2020,6 +2090,7 @@ impl Workspace {
                                                     .tooltip(this.tooltip(tip, Some(command)))
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         cx.stop_propagation();
+                                                        this.activate_repo(&bulk_root);
                                                         this.run_command(command, false, cx);
                                                     }))
                                                     .child(crate::icons::glyph(glyph, 1.0, t.text)),
@@ -2038,7 +2109,7 @@ impl Workspace {
                                             )
                                             .into_any_element()
                                     }
-                                    Row::File(change, is_staged) => {
+                                    Row::File(root, change, is_staged) => {
                                         let letter = if is_staged { change.index.map_or('?', |k| k.letter()) } else { change.letter() };
                                         let color = match letter {
                                             'U' | 'A' => t.git_added,
@@ -2054,8 +2125,10 @@ impl Workspace {
                                         let conflicted = change.conflicted;
                                         let (open_rel, stage_rel, discard_rel) = (change.path.clone(), change.path.clone(), change.path.clone());
                                         let group = format!("scm-file-{i}");
-                                        let selected = this.scm_selected.iter().any(|(r, s)| *r == change.path && *s == is_staged);
+                                        // Picked changes are kept for the active repository only.
+                                        let selected = this.git.as_ref().is_some_and(|g| crate::workspace::same_path(&g.root, &root)) && this.scm_selected.iter().any(|(r, s)| *r == change.path && *s == is_staged);
                                         let action = |id: usize, glyph: char, tip: &'static str, cx: &mut Context<Workspace>, f: Box<dyn Fn(&mut Workspace, &mut Context<Workspace>) + 'static>| {
+                                            let root = root.clone();
                                             div()
                                                 .id(("scm-action", i * 4 + id))
                                                 .w(rems(1.625))
@@ -2069,6 +2142,7 @@ impl Workspace {
                                                 .hover(|s| s.bg(rgb(t.border)))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     cx.stop_propagation();
+                                                    this.activate_repo(&root);
                                                     f(this, cx);
                                                     cx.notify();
                                                 }))
@@ -2119,14 +2193,17 @@ impl Workspace {
                                             // Right-click: the menu of this change (or of all picked ones).
                                             .on_mouse_down(MouseButton::Right, {
                                                 let rel = open_rel.clone();
+                                                let root = root.clone();
                                                 cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
                                                     cx.stop_propagation();
+                                                    this.activate_repo(&root);
                                                     this.open_scm_change_menu(ev.position, rel.clone(), is_staged, cx);
                                                 })
                                             })
                                             // Click: pick it and show its changes in a replaceable tab (double-click keeps the tab).
                                             // Ctrl+click adds it to the picked changes, Shift+click picks the range from the last one.
                                             .on_click(cx.listener(move |this, ev: &gpui::ClickEvent, _, cx| {
+                                                this.activate_repo(&root);
                                                 let key = (open_rel.clone(), is_staged);
                                                 let m = ev.modifiers();
                                                 if m.control || m.platform {

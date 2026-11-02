@@ -429,6 +429,39 @@ pub fn discover(start: &Path) -> Option<PathBuf> {
     (!top.is_empty()).then(|| PathBuf::from(top))
 }
 
+/// Folders at most `depth` levels below `start` that hold a repository of their own (a `.git` folder or file), like
+/// VS Code's repository scan. It does not look inside a repository it found, nor in dot-folders, `node_modules` or `target`.
+pub fn discover_nested(start: &Path, depth: usize) -> Vec<PathBuf> {
+    const MAX_REPOS: usize = 50;
+    fn walk(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+        if depth == 0 || found.len() >= MAX_REPOS {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut dirs: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                !name.starts_with('.') && name != "node_modules" && name != "target"
+            })
+            .map(|e| e.path())
+            .collect();
+        dirs.sort();
+        for sub in dirs {
+            if sub.join(".git").exists() {
+                found.push(sub);
+            } else {
+                walk(&sub, depth - 1, found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(start, depth, &mut found);
+    found
+}
+
 pub fn init(root: &Path) -> Result<String, String> {
     run(root, &["init"])
 }
@@ -1240,6 +1273,20 @@ hint: something
 
 ", ""), "plain failure");
         assert_eq!(error_message("", ""), "git failed");
+    }
+
+    #[test]
+    fn nested_repositories_are_found_but_not_searched_inside() {
+        let base = std::env::temp_dir().join(format!("forge-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for dir in ["a/.git", "b/inner/.git", "b/inner/deep/.git", "node_modules/x/.git", ".hidden/y/.git", "plain/notes"] {
+            std::fs::create_dir_all(base.join(dir)).unwrap();
+        }
+        let found = discover_nested(&base, 3);
+        let names: Vec<String> = found.iter().map(|p| p.strip_prefix(&base).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(names, ["a", "b/inner"]);
+        assert!(discover_nested(&base, 1).iter().all(|p| p.ends_with("a")), "depth 1 sees only direct children");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

@@ -797,6 +797,7 @@ impl Workspace {
             }
             MenuAction::FileHistory => {
                 if let Some((path, false)) = target {
+                    self.activate_repo_of(&path);
                     match self.git.as_ref().and_then(|g| forge_core::git::relative_path(&g.root, &path)) {
                         Some(rel) => {
                             self.history.clear();
@@ -809,6 +810,7 @@ impl Workspace {
             }
             MenuAction::CopyRemoteUrl => {
                 if let Some((path, false)) = target {
+                    self.activate_repo_of(&path);
                     let found = self.git.as_ref().and_then(|g| forge_core::git::relative_path(&g.root, &path).map(|rel| (g.root.clone(), rel)));
                     match found {
                         Some((root, rel)) => match forge_core::git::remote_file_url(&root, &rel) {

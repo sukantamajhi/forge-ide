@@ -1797,7 +1797,7 @@ impl Workspace {
     }
 
     pub fn prompt_rename_entry(&mut self) {
-        if let Some((path, _)) = self.selected_entry_path() {
+        if let Some((path, _)) = self.selected_entry_path().filter(|(p, _)| !self.tree.is_root_row(p)) {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             self.open_overlay(OverlayKind::RenameEntry(path), &name);
         }
@@ -1830,6 +1830,10 @@ impl Workspace {
     }
 
     fn finish_delete_entry(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if self.tree.is_root_row(path) {
+            self.set_status("A workspace folder cannot be deleted from the Explorer");
+            return;
+        }
         if self.docs.iter().any(|d| d.dirty && d.path.starts_with(path)) {
             self.set_status("Save or close modified files before deleting them");
             return;

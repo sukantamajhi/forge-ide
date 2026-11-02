@@ -126,6 +126,7 @@ commands! {
     NewUntitledFile, "workbench.action.files.newUntitledFile", "New Untitled Text File", ["ctrl+n"];
     NewFolder, "workbench.action.files.newFolder", "New Folder...", [];
     OpenFolder, "workbench.action.files.openFolder", "Open Folder...", ["ctrl+k ctrl+o"];
+    AddFolderToWorkspace, "workbench.action.addRootFolder", "Add Folder to Workspace...", [];
 
     ToggleSidebar, "workbench.action.toggleSidebarVisibility", "Toggle Primary Side Bar Visibility", ["ctrl+b"];
     TogglePanel, "workbench.action.togglePanel", "Toggle Panel Visibility", ["ctrl+j"];

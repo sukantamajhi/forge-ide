@@ -17,6 +17,8 @@ use crate::workspace::{Doc, Focus, GitMsg, GitState, OverlayKind, SidebarView, V
 
 /// How often status is re-read to notice changes made outside the editor.
 const AUTO_REFRESH: Duration = Duration::from_secs(4);
+/// How many folder levels below an open folder are searched for repositories of their own.
+const NESTED_DEPTH: usize = 2;
 
 /// Present-tense title shown in the status bar while an operation runs.
 fn job_title(label: &str) -> &'static str {
@@ -43,19 +45,38 @@ fn job_title(label: &str) -> &'static str {
 }
 
 impl Workspace {
-    /// Look for the repository around the project folder. Asking git takes two process starts (about 90 ms), so it
-    /// happens on a thread and the Source Control view fills in a moment after the window shows.
+    /// The folders to look for repositories in: the workspace folders.
+    fn git_scan_folders(&self) -> Vec<PathBuf> {
+        self.tree.roots()
+    }
+
+    /// Look for the repositories of the open folders: the one around each, and the ones inside them. Asking git takes two
+    /// process starts (about 90 ms), so it happens on a thread and the Source Control view fills in a moment after the window shows.
     pub fn init_git(&mut self) {
-        self.git = None;
-        let (folder, tx) = (self.tree.root().to_path_buf(), self.git_tx.clone());
+        let (folders, tx) = (self.git_scan_folders(), self.git_tx.clone());
         std::thread::spawn(move || {
-            let repo = if git::is_available() { git::discover(&folder) } else { None };
-            let _ = tx.send(GitMsg::Repo { folder, repo });
+            let mut repos: Vec<PathBuf> = Vec::new();
+            if git::is_available() {
+                let mut add = |path: PathBuf| {
+                    if !repos.iter().any(|r| crate::workspace::same_path(r, &path)) {
+                        repos.push(path);
+                    }
+                };
+                for folder in &folders {
+                    if let Some(around) = git::discover(folder) {
+                        add(around);
+                    }
+                    for inside in git::discover_nested(folder, NESTED_DEPTH) {
+                        add(inside);
+                    }
+                }
+            }
+            let _ = tx.send(GitMsg::Repos { folders, repos });
         });
     }
 
-    fn open_repo(&mut self, root: PathBuf) {
-        self.git = Some(GitState {
+    fn new_repo_state(root: PathBuf) -> GitState {
+        GitState {
             root,
             status: Default::default(),
             refreshing: false,
@@ -68,27 +89,92 @@ impl Workspace {
             job: None,
             job_started: None,
             cancel: None,
-        });
+            message: String::new(),
+        }
+    }
+
+    /// Use these repositories. The one that was active stays active if it is still there, else the first one is.
+    fn open_repos(&mut self, roots: Vec<PathBuf>) {
+        let wanted = self.git.as_ref().map(|g| g.root.clone());
+        let mut old: Vec<GitState> = self.git.take().into_iter().chain(self.other_repos.drain(..)).collect();
+        let mut all: Vec<GitState> = roots
+            .into_iter()
+            .map(|root| match old.iter().position(|g| crate::workspace::same_path(&g.root, &root)) {
+                Some(at) => old.remove(at),
+                None => Self::new_repo_state(root),
+            })
+            .collect();
+        if all.is_empty() {
+            return;
+        }
+        let first = wanted.and_then(|w| all.iter().position(|g| crate::workspace::same_path(&g.root, &w))).unwrap_or(0);
+        self.git = Some(all.remove(first));
+        self.other_repos = all;
+    }
+
+    /// Every repository, active first.
+    pub fn repos(&self) -> impl Iterator<Item = &GitState> {
+        self.git.iter().chain(self.other_repos.iter())
+    }
+
+    pub(crate) fn repo_mut(&mut self, root: &Path) -> Option<&mut GitState> {
+        if self.git.as_ref().is_some_and(|g| crate::workspace::same_path(&g.root, root)) {
+            return self.git.as_mut();
+        }
+        self.other_repos.iter_mut().find(|g| crate::workspace::same_path(&g.root, root))
+    }
+
+    /// Make the repository at `root` the active one, taking its commit message along.
+    pub fn activate_repo(&mut self, root: &Path) {
+        if self.git.as_ref().is_none_or(|g| crate::workspace::same_path(&g.root, root)) {
+            return;
+        }
+        let Some(at) = self.other_repos.iter().position(|g| crate::workspace::same_path(&g.root, root)) else { return };
+        let mut next = self.other_repos.remove(at);
+        if let Some(mut current) = self.git.take() {
+            current.message = self.scm_message.text().to_owned();
+            self.other_repos.push(current);
+        }
+        self.scm_message.set_text(&std::mem::take(&mut next.message));
+        self.git = Some(next);
+        self.scm_selected.clear();
+        self.scm_anchor = None;
+    }
+
+    /// The repository a path is in: the innermost one when repositories are nested.
+    pub fn repo_root_of(&self, path: &Path) -> Option<PathBuf> {
+        self.repos().filter(|g| relative_path(&g.root, path).is_some()).max_by_key(|g| g.root.as_os_str().len()).map(|g| g.root.clone())
+    }
+
+    /// Make the repository of `path` the active one, so the commands that follow act on it.
+    pub fn activate_repo_of(&mut self, path: &Path) {
+        if let Some(root) = self.repo_root_of(path) {
+            self.activate_repo(&root);
+        }
     }
 
     pub fn git_request_refresh(&mut self) {
-        if let Some(g) = self.git.as_mut() {
+        for g in self.git.iter_mut().chain(self.other_repos.iter_mut()) {
             g.refresh_wanted = true;
         }
     }
 
+    /// Ask for the status of every repository that is due for it.
     fn start_status(&mut self) {
-        let Some(g) = self.git.as_mut() else { return };
-        if g.refreshing {
-            return;
+        let tx = self.git_tx.clone();
+        for g in self.git.iter_mut().chain(self.other_repos.iter_mut()) {
+            if g.refreshing || !(g.refresh_wanted || g.last_refresh.elapsed() > AUTO_REFRESH) {
+                continue;
+            }
+            g.refreshing = true;
+            g.refresh_wanted = false;
+            g.last_refresh = Instant::now();
+            let (root, tx) = (g.root.clone(), tx.clone());
+            std::thread::spawn(move || {
+                let result = git::status(&root);
+                let _ = tx.send(GitMsg::Status { root, result });
+            });
         }
-        g.refreshing = true;
-        g.refresh_wanted = false;
-        g.last_refresh = Instant::now();
-        let (root, tx) = (g.root.clone(), self.git_tx.clone());
-        std::thread::spawn(move || {
-            let _ = tx.send(GitMsg::Status(git::status(&root)));
-        });
     }
 
     /// Run a mutating git operation off the UI thread; its result arrives as [`GitMsg::Done`].
@@ -111,7 +197,7 @@ impl Workspace {
             let result = git::with_job(&control, || f(&root));
             // Whatever the command reported after it was stopped, the user cancelled it.
             let result = if control.is_cancelled() { Err("cancelled".to_owned()) } else { result };
-            let _ = tx.send(GitMsg::Done { label, result });
+            let _ = tx.send(GitMsg::Done { root, label, result });
         });
     }
 
@@ -132,15 +218,12 @@ impl Workspace {
         }
         // While an operation runs, repaint every tick so its progress animates; and once a result's
         // colour is due to fade, once more.
-        if self.git.as_ref().is_some_and(|g| g.job.is_some()) || self.ai_pending || (self.status_kind != crate::workspace::StatusKind::Info && self.status_at.elapsed().as_secs() == 10) {
+        if self.repos().any(|g| g.job.is_some()) || self.ai_pending || (self.status_kind != crate::workspace::StatusKind::Info && self.status_at.elapsed().as_secs() == 10) {
             changed = true;
         }
         changed |= self.poll_askpass();
         self.follow_git_panels();
-        let due = self.git.as_ref().is_some_and(|g| !g.refreshing && (g.refresh_wanted || g.last_refresh.elapsed() > AUTO_REFRESH));
-        if due {
-            self.start_status();
-        }
+        self.start_status();
         changed
     }
 
@@ -195,29 +278,28 @@ impl Workspace {
 
     fn handle_git_msg(&mut self, msg: GitMsg, cx: &mut Context<Self>) {
         match msg {
-            GitMsg::Repo { folder, repo } => {
-                // An answer for a folder that is no longer open is dropped.
-                if crate::workspace::same_path(&folder, self.tree.root()) {
-                    if let Some(root) = repo {
-                        self.open_repo(root);
-                    }
+            GitMsg::Repos { folders, repos } => {
+                // An answer for folders that are no longer the open ones is dropped.
+                let open = self.git_scan_folders();
+                if folders.len() == open.len() && folders.iter().zip(&open).all(|(a, b)| crate::workspace::same_path(a, b)) {
+                    self.open_repos(repos);
                 }
             }
-            GitMsg::Status(Ok(status)) => self.apply_status(status),
-            GitMsg::Status(Err(_)) => {
-                if let Some(g) = self.git.as_mut() {
+            GitMsg::Status { root, result: Ok(status) } => self.apply_status(&root, status),
+            GitMsg::Status { root, result: Err(_) } => {
+                if let Some(g) = self.repo_mut(&root) {
                     g.refreshing = false;
                 }
             }
-            GitMsg::Head(path, content) => {
-                if let Some(g) = self.git.as_mut() {
+            GitMsg::Head { root, path, content } => {
+                if let Some(g) = self.repo_mut(&root) {
                     g.head_pending.remove(&path);
                     g.head.insert(path, content);
                     g.epoch += 1;
                 }
             }
-            GitMsg::Done { label, result } => {
-                if let Some(g) = self.git.as_mut() {
+            GitMsg::Done { root, label, result } => {
+                if let Some(g) = self.repo_mut(&root) {
                     g.job = None;
                     g.job_started = None;
                     g.cancel = None;
@@ -229,7 +311,12 @@ impl Workspace {
                 match result {
                     Ok(message) => {
                         if label == "commit" {
-                            self.scm_message.set_text("");
+                            // The message that was committed belongs to `root`, whichever repository is active now.
+                            if self.git.as_ref().is_some_and(|a| crate::workspace::same_path(&a.root, &root)) {
+                                self.scm_message.set_text("");
+                            } else if let Some(g) = self.repo_mut(&root) {
+                                g.message.clear();
+                            }
                         }
                         if label == "init" {
                             self.init_git();
@@ -334,8 +421,8 @@ impl Workspace {
         }
     }
 
-    fn apply_status(&mut self, status: git::Status) {
-        let Some(g) = self.git.as_mut() else { return };
+    fn apply_status(&mut self, root: &Path, status: git::Status) {
+        let Some(g) = self.repo_mut(root) else { return };
         g.refreshing = false;
         if g.status.head != status.head || g.status.branch != status.branch {
             g.head.clear();
@@ -361,7 +448,22 @@ impl Workspace {
 
     /// Recompute a document's change gutter if its text or the repository state changed.
     pub fn ensure_gutter(&mut self, doc_ix: usize) {
-        let Some(git) = self.git.as_mut() else { return };
+        // The repository the file is in (the innermost when they are nested); the active one is `self.git`.
+        let owner = {
+            let path = &self.docs[doc_ix].path;
+            let inside = |g: &GitState| relative_path(&g.root, path).is_some().then_some(g.root.as_os_str().len());
+            let active = self.git.as_ref().and_then(|g| inside(g).map(|n| (0, n)));
+            let others = self.other_repos.iter().enumerate().filter_map(|(i, g)| inside(g).map(|n| (i + 1, n)));
+            active.into_iter().chain(others).max_by_key(|&(_, n)| n).map(|(i, _)| i)
+        };
+        let Some(owner) = owner else {
+            let doc = &mut self.docs[doc_ix];
+            if !doc.gutter.is_empty() {
+                doc.gutter.clear();
+            }
+            return;
+        };
+        let git = if owner == 0 { self.git.as_mut().expect("owner 0 is the active repository") } else { &mut self.other_repos[owner - 1] };
         let doc = &mut self.docs[doc_ix];
         if doc.readonly {
             return;
@@ -381,7 +483,7 @@ impl Workspace {
                     let (root, tx, path) = (git.root.clone(), self.git_tx.clone(), doc.path.clone());
                     std::thread::spawn(move || {
                         let content = git::show_head(&root, &rel).ok().flatten();
-                        let _ = tx.send(GitMsg::Head(path, content));
+                        let _ = tx.send(GitMsg::Head { root, path, content });
                     });
                 }
             }
@@ -737,7 +839,7 @@ impl Workspace {
                     let (root, tx) = (self.root().to_path_buf(), self.git_tx.clone());
                     std::thread::spawn(move || {
                         let result = git::init(&root).map(|_| "Initialized an empty repository".to_owned());
-                        let _ = tx.send(GitMsg::Done { label: "init".to_owned(), result });
+                        let _ = tx.send(GitMsg::Done { root: PathBuf::new(), label: "init".to_owned(), result });
                     });
                 }
             }
@@ -745,6 +847,10 @@ impl Workspace {
             GitStageAll => self.git_job("stage", |r| git::stage(r, &[".".to_owned()]).map(|_| "Staged all changes".to_owned())),
             GitUnstageAll => self.git_job("unstage", |r| git::unstage(r, &[".".to_owned()]).map(|_| "Unstaged all changes".to_owned())),
             GitStageFile | GitUnstageFile | GitDiscardFile | GitOpenChanges | GitFileHistory | GitBlame => {
+                // The file may be in another repository than the active one: act on its own.
+                if let Some(path) = self.active_doc().filter(|d| !d.readonly).map(|d| d.path.clone()) {
+                    self.activate_repo_of(&path);
+                }
                 let Some(rel) = self.active_rel() else {
                     self.set_status("The current editor is not a file in this repository");
                     return;

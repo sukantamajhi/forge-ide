@@ -37,19 +37,46 @@ pub struct TreeEntry {
 /// Flattened, lazily expanded view of a directory tree.
 pub struct FileTree {
     root: PathBuf,
+    /// Folders added to the workspace next to `root`. With any, every folder is listed as a top-level row of its own.
+    extra: Vec<PathBuf>,
     expanded: HashSet<PathBuf>,
     pub entries: Vec<TreeEntry>,
 }
 
 impl FileTree {
     pub fn new(root: PathBuf) -> Self {
-        let mut tree = Self { root, expanded: HashSet::new(), entries: Vec::new() };
+        let mut tree = Self { root, extra: Vec::new(), expanded: HashSet::new(), entries: Vec::new() };
         tree.refresh();
         tree
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Every folder of the workspace: the first one, then the added ones.
+    pub fn roots(&self) -> Vec<PathBuf> {
+        std::iter::once(self.root.clone()).chain(self.extra.iter().cloned()).collect()
+    }
+
+    /// Whether `path` is one of the workspace folders shown as a row of its own (never with a single folder).
+    pub fn is_root_row(&self, path: &Path) -> bool {
+        !self.extra.is_empty() && (path == self.root || self.extra.iter().any(|r| r == path))
+    }
+
+    /// Add a folder to the workspace. False if it is already in it (or inside one: it is listed there already).
+    pub fn add_root(&mut self, path: PathBuf) -> bool {
+        if self.roots().iter().any(|r| path.starts_with(r)) {
+            return false;
+        }
+        if self.extra.is_empty() {
+            // The first folder becomes a row too, so it starts open like the new one.
+            self.expanded.insert(self.root.clone());
+        }
+        self.expanded.insert(path.clone());
+        self.extra.push(path);
+        self.refresh();
+        true
     }
 
     pub fn toggle(&mut self, path: &Path) {
@@ -67,8 +94,9 @@ impl FileTree {
 
     /// Expand every folder above `path` so it is listed.
     pub fn reveal(&mut self, path: &Path) {
+        let roots = self.roots();
         for ancestor in path.ancestors().skip(1) {
-            if ancestor.starts_with(&self.root) && ancestor != self.root {
+            if roots.iter().any(|r| ancestor.starts_with(r) && (ancestor != r.as_path() || !self.extra.is_empty())) {
                 self.expanded.insert(ancestor.to_path_buf());
             }
         }
@@ -81,7 +109,18 @@ impl FileTree {
 
     pub fn refresh(&mut self) {
         let mut entries = Vec::new();
-        self.walk(&self.root, 0, &mut entries);
+        if self.extra.is_empty() {
+            self.walk(&self.root, 0, &mut entries);
+        } else {
+            for root in self.roots() {
+                let expanded = self.expanded.contains(&root);
+                let name = root.file_name().map_or_else(|| root.display().to_string(), |n| n.to_string_lossy().into_owned());
+                entries.push(TreeEntry { depth: 0, path: root.clone(), name, is_dir: true, expanded });
+                if expanded {
+                    self.walk(&root, 1, &mut entries);
+                }
+            }
+        }
         self.entries = entries;
     }
 
@@ -117,6 +156,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn added_folders_are_rows_of_their_own() {
+        let (a, b) = (scratch("m1"), scratch("m2"));
+        std::fs::create_dir_all(a.join("src")).unwrap();
+        std::fs::write(b.join("x.txt"), "").unwrap();
+        let mut tree = FileTree::new(a.clone());
+        assert!(tree.entries.iter().all(|e| e.depth == 0), "one folder: its children are the top level");
+        assert!(!tree.is_root_row(&a));
+        assert!(tree.add_root(b.clone()));
+        assert!(!tree.add_root(b.join("inner")), "a folder inside one that is open is not added again");
+        assert!(tree.is_root_row(&a) && tree.is_root_row(&b));
+        let top: Vec<&Path> = tree.entries.iter().filter(|e| e.depth == 0).map(|e| e.path.as_path()).collect();
+        assert_eq!(top, [a.as_path(), b.as_path()]);
+        assert!(tree.entries.iter().any(|e| e.depth == 1 && e.name == "x.txt"));
+        tree.toggle(&b);
+        assert!(tree.entries.iter().all(|e| e.name != "x.txt"), "a folded folder hides its files");
+        tree.reveal(&a.join("src").join("lib.rs"));
+        assert!(tree.entries.iter().any(|e| e.path == a.join("src") && e.expanded));
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 
     #[test]

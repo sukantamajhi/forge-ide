@@ -736,11 +736,14 @@ pub(crate) struct HoverInfo {
 
 /// Results of git work done on background threads.
 pub(crate) enum GitMsg {
-    /// The repository found around a folder (none if it is not in one, or git is missing).
-    Repo { folder: PathBuf, repo: Option<PathBuf> },
-    Status(Result<Status, String>),
-    Head(PathBuf, Option<String>),
-    Done { label: String, result: Result<String, String> },
+    /// The repositories found for the open folders: the one around each folder, and any inside them
+    /// (empty if there are none, or git is missing). `folders` are the folders that were scanned.
+    Repos { folders: Vec<PathBuf>, repos: Vec<PathBuf> },
+    /// Status of the repository at `root`.
+    Status { root: PathBuf, result: Result<Status, String> },
+    Head { root: PathBuf, path: PathBuf, content: Option<String> },
+    /// A git operation in the repository at `root` ended (`root` is empty when there was none yet: `git init`).
+    Done { root: PathBuf, label: String, result: Result<String, String> },
     Diff { key: String, title: String, result: Result<String, String> },
     /// New text for a diff tab that is already open (after staging).
     DiffRefresh { key: String, title: String, result: Result<String, String> },
@@ -787,6 +790,8 @@ pub(crate) struct GitState {
     /// Name of an operation running in the background ("Pulling"...), and when it started.
     pub job: Option<String>,
     pub job_started: Option<Instant>,
+    /// The commit message typed for this repository while another one is the active one.
+    pub message: String,
 }
 
 pub(crate) struct Workspace {
@@ -884,7 +889,12 @@ pub(crate) struct Workspace {
     pub active_terminal: usize,
     pub drag: Option<crate::input_handling::Drag>,
 
+    /// The active repository: the one every git command, the commit box and the change list act on.
     pub git: Option<GitState>,
+    /// The other repositories found in the open folders; `activate_repo` swaps one with `git`.
+    pub other_repos: Vec<GitState>,
+    /// Repositories whose changes are folded away in Source Control.
+    pub scm_repos_closed: HashSet<PathBuf>,
     pub git_tx: Sender<GitMsg>,
     pub git_rx: Receiver<GitMsg>,
     pub scm_message: forge_core::textarea::TextArea,
@@ -1166,6 +1176,8 @@ impl Workspace {
             active_terminal: 0,
             drag: None,
             git: None,
+            other_repos: Vec::new(),
+            scm_repos_closed: HashSet::new(),
             git_tx,
             git_rx,
             scm_message: forge_core::textarea::TextArea::default(),
