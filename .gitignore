@@ -12,3 +12,8 @@ Cargo.lock
 
 # Large compiler crash logs (Internal Compiler Errors)
 rustc-ice-*.txt
+
+# Linux packages built by make package-linux / package-deb (they go on the GitHub release, not in git)
+dist/*.tar.gz
+dist/*.deb
+dist/*.sha256
